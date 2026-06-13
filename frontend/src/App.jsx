@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   Home, SquarePen, BarChart3, MessageCircle, Settings as Cog, Leaf, Plus,
-  ChevronRight, Mic, MicOff, Volume2, Sparkles, Check, Lock, ArrowLeft, ArrowRight,
+  ChevronRight, Mic, MicOff, Volume2, VolumeX, Sparkles, Check, Lock, ArrowLeft, ArrowRight,
   Printer, Stethoscope, AlertTriangle, Info, Heart, Moon, Loader2, X, Target,
   Brain, HeartPulse, Microscope, Droplet, Activity
 } from "lucide-react";
@@ -70,24 +70,36 @@ const isBlocked = (s, k) => (s.blacklist || []).includes(k);
 const fieldBlocked = (s, f) => Object.keys(FEATURES).some((k) => isBlocked(s, k) && FEATURES[k].fields.includes(f));
 const blockedLabels = (s) => (s.blacklist || []).map((k) => FEATURES[k]?.label).filter(Boolean);
 
+// Prefer a gentle, natural en voice for the browser speechSynthesis fallback.
+function pickSoftVoice() {
+  const vs = window.speechSynthesis?.getVoices?.() || [];
+  const find = (re) => vs.find((v) => re.test(v.name));
+  return find(/Samantha|Karen|Moira|Tessa|Serena|Allison|Ava|Fiona/i)
+    || find(/Google UK English Female|Google US English|Microsoft Aria|Microsoft Jenny/i)
+    || vs.find((v) => /^en/i.test(v.lang) && /female/i.test(v.name))
+    || vs.find((v) => /^en/i.test(v.lang))
+    || null;
+}
+
 // ---- speaker: NeMo TTS via backend, else browser speechSynthesis -----------
 function useSpeaker(settings) {
   const [speaking, setSpeaking] = useState(false);
-  const queueRef = useRef([]); const audioRef = useRef(null);
-  const stop = useCallback(() => { queueRef.current = []; try { audioRef.current?.pause(); } catch (e) {} try { window.speechSynthesis?.cancel(); } catch (e) {} setSpeaking(false); }, []);
+  const queueRef = useRef([]); const audioRef = useRef(null); const doneRef = useRef(null);
+  const stop = useCallback(() => { queueRef.current = []; doneRef.current = null; try { audioRef.current?.pause(); } catch (e) {} try { window.speechSynthesis?.cancel(); } catch (e) {} setSpeaking(false); }, []);
   const playNext = useCallback(async () => {
-    const q = queueRef.current; if (!q.length) { setSpeaking(false); return; }
-    setSpeaking(true); const text = q.shift(); const base = settings.backendUrl;
+    const q = queueRef.current; if (!q.length) { setSpeaking(false); const d = doneRef.current; doneRef.current = null; if (d) d(); return; }
+    setSpeaking(true); const text = q.shift(); const base = settings.backendUrl || "/api";
     if (base) { try {
       const res = await fetch(`${base.replace(/\/$/, "")}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
       const blob = await res.blob(); const a = new Audio(URL.createObjectURL(blob)); audioRef.current = a;
       a.onended = () => playNext(); a.onerror = () => playNext(); await a.play(); return;
     } catch (e) {} }
-    if ("speechSynthesis" in window) { const u = new SpeechSynthesisUtterance(text); u.rate = 1.02; u.onend = () => playNext(); u.onerror = () => playNext(); window.speechSynthesis.speak(u); }
+    if ("speechSynthesis" in window) { const u = new SpeechSynthesisUtterance(text); const v = pickSoftVoice(); if (v) u.voice = v; u.rate = 0.94; u.pitch = 0.88; u.volume = 0.92; u.onend = () => playNext(); u.onerror = () => playNext(); window.speechSynthesis.speak(u); }
     else playNext();
   }, [settings.backendUrl]);
-  const speak = useCallback((text) => {
-    if (!settings.voice || !text) return;
+  const speak = useCallback((text, onDone) => {
+    if (!settings.voice || !text) { onDone?.(); return; }
+    doneRef.current = onDone || null;
     queueRef.current = (text.match(/[^.!?]+[.!?]*\s*/g) || [text]).map((s) => s.trim()).filter(Boolean);
     if (!speaking) playNext();
   }, [settings.voice, speaking, playNext]);
@@ -98,33 +110,107 @@ function useSpeaker(settings) {
 // ---- chat: backend orchestrator if configured, else Claude direct ----------
 async function chatTurn({ settings, message, history, system }) {
   const base = settings.backendUrl;
-  if (base && settings.patientId) { try {
-    const res = await fetch(`${base.replace(/\/$/, "")}/patients/${settings.patientId}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) });
-    const j = await res.json(); return { reply: j.reply, learned: j.learned || [] };
-  } catch (e) {} }
+  // A backend is configured: it owns the model. If it's down or erroring,
+  // surface that instead of silently falling back — the caller shows the error.
+  if (base && settings.patientId) {
+    let res;
+    try {
+      res = await fetch(`${base.replace(/\/$/, "")}/patients/${settings.patientId}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) });
+    } catch (e) {
+      throw new Error("Can't reach the backend — make sure it's running.");
+    }
+    if (!res.ok) {
+      let detail = ""; try { detail = (await res.json())?.detail || ""; } catch (e) {}
+      throw new Error(`Backend error ${res.status}${detail ? ` — ${detail}` : ""}.`);
+    }
+    const j = await res.json();
+    if (!j.reply) throw new Error("The model returned an empty reply.");
+    return { reply: j.reply, learned: j.learned || [] };
+  }
+  // No backend configured → direct-to-Claude demo path (key from Settings).
   const api = history.map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
   api.push({ role: "user", content: message });
   const reply = await callClaude({ apiKey: settings.apiKey, system, messages: api });
   return { reply, learned: [] };
 }
 
+// ---- voice → daily-log fields. Server-side via the backend (no key in the
+// browser; avoids the CORS "Failed to fetch"); direct-Claude only as a demo
+// fallback when a key is set and the backend can't be reached. -----------------
+const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — respond warmly in their words and reflect back what you heard; INFER ratings/severities yourself and do NOT ask for numbers, scores or 1-to-10 ratings; ask a brief clarifying question only when genuinely unclear (never about numbers), else just acknowledge (spoken, under ~30 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":int} (max 10 for severity, 5 for amount); KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard analytics fields when clearly implied. ONLY JSON: {"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. null/false for standard fields not mentioned; omit scale where it doesn't fit.`;
+async function extractFields({ settings, text, context = "", blocked = [], categories = [] }) {
+  const base = (settings.backendUrl || "/api").replace(/\/$/, "");
+  try {
+    const res = await fetch(`${base}/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, context, blocked, categories }) });
+    if (res.ok) return await res.json();
+    throw new Error(`extract ${res.status}`);
+  } catch (e) {
+    if (settings.apiKey) {
+      const ctx = context ? `Conversation so far: ${context}\n` : "";
+      const out = await callClaude({ apiKey: settings.apiKey, maxTokens: 500, messages: [{ role: "user", content: `${EXTRACT_SYS}\n\n${ctx}Current categories: ${JSON.stringify(categories)}\n\nThey just said: "${text}"` }] });
+      return JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
+    }
+    throw e;
+  }
+}
+
+// ---- live insights: blend tracked history with the running conversation -------
+const ADVISE_SYS = `You are Myno, a warm, practical PCOS companion. Combine the person's tracked history (history_summary) with what they're telling you now to surface ONE clear insight — a trend or correlation grounded in THEIR data — plus brief, actionable, non-diagnostic advice. Never diagnose or give drug doses. ONLY JSON: {"headline":str (<=8 words), "correlations":[{"label":str,"strength":0-100}] (0-3), "say":str (<=45 words of warm advice)}.`;
+async function extractAdvise({ settings, note, categories = [], summary = {}, blocked = [] }) {
+  const base = (settings.backendUrl || "/api").replace(/\/$/, "");
+  try {
+    const res = await fetch(`${base}/advise`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, categories, summary, blocked }) });
+    if (res.ok) return await res.json();
+    throw new Error(`advise ${res.status}`);
+  } catch (e) {
+    if (settings.apiKey) {
+      const out = await callClaude({ apiKey: settings.apiKey, maxTokens: 500, messages: [{ role: "user", content: `${ADVISE_SYS}\n\n${JSON.stringify({ today_conversation: note, categories, history_summary: summary })}` }] });
+      return JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
+    }
+    throw e;
+  }
+}
+
 // ---- voice capture: NeMo streaming WS, else Web Speech ---------------------
 class VoiceController {
-  constructor({ endpoint, onPartial, onFinal, onState, onError }) {
+  constructor({ endpoint, onPartial, onFinal, onState, onError, continuous, silenceMs }) {
     this.endpoint = endpoint; this.onPartial = onPartial; this.onFinal = onFinal; this.onState = onState; this.onError = onError;
+    this.continuous = !!continuous; this.silenceMs = silenceMs || 2500;
     this.mode = endpoint ? "nemo" : ((window.SpeechRecognition || window.webkitSpeechRecognition) ? "webspeech" : "none");
   }
   available() { return this.mode !== "none"; }
   async start() { if (this.mode === "nemo") return this._nemo(); if (this.mode === "webspeech") return this._web(); this.onError?.("Voice isn't available here — please type."); }
-  stop() { if (this.mode === "nemo") this._stopNemo(); else if (this.mode === "webspeech") { try { this.rec?.stop(); } catch (e) {} } this.onState?.(false); }
+  stop() { if (this.mode === "nemo") this._stopNemo(); else if (this.mode === "webspeech") { this.active = false; clearTimeout(this.silTimer); try { this.rec?.stop(); } catch (e) {} } this.onState?.(false); }
+  // Browser Web Speech. Patient on both ends: waits indefinitely for you to
+  // start, and tolerates long mid-sentence pauses — it only commits the turn
+  // after `silenceMs` of real silence, so it never cuts you off too early.
   _web() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition; const rec = new SR();
-    rec.lang = "en-US"; rec.interimResults = true; rec.continuous = false;
-    rec.onstart = () => this.onState?.(true);
-    rec.onerror = (e) => { this.onState?.(false); this.onError?.(e.error === "not-allowed" ? "Microphone blocked — type instead." : "Didn't catch that — try again."); };
-    rec.onend = () => this.onState?.(false);
-    rec.onresult = (ev) => { let f = "", p = ""; for (let i = ev.resultIndex; i < ev.results.length; i++) { const r = ev.results[i]; if (r.isFinal) f += r[0].transcript; else p += r[0].transcript; } if (p) this.onPartial?.(p); if (f) { try { rec.stop(); } catch (e) {} this.onFinal?.(f.trim()); } };
-    this.rec = rec; rec.start();
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    this.active = true; this.finalText = "";
+    const commit = () => {
+      clearTimeout(this.silTimer);
+      const t = (this.finalText || "").trim();
+      if (!t) return;                       // nothing said yet → keep waiting patiently
+      this.finalText = "";
+      this.onFinal?.(t);
+      if (!this.continuous) { this.active = false; try { this.rec?.stop(); } catch (e) {} }
+    };
+    const arm = () => { clearTimeout(this.silTimer); this.silTimer = setTimeout(commit, this.silenceMs); };
+    const build = () => {
+      const rec = new SR();
+      rec.lang = "en-US"; rec.interimResults = true; rec.continuous = true;
+      rec.onstart = () => this.onState?.(true);
+      rec.onerror = (ev) => { if (ev.error === "not-allowed" || ev.error === "service-not-allowed") { this.active = false; clearTimeout(this.silTimer); this.onState?.(false); this.onError?.("Microphone blocked — type instead."); } };
+      rec.onend = () => { if (this.active) { try { build(); } catch (e) { setTimeout(() => { if (this.active) build(); }, 300); } } else { this.onState?.(false); } };
+      rec.onresult = (ev) => {
+        let interim = "";
+        for (let i = ev.resultIndex; i < ev.results.length; i++) { const r = ev.results[i]; if (r.isFinal) this.finalText += r[0].transcript + " "; else interim += r[0].transcript; }
+        this.onPartial?.((this.finalText + interim).trim());
+        arm();                              // any speech resets the silence countdown
+      };
+      this.rec = rec; try { rec.start(); } catch (e) {}
+    };
+    build();
   }
   async _nemo() {
     try {
@@ -142,15 +228,18 @@ class VoiceController {
   }
   _stopNemo() { try { this.ws?.send(JSON.stringify({ type: "end" })); } catch (e) {} try { this.node?.disconnect(); } catch (e) {} try { this.ctx?.close(); } catch (e) {} try { this.stream?.getTracks().forEach((t) => t.stop()); } catch (e) {} setTimeout(() => { try { this.ws?.close(); } catch (e) {} }, 300); }
 }
-function useVoice({ settings, onPartial, onFinal }) {
-  const [listening, setListening] = useState(false); const [note, setNote] = useState(""); const ref = useRef(null);
-  const toggle = useCallback(() => {
-    if (listening) { ref.current?.stop(); return; } setNote("");
-    const c = new VoiceController({ endpoint: settings.nemoEndpoint || null, onPartial, onFinal, onState: setListening, onError: setNote });
+function useVoice({ settings, onPartial, onFinal, continuous, silenceMs }) {
+  const [listening, setListening] = useState(false); const [note, setNote] = useState(""); const ref = useRef(null); const onRef = useRef(false);
+  const setL = (v) => { onRef.current = v; setListening(v); };
+  const start = useCallback(() => {
+    if (onRef.current) return; setNote("");
+    const c = new VoiceController({ endpoint: settings.nemoEndpoint || null, onPartial, onFinal, onState: setL, onError: setNote, continuous, silenceMs });
     ref.current = c; if (!c.available()) { setNote("Voice isn't available here — please type."); return; } c.start();
-  }, [listening, settings.nemoEndpoint, onPartial, onFinal]);
+  }, [settings.nemoEndpoint, onPartial, onFinal, continuous, silenceMs]);
+  const stop = useCallback(() => { ref.current?.stop(); }, []);
+  const toggle = useCallback(() => { if (onRef.current) stop(); else start(); }, [start, stop]);
   useEffect(() => () => { try { ref.current?.stop(); } catch (e) {} }, []);
-  return { listening, note, toggle };
+  return { listening, note, toggle, start, stop };
 }
 
 // ---- synthetic data + insights + scoring (carried over) --------------------
@@ -304,7 +393,7 @@ export default function App() {
       <div style={{ width: "100%", maxWidth: 560 }}><Onboarding profile={profile} setProfile={setProfile} /></div>
     </div>);
 
-  const contentMax = { home: 1140, insights: 1140, clinician: 940, prepare: 880, chat: 720, record: 620, settings: 640 }[tab] || 1080;
+  const contentMax = { home: 1140, insights: 1140, clinician: 940, prepare: 880, chat: 720, record: 1180, settings: 640 }[tab] || 1080;
   // --- desktop / web shell (top navigation bar + wide content — the website view) ---
   if (wide) return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: bodyf, color: C.ink, backgroundImage: GRAD }}>
@@ -488,75 +577,181 @@ function CycleCalendar({ logs }) {
 }
 
 // ---- RECORD (quiz / convo) -------------------------------------------------
-function RecordScreen({ logs, setLogs, settings, setTab }) {
-  const [mode, setMode] = useState("quiz");
+function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const existing = logs.find((l) => l.date === todayStr);
-  const [e, setE] = useState(existing || { date: todayStr, period: existing?.period ?? null, pain: 0, sugar: 2, mood: 2, energy: 2, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "" });
+  const [e, setE] = useState(existing || { date: todayStr, period: existing?.period ?? null, pain: 0, sugar: 2, mood: 2, energy: 2, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [] });
+  const eRef = useRef(e); useEffect(() => { eRef.current = e; }, [e]);
+  const convoRef = useRef(false);  // hands-free intent: auto-resume the mic between turns
   const [saved, setSaved] = useState(false);
-  const set = (k, v) => { setE((p) => ({ ...p, [k]: v })); setSaved(false); };
-  const save = () => { setLogs([...logs.filter((l) => l.date !== e.date), e].sort((a, b) => a.date.localeCompare(b.date))); setSaved(true); };
+  const [partial, setPartial] = useState(""); const [busy, setBusy] = useState(false); const [text, setText] = useState(""); const [err, setErr] = useState("");
+  const [reply, setReply] = useState(""); const speaker = useSpeaker(settings);
+  const [flash, setFlash] = useState({}); const timers = useRef({});
+  const [insOn, setInsOn] = useState(false); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain");
+  const insRef = useRef(false); useEffect(() => { insRef.current = insOn; }, [insOn]);
+  useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
+
+  // Live insights run in the BACKGROUND (mic stays enabled) — they can take a
+  // while, so they never block the conversation.
+  const runAdvise = async () => {
+    setAdvising(true);
+    try {
+      const cur = eRef.current;
+      const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
+      const summary = {
+        avgPain: r1(ins?.avgPain), avgMood: r1(ins?.avgMood), avgCycleDays: ins?.avgGap,
+        painAfterHighSugar: r1(ins?.painHi), painAfterLowSugar: r1(ins?.painLo),
+        painWithBloating: r1(ins?.bloatPain), painWithoutBloating: r1(ins?.noBloatPain),
+        loggedDays: ins?.loggedDays,
+        recentPain: logs.slice(-14).map((l) => l.pain), recentMood: logs.slice(-14).map((l) => l.mood),
+        recentEnergy: logs.slice(-14).map((l) => l.energy), recentSugar: logs.slice(-14).map((l) => l.sugar),
+        today: { pain: cur.pain, mood: cur.mood, energy: cur.energy, sugar: cur.sugar, bloating: cur.bloating, categories: cur.categories },
+      };
+      const a = await extractAdvise({ settings, note: cur.note || "", categories: cur.categories || [], summary, blocked: blockedLabels(settings) });
+      if (a && (a.say || a.headline)) setAdvice(a);
+    } catch (e) { /* insights are best-effort; the panel just stays as-is */ }
+    setAdvising(false);
+  };
+
+  const persist = (entry) => setLogs([...logs.filter((l) => l.date !== entry.date), entry].sort((a, b) => a.date.localeCompare(b.date)));
+  const set = (k, v) => { const n = { ...eRef.current, [k]: v }; setE(n); eRef.current = n; persist(n); setSaved(true); };
+  // The user can override an inferred category slider; their value is kept.
+  const setCatScale = (key, v) => {
+    const cats = (eRef.current.categories || []).map((c) => c.key === key ? { ...c, scale: { ...(c.scale || { max: 10 }), value: v } } : c);
+    const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
+  };
+  // Light up whichever fields just changed, then fade the highlight out.
+  const lightUp = (keys) => {
+    if (!keys.length) return;
+    setFlash((f) => { const n = { ...f }; keys.forEach((k) => (n[k] = true)); return n; });
+    keys.forEach((k) => { clearTimeout(timers.current[k]); timers.current[k] = setTimeout(() => setFlash((f) => { const n = { ...f }; delete n[k]; return n; }), 1700); });
+  };
+
+  // Speech → Claude updates the personalized tracker + analytics fields + a spoken
+  // reply. The categories are invented from the whole conversation, so they're
+  // unique to this person; whatever changed flashes.
+  const ingest = async (said) => {
+    if (!said) return; setPartial(""); setErr(""); setBusy(true);
+    const base = { ...eRef.current, note: (eRef.current.note ? eRef.current.note + " " : "") + said };
+    let merged = base; let say = "";
+    try {
+      const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), categories: eRef.current.categories || [] });
+      const next = { ...base, period: f.period ?? base.period, pain: f.pain ?? base.pain, mood: f.mood ?? base.mood, energy: f.energy ?? base.energy, sugar: f.sugar ?? base.sugar, hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings };
+      if (Array.isArray(f.categories)) {
+        const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, c.value]));
+        const clean = f.categories.filter((c) => c && c.key && c.label).slice(0, 6);
+        lightUp(clean.filter((c) => prevMap[c.key] !== c.value).map((c) => c.key));
+        next.categories = clean;
+      }
+      merged = next; say = f.say || "";
+    } catch (e) { setErr("Couldn't reach the model to read that — is the backend up?"); }
+    setE(merged); eRef.current = merged; persist(merged); setSaved(true); setBusy(false);
+    // Mic stays OFF through transcription, inference, and Myno's spoken reply —
+    // it only comes back on for the next turn (hands-free).
+    const resume = () => { if (convoRef.current) voice.start(); };
+    if (say) { setReply(say); speaker.speak(say, resume); } else resume();
+    if (insRef.current) runAdvise();  // refresh live insights in the background
+  };
+  const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t), continuous: false, silenceMs: 4000 });
+  const micTap = () => { if (voice.listening) { convoRef.current = false; voice.stop(); } else { convoRef.current = true; voice.start(); } };
+  const status = busy ? "noting it down…" : voice.listening ? "listening…" : "tap to speak";
+
+  // PRIMARY — the conversation
+  const speakBlock = (
+    <div style={{ background: C.tealC, borderRadius: 24, padding: 22, boxShadow: SH, textAlign: "center", color: "#fff" }}>
+      <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 16, lineHeight: 1.4, marginBottom: 16, opacity: 0.95 }}>How has your body been today?</div>
+      <div style={{ display: "grid", placeItems: "center", marginBottom: 12 }}>
+        <button onClick={micTap} disabled={busy} style={{ width: 96, height: 96, borderRadius: "50%", border: "none", cursor: busy ? "default" : "pointer", display: "grid", placeItems: "center", background: voice.listening ? C.roseOn : "#fff", color: voice.listening ? "#fff" : C.teal, boxShadow: voice.listening ? "0 0 0 6px rgba(255,255,255,0.3)" : SH, animation: voice.listening ? "pulse 1.5s infinite" : "none", opacity: busy ? 0.7 : 1 }}>
+          {voice.listening ? <MicOff size={38} /> : <Mic size={38} />}</button></div>
+      <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, letterSpacing: "0.06em", textTransform: "uppercase", minHeight: 18 }}>{busy ? <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Loader2 size={13} className="spin" /> {status}</span> : status}</div>
+      <div style={{ minHeight: 24, marginTop: 10, fontSize: 15 }}>{partial ? <i style={{ opacity: 0.92 }}>{partial}…</i> : null}</div>
+      {reply && (<div style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", background: "rgba(255,255,255,0.16)", borderRadius: 16, padding: "12px 14px", marginTop: 12 }}>
+        <LeafMark size={28} />
+        <div style={{ flex: 1, fontSize: 15, lineHeight: 1.45 }}>{reply}</div>
+        {speaker.speaking && <button onClick={speaker.stop} title="Stop speaking" style={{ background: "rgba(255,255,255,0.2)", border: "none", borderRadius: 9999, width: 30, height: 30, display: "grid", placeItems: "center", cursor: "pointer", color: "#fff", flexShrink: 0 }}><VolumeX size={15} /></button>}
+      </div>)}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 12 }}>{["Some pain today", "Tired and bloated", "Feeling good"].map((c) => (<button key={c} onClick={() => ingest(c)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "8px 14px", borderRadius: 9999, background: "rgba(255,255,255,0.16)", border: "1.5px solid rgba(255,255,255,0.35)", color: "#fff", cursor: "pointer" }}>{c}</button>))}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", background: "rgba(255,255,255,0.14)", borderRadius: 9999, padding: 5, marginTop: 12 }}>
+        <input value={text} onChange={(ev) => setText(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter" && text.trim()) { ingest(text.trim()); setText(""); } }} placeholder="…or type it" style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 15, padding: "8px 12px", background: "transparent", color: "#fff" }} />
+      </div>
+      {voice.note && <p style={{ fontSize: 12, color: "#fff", marginTop: 10, opacity: 0.9 }}>{voice.note}</p>}
+      {err && <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", marginTop: 12, padding: "10px 14px", borderRadius: 12, background: "rgba(255,255,255,0.16)", color: "#fff", fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0 }} /> {err}</div>}
+    </div>);
+
+  // SIDE — the personalized tracker Myno builds from the conversation. New and
+  // changed categories rise in and flash a teal "updated" notification.
+  const cats = e.categories || [];
+  const dayBlock = (
+    <div>
+      <Label color={C.inkVar}>Your day so far</Label>
+      <div style={{ height: 12 }} />
+      {cats.length === 0 ? (
+        <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.5 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;As you talk, Myno builds a tracker here — in your own words.</Card>
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {cats.map((c) => { const on = !!flash[c.key]; const sc = c.scale && typeof c.scale.value === "number" && c.scale.max > 0 ? c.scale : null; return (
+            <div key={c.key} style={{ position: "relative", background: on ? C.tealFixed : C.surface, boxShadow: on ? `0 0 0 3px ${C.teal}` : SH_SM, borderRadius: 16, padding: "13px 16px", transition: "box-shadow .35s ease, background-color .35s ease", animation: on ? "rise .3s ease" : "none" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: C.inkVar }}>{c.label}
+                  {on && <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 10, letterSpacing: "0.06em", color: C.onTealFixed, background: "#fff", borderRadius: 9999, padding: "3px 8px", animation: "pulse 1s ease infinite" }}>UPDATED</span>}</span>
+                {c.value && <span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.teal, textAlign: "right" }}>{String(c.value)}</span>}
+              </div>
+              {sc && <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+                <div style={{ flex: 1 }}><Slider value={sc.value} max={sc.max} onChange={(v) => setCatScale(c.key, v)} /></div>
+                <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.outline, minWidth: 36, textAlign: "right" }}>{sc.value}/{sc.max}</span>
+              </div>}
+            </div>); })}
+        </div>
+      )}
+      <Pill onClick={() => { persist(e); setSaved(true); if (setTab) setTab("home"); }} style={{ width: "100%", marginTop: 16 }}>{saved ? <><Check size={18} /> Saved — done</> : <><Plus size={18} /> Save today</>}</Pill>
+    </div>);
+
+  // OPT-IN — live trends, correlations & advice from history + this conversation
+  const toggleIns = () => { const nv = !insOn; setInsOn(nv); if (nv) runAdvise(); };
+  const METRICS = [["pain", "Pain"], ["mood", "Mood"], ["energy", "Energy"], ["sugar", "Sugar"]].filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet")));
+  const mSel = METRICS.some(([k]) => k === metric) ? metric : (METRICS[0]?.[0] || "pain");
+  const series = logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
+  const insightsPanel = (
+    <Card style={{ padding: 16, position: wide ? "sticky" : "static", top: 88 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <Label color={C.inkVar}>Live trends</Label>
+        {advising && <Loader2 size={13} className="spin" color={C.outline} />}
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>{METRICS.map(([k, lbl]) => (
+        <button key={k} onClick={() => setMetric(k)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 11px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.teal : C.container, color: mSel === k ? "#fff" : C.inkVar }}>{lbl}</button>))}</div>
+      {series.length > 1 && (<><Sparkline series={series} /><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.outline, marginTop: 4 }}><span>30d ago</span><span>today</span></div></>)}
+      {advice?.headline && <div style={{ display: "flex", gap: 6, alignItems: "flex-start", marginTop: 14, fontFamily: head, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: C.teal }}><Sparkles size={14} color={C.roseOn} style={{ flexShrink: 0, marginTop: 1 }} /> {advice.headline}</div>}
+      {advice?.correlations?.length > 0 && (<div style={{ display: "grid", gap: 8, marginTop: 10 }}>{advice.correlations.map((c, i) => (
+        <div key={i}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, color: C.inkVar, marginBottom: 3 }}><span>{c.label}</span><span style={{ fontWeight: 700, color: C.teal }}>{Math.round(c.strength)}%</span></div>
+          <div style={{ height: 6, borderRadius: 9999, background: C.high }}><div style={{ width: `${Math.max(0, Math.min(100, c.strength))}%`, height: "100%", borderRadius: 9999, background: C.teal, transition: "width .5s ease" }} /></div>
+        </div>))}</div>)}
+      {advice?.say ? (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, background: C.tealFixed, color: C.onTealFixed, borderRadius: 14, padding: "11px 12px" }}>
+          <div style={{ flex: 1, fontSize: 13, lineHeight: 1.4 }}>{advice.say}</div>
+          <button onClick={() => speaker.speak(advice.say)} title="Hear it" style={{ background: "rgba(0,0,0,0.06)", border: "none", borderRadius: 9999, width: 26, height: 26, display: "grid", placeItems: "center", cursor: "pointer", color: C.teal, flexShrink: 0 }}><Volume2 size={13} /></button>
+        </div>
+      ) : (!advising && <p style={{ fontSize: 12, color: C.inkVar, marginTop: 12 }}>Keep talking — patterns from your history &amp; today show up here.</p>)}
+    </Card>);
 
   return (<div>
-    <div style={{ display: "flex", justifyContent: "center", margin: "8px 0 20px" }}><ModeToggle mode={mode} setMode={setMode} /></div>
-    {mode === "quiz" ? (<>
-      <H size={26} style={{ marginBottom: 4 }}>Record your day</H>
-      <p style={{ color: C.inkVar, marginBottom: 20 }}>However your body is today — no judgement.</p>
-      {!fieldBlocked(settings, "pain") && (<Card style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}><span style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>Rate pain</span><span style={{ fontFamily: head, fontWeight: 700, fontSize: 22, color: C.teal }}>{e.pain}<span style={{ fontSize: 13, color: C.outline }}>/10</span></span></div>
-        <Slider value={e.pain} max={10} onChange={(v) => set("pain", v)} />
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.outline, marginTop: 8 }}><span>None</span><span>Severe</span></div></Card>)}
-      <Card style={{ marginBottom: 14, display: "grid", gap: 16 }}>
-        {!fieldBlocked(settings, "mood") && <ScaleRow label="Mood" value={e.mood} onChange={(v) => set("mood", v)} words={["very low", "low", "okay", "good", "great"]} />}
-        <ScaleRow label="Energy" value={e.energy} onChange={(v) => set("energy", v)} words={["drained", "low", "okay", "good", "high"]} />
-        {!fieldBlocked(settings, "sugar") && <ScaleRow label="Sugary food" value={e.sugar} onChange={(v) => set("sugar", v)} words={["none", "a little", "some", "a lot", "loads"]} />}
-      </Card>
-      <Card style={{ marginBottom: 18 }}>
-        <Label color={C.inkVar}>Symptoms today</Label>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
-          {!fieldBlocked(settings, "hairGrowth") && <Chip active={e.hairGrowth} onClick={() => set("hairGrowth", !e.hairGrowth)}>Hair growth</Chip>}
-          {!fieldBlocked(settings, "hairLoss") && <Chip active={e.hairLoss} onClick={() => set("hairLoss", !e.hairLoss)}>Hair loss</Chip>}
-          <Chip active={e.bloating} onClick={() => set("bloating", !e.bloating)}>Bloating</Chip>
-          {!fieldBlocked(settings, "cravings") && <Chip active={e.cravings} onClick={() => set("cravings", !e.cravings)}>Cravings</Chip>}
-        </div></Card>
-      <Pill onClick={save} style={{ width: "100%" }}>{saved ? <><Check size={18} /> Saved</> : <><Plus size={18} /> Save today</>}</Pill>
-    </>) : (<RecordConvo settings={settings} entry={e} setE={setE} onSave={(merged) => { setLogs([...logs.filter((l) => l.date !== merged.date), merged].sort((a, b) => a.date.localeCompare(b.date))); }} />)}
-  </div>);
-}
-function ModeToggle({ mode, setMode }) {
-  return (<div style={{ display: "inline-flex", background: C.container, borderRadius: 9999, padding: 4 }}>
-    {["quiz", "convo"].map((m) => (<button key={m} onClick={() => setMode(m)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, letterSpacing: "0.05em", textTransform: "uppercase", padding: "10px 28px", borderRadius: 9999, cursor: "pointer", border: "none", background: mode === m ? C.teal : "transparent", color: mode === m ? "#fff" : C.inkVar }}>{m}</button>))}</div>);
-}
-function ScaleRow({ label, value, onChange, words }) {
-  return (<div><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><span style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{label}</span><span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: C.teal }}>{words[value]}</span></div><Slider value={value} max={4} onChange={onChange} /></div>);
-}
-function RecordConvo({ settings, entry, setE, onSave }) {
-  const [partial, setPartial] = useState(""); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false); const [text, setText] = useState("");
-  const ingest = async (said) => {
-    setPartial(""); setBusy(true); const note = (entry.note ? entry.note + " " : "") + said;
-    let merged = { ...entry, note };
-    try {
-      const sys = `Extract PCOS daily-log fields from the user's spoken day. ONLY JSON: {"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool}. Only set what's clearly implied.`;
-      const out = await callClaude({ apiKey: settings.apiKey, maxTokens: 400, messages: [{ role: "user", content: `${sys}\n\nThey said: "${said}"` }] });
-      const f = JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
-      merged = { ...merged, period: f.period ?? merged.period, pain: f.pain ?? merged.pain, mood: f.mood ?? merged.mood, energy: f.energy ?? merged.energy, sugar: f.sugar ?? merged.sugar, hairGrowth: f.hairGrowth || merged.hairGrowth, hairLoss: f.hairLoss || merged.hairLoss, bloating: f.bloating || merged.bloating, cravings: f.cravings || merged.cravings };
-    } catch (err) {}
-    setE(merged); onSave(merged); setBusy(false); setDone(true); setTimeout(() => setDone(false), 2500);
-  };
-  const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t) });
-  return (<div style={{ minHeight: 420, display: "flex", flexDirection: "column" }}>
-    <div style={{ fontFamily: head, fontWeight: 800, fontSize: 30, color: C.tealFixedDim, lineHeight: 1.05, marginBottom: 24 }}>Talk to<br />Myno</div>
-    <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}><span style={{ background: C.container, color: C.inkVar, fontFamily: bodyf, fontWeight: 600, fontSize: 12, letterSpacing: "0.05em", padding: "7px 16px", borderRadius: 9999 }}>{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }).toUpperCase()}</span></div>
-    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 16 }}><LeafMark size={44} /><div style={{ background: C.surface, borderRadius: 20, borderTopLeftRadius: 4, padding: "16px 18px", boxShadow: SH, fontSize: 17, lineHeight: 1.4 }}>How have your symptoms been today?</div></div>
-    {(partial || busy || done) && (<div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><div style={{ background: C.tealFixed, color: C.onTealFixed, borderRadius: 18, padding: "11px 15px", fontSize: 15, maxWidth: "82%" }}>{partial ? <i>{partial}…</i> : busy ? <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Loader2 size={13} className="spin" /> noting it down…</span> : <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Check size={14} /> Saved to today</span>}</div></div>)}
-    <div style={{ flex: 1 }} />
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>{["Better than yesterday", "Feeling some pain", "No changes"].map((c) => (<button key={c} onClick={() => ingest(c)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "11px 16px", borderRadius: 9999, background: C.surface, border: `1.5px solid ${C.outlineVar}`, color: C.ink, cursor: "pointer", boxShadow: SH_SM }}>{c}</button>))}</div>
-    <div style={{ display: "flex", gap: 10, alignItems: "center", background: C.surface, borderRadius: 9999, padding: 6, boxShadow: SH }}>
-      <input value={text} onChange={(ev) => setText(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter" && text.trim()) { ingest(text.trim()); setText(""); } }} placeholder={voice.listening ? "Listening…" : "Say it or type it…"} style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 16, padding: "8px 14px", background: "transparent" }} />
-      <MicBtn listening={voice.listening} onClick={voice.toggle} />
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 4 }}>
+      <H size={26}>Record your day</H>
+      <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
     </div>
-    {voice.note && <p style={{ fontSize: 12, color: C.error, textAlign: "center", marginTop: 10 }}>{voice.note}</p>}
+    <p style={{ color: C.inkVar, marginBottom: 18 }}>Just talk — Myno listens, talks back, and builds your personal tracker as you go.</p>
+    {wide ? (
+      <div style={{ display: "grid", gridTemplateColumns: insOn ? "minmax(240px, 280px) minmax(0, 1fr) minmax(280px, 340px)" : "minmax(0, 1fr) minmax(300px, 380px)", gap: 20, alignItems: "start" }}>
+        {insOn && insightsPanel}{speakBlock}{dayBlock}</div>
+    ) : (
+      <div>{insOn && <div style={{ marginBottom: 22 }}>{insightsPanel}</div>}<div style={{ marginBottom: 22 }}>{speakBlock}</div>{dayBlock}</div>
+    )}
   </div>);
+}
+function ScaleRow({ label, value, onChange, words, flash }) {
+  return (<div style={{ borderRadius: 12, padding: 8, margin: -8, transition: "background-color .35s ease", background: flash ? C.tealFixed : "transparent" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><span style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{label}</span><span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: flash ? C.tealDark : C.teal }}>{words[value]}</span></div>
+    <Slider value={value} max={4} onChange={onChange} /></div>);
 }
 function MicBtn({ listening, onClick, size = 46 }) {
   return (<button onClick={onClick} style={{ width: size, height: size, borderRadius: "50%", border: "none", cursor: "pointer", display: "grid", placeItems: "center", flexShrink: 0, background: listening ? C.roseOn : C.teal, color: "#fff", boxShadow: listening ? `0 0 0 5px ${C.rose}` : "none", animation: listening ? "pulse 1.4s infinite" : "none" }}>{listening ? <MicOff size={size * 0.42} /> : <Mic size={size * 0.42} />}</button>);
@@ -641,7 +836,7 @@ function ChatScreen({ profile, settings, ins }) {
   const greeting = `Hi${profile.name ? " " + profile.name : ""} — I'm here whenever something's on your mind. I can't diagnose you, but I can help you understand things and prepare. What's going on?`;
   const [msgs, setMsgs] = useState([{ role: "assistant", text: greeting }]);
   const [text, setText] = useState(""); const [loading, setLoading] = useState(false); const [partial, setPartial] = useState("");
-  const [voiceMode, setVoiceMode] = useState(false); const [learned, setLearned] = useState([]);
+  const [voiceMode, setVoiceMode] = useState(false); const [learned, setLearned] = useState([]); const [error, setError] = useState("");
   const scroller = useRef(); const speaker = useSpeaker(settings); const vmRef = useRef(false);
   useEffect(() => { vmRef.current = voiceMode; }, [voiceMode]);
   useEffect(() => { scroller.current?.scrollTo(0, scroller.current.scrollHeight); }, [msgs, loading, partial]);
@@ -652,12 +847,17 @@ NEVER ask about or volunteer anything blocked: ${blocked.length ? blocked.join("
 
   const send = async (t) => {
     const q = (t || text).trim(); if (!q || loading) return;
-    setPartial(""); const history = [...msgs, { role: "user", text: q }]; setMsgs(history); setText(""); setLoading(true); speaker.stop();
+    setPartial(""); setError(""); const history = [...msgs, { role: "user", text: q }]; setMsgs(history); setText(""); setLoading(true); speaker.stop();
     try { const { reply, learned: lrn } = await chatTurn({ settings, message: q, history: msgs, system: buildSys() });
-      const r = reply || "I'm here — could you say a little more?"; setMsgs([...history, { role: "assistant", text: r }]);
-      if (lrn?.length) setLearned((p) => [...lrn, ...p].slice(0, 6)); speaker.speak(r);
+      setMsgs([...history, { role: "assistant", text: reply }]);
+      if (lrn?.length) setLearned((p) => [...lrn, ...p].slice(0, 6)); speaker.speak(reply);
       if (vmRef.current) setTimeout(() => { if (vmRef.current && !voice.listening) voice.toggle(); }, 600);
-    } catch (e) { setMsgs([...history, { role: "assistant", text: "I couldn't reach my words just now — try again in a moment." }]); }
+    } catch (e) {
+      // Show the real failure; don't fabricate a spoken reply, and stop the
+      // convo loop so it isn't talking into a dead backend.
+      setError(e?.message || "Something went wrong reaching Myno.");
+      if (vmRef.current && voice.listening) voice.toggle();
+    }
     finally { setLoading(false); }
   };
   const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => send(t) });
@@ -673,13 +873,18 @@ NEVER ask about or volunteer anything blocked: ${blocked.length ? blocked.join("
     <Card style={{ minHeight: 90, textAlign: "left", boxShadow: SH }}><div style={{ fontSize: 16, lineHeight: 1.5 }}>{partial ? <i style={{ color: C.inkVar }}>{partial}…</i> : msgs[msgs.length - 1]?.text}</div></Card>
     <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 22 }}>
       <Pill variant={voice.listening ? "rose" : "filled"} onClick={voice.toggle}>{voice.listening ? <><MicOff size={16} /> Stop</> : <><Mic size={16} /> Speak</>}</Pill>
+      {speaker.speaking && <Pill variant="soft" onClick={speaker.stop}><VolumeX size={16} /> Hush</Pill>}
       <Pill variant="soft" onClick={() => setVoiceMode(false)}>Exit</Pill></div>
+    {error && <div style={{ display: "flex", gap: 8, alignItems: "flex-start", justifyContent: "center", marginTop: 14, padding: "10px 14px", borderRadius: 12, background: C.rose, color: C.error, fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}</div>}
     {voice.note && <p style={{ fontSize: 12, color: C.error, marginTop: 12 }}>{voice.note}</p>}
   </div>);
 
   return (<div style={{ display: "flex", flexDirection: "column", minHeight: 520 }}>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "6px 0 14px" }}>
-      <H size={26}>Talk to Myno</H><Pill variant="outline" onClick={() => setVoiceMode(true)} style={{ padding: "10px 16px", fontSize: 14 }}><Volume2 size={15} /> Voice</Pill></div>
+      <H size={26}>Talk to Myno</H>
+      <div style={{ display: "flex", gap: 8 }}>
+        {speaker.speaking && <Pill variant="rose" onClick={speaker.stop} style={{ padding: "10px 16px", fontSize: 14 }}><VolumeX size={15} /> Stop voice</Pill>}
+        <Pill variant="outline" onClick={() => setVoiceMode(true)} style={{ padding: "10px 16px", fontSize: 14 }}><Volume2 size={15} /> Voice</Pill></div></div>
     <div ref={scroller} style={{ flex: 1, overflowY: "auto", display: "grid", gap: 12, paddingBottom: 10, maxHeight: 380 }}>
       {msgs.map((m, i) => (<div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
         {m.role === "assistant" && <LeafMark size={36} />}
@@ -694,6 +899,7 @@ NEVER ask about or volunteer anything blocked: ${blocked.length ? blocked.join("
       <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder={voice.listening ? "Listening…" : "Say it or type it…"} style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 16, padding: "8px 14px", background: "transparent" }} />
       <MicBtn listening={voice.listening} onClick={voice.toggle} />
     </div>
+    {error && <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, padding: "10px 14px", borderRadius: 12, background: C.rose, color: C.error, fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}</div>}
     {voice.note && <p style={{ fontSize: 12, color: C.error, textAlign: "center", marginTop: 10 }}>{voice.note}</p>}
   </div>);
 }

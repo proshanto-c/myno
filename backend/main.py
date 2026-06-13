@@ -247,6 +247,80 @@ Return ONLY JSON, no prose, no code fences:
     s.commit(); s.close()
     return {"reply": reply, "learned": new_desc, "adapt": adapt}
 
+# ----- voice → structured daily-log fields + a spoken reply (server-side model;
+# no key in the browser). Myno talks back: acknowledges, and asks ONE clarifying
+# question when something important is ambiguous, so the patient can just answer.
+class ExtractIn(BaseModel):
+    text: str
+    context: str = ""
+    blocked: list[str] = []
+    categories: list[dict] = []
+
+def _extract_sys(blocked: list[str]) -> str:
+    block_line = ", ".join(blocked) if blocked else "none"
+    return (
+        "You are Myno, a warm voice companion helping someone log their PCOS day just by talking. "
+        "From the WHOLE conversation so far and what they just said, do three things: reply out loud, "
+        "maintain a personalized tracker, and update the standard analytics fields.\n"
+        "- 'say': respond warmly in their own words and reflect back what you heard. INFER any ratings/severities yourself — do NOT ask for numbers, scores, or 1-to-10 ratings. Only ask a brief clarifying question when something is genuinely unclear (never about numbers), otherwise just acknowledge. Spoken aloud — under ~30 words, natural and kind. Never diagnose.\n"
+        "- 'categories': a SMALL evolving set (max 6) of the things THIS person actually talks about, in THEIR words "
+        "(e.g. {\"key\":\"brain_fog\",\"label\":\"Brain fog\",\"value\":\"heavy this morning\"}). Reuse the same key when updating an existing one; add a new category when they raise something new; drop nothing unless clearly resolved. "
+        "'value' is a short human phrase in their language. Build on the categories provided; keep keys stable (lower_snake_case).\n"
+        "- When a category is naturally a rating, severity, intensity, amount, or frequency, ALSO include "
+        "\"scale\":{\"value\":int,\"max\":int}: infer the current value and a sensible max (10 for pain/severity/intensity, 5 for amount/frequency). "
+        "Omit 'scale' for purely qualitative categories. IMPORTANT: a category may already carry a user-set scale value — KEEP that value unless they clearly state a new one in speech.\n"
+        f"- NEVER create a category for, ask about, or volunteer anything in this blocked list: {block_line}.\n"
+        "- Also fill the standard fields for analytics when clearly implied.\n"
+        "Return ONLY JSON, no prose, no code fences: "
+        '{"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,'
+        '"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool,'
+        '"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. '
+        "Use null/false for standard fields not mentioned; omit 'scale' where it doesn't fit."
+    )
+
+@app.post("/extract")
+async def extract(body: ExtractIn):
+    ctx = (body.context or "").strip()
+    cats = json.dumps(body.categories or [])
+    user = (
+        (f"Conversation so far: {ctx}\n" if ctx else "")
+        + f"Current personalized categories: {cats}\n\n"
+        + f'They just said: "{body.text}"'
+    )
+    raw = await claude(_extract_sys(body.blocked or []), [{"role": "user", "content": user}], max_tokens=500)
+    try:
+        a, b = raw.index("{"), raw.rindex("}")
+        return json.loads(raw[a:b + 1])
+    except Exception:
+        return {}
+
+# ----- live insights: combine tracked history with the current conversation
+class AdviseIn(BaseModel):
+    note: str = ""
+    categories: list[dict] = []
+    summary: dict = {}
+    blocked: list[str] = []
+
+@app.post("/advise")
+async def advise(body: AdviseIn):
+    block_line = ", ".join(body.blocked) if body.blocked else "none"
+    sys = (
+        "You are Myno, a warm, practical PCOS companion. Combine the person's tracked history (history_summary) with what "
+        "they are telling you right now to surface ONE clear, useful insight: a trend or correlation grounded in THEIR data, "
+        "plus brief, actionable, non-diagnostic advice. Never diagnose or give drug doses; a clinician decides. "
+        f"NEVER reference anything in this blocked list: {block_line}. Keep it spoken-friendly and kind.\n"
+        'Return ONLY JSON, no prose: {"headline":str (<=8 words naming the trend/insight), '
+        '"correlations":[{"label":str,"strength":0-100}] (0-3, from their data), '
+        '"say":str (<=35 words of warm, practical advice)}. Be concise.'
+    )
+    user = json.dumps({"today_conversation": body.note, "categories": body.categories, "history_summary": body.summary})
+    raw = await claude(sys, [{"role": "user", "content": user}], max_tokens=320)
+    try:
+        a, b = raw.index("{"), raw.rindex("}")
+        return json.loads(raw[a:b + 1])
+    except Exception:
+        return {}
+
 def _avg_cycle(s, pid):
     rows = s.query(DailyLog).filter_by(patient_id=pid).filter(DailyLog.period == True).order_by(DailyLog.date).all()
     if len(rows) < 2: return None

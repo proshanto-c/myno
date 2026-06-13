@@ -36,22 +36,51 @@ log = logging.getLogger("myno-tts")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SAMPLE_RATE = 22050
 
+# Softer, more natural voice. VITS (end-to-end) sounds far less robotic than
+# FastPitch + HiFi-GAN, so we use it when available and fall back otherwise.
+SOFT_PACE = 0.92    # < 1.0 = slower / gentler (FastPitch fallback only)
+SOFT_GAIN = 0.9     # gentle loudness ease
+
+
+def _soften(audio: np.ndarray) -> np.ndarray:
+    audio = np.asarray(audio, dtype=np.float32).squeeze()
+    if audio.size == 0:
+        return audio
+    peak = float(np.max(np.abs(audio))) or 1.0
+    return (audio / peak * SOFT_GAIN).astype(np.float32)  # normalize, then ease
+
 
 class TTSEngine:
     def __init__(self):
-        log.info(f"Loading FastPitch + HiFi-GAN on {DEVICE} ...")
-        self.spec = FastPitchModel.from_pretrained("tts_en_fastpitch").to(DEVICE).eval()
-        self.vocoder = HifiGanModel.from_pretrained("tts_en_lj_hifigan_ft_mixertts").to(DEVICE).eval()
+        self.kind = None
+        try:
+            from nemo.collections.tts.models import VitsModel
+            log.info(f"Loading VITS (tts_en_lj_vits) on {DEVICE} ...")
+            self.vits = VitsModel.from_pretrained("tts_en_lj_vits").to(DEVICE).eval()
+            self.kind = "vits"
+        except Exception as ex:
+            log.warning(f"VITS unavailable ({ex}); falling back to FastPitch + HiFi-GAN")
+            self.spec = FastPitchModel.from_pretrained("tts_en_fastpitch").to(DEVICE).eval()
+            self.vocoder = HifiGanModel.from_pretrained("tts_en_lj_hifigan_ft_mixertts").to(DEVICE).eval()
+            self.kind = "fastpitch"
+        log.info(f"TTS engine ready: {self.kind}")
 
     @torch.no_grad()
     def synth(self, text: str) -> np.ndarray:
         text = (text or "").strip()
         if not text:
             return np.zeros(1, dtype=np.float32)
-        tokens = self.spec.parse(text)
-        spectrogram = self.spec.generate_spectrogram(tokens=tokens)
-        audio = self.vocoder.convert_spectrogram_to_audio(spec=spectrogram)
-        return audio.to("cpu").numpy().squeeze()
+        if self.kind == "vits":
+            tokens = self.vits.parse(text)
+            audio = self.vits.convert_text_to_waveform(tokens=tokens)
+        else:
+            tokens = self.spec.parse(text)
+            try:
+                spectrogram = self.spec.generate_spectrogram(tokens=tokens, pace=SOFT_PACE)
+            except TypeError:  # older signature without `pace`
+                spectrogram = self.spec.generate_spectrogram(tokens=tokens)
+            audio = self.vocoder.convert_spectrogram_to_audio(spec=spectrogram)
+        return _soften(audio.to("cpu").numpy())
 
 
 engine: TTSEngine | None = None
@@ -66,7 +95,7 @@ def _load():
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "device": DEVICE, "sample_rate": SAMPLE_RATE}
+    return {"status": "ok", "device": DEVICE, "sample_rate": SAMPLE_RATE, "engine": getattr(engine, "kind", None)}
 
 
 class TTSIn(BaseModel):
