@@ -448,9 +448,26 @@ export default function App() {
   const vw = useViewport();
   const wide = vw >= 1024;
 
-  useEffect(() => { (async () => { const s = await loadState();
-    if (s) { setProfile(s.profile || BLANK); setLogs(s.logs?.length ? s.logs : genSyntheticLogs()); setSettings({ apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", ...(s.settings || {}) }); }
-    else setLogs(genSyntheticLogs()); setReady(true); })(); }, []);
+  useEffect(() => { (async () => {
+    const s = await loadState();
+    const profile0 = s?.profile || BLANK;
+    const settings0 = { apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", ...(s?.settings || {}) };
+    setProfile(profile0); setSettings(settings0);
+    // DB-backed logs: provision a patient, seed realistic history, load it.
+    const base = (settings0.backendUrl || "/api").replace(/\/$/, "");
+    let dbLogs = null, pid = settings0.patientId;
+    try {
+      if (!pid) { const r = await fetch(`${base}/patients`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: profile0.name || "" }) }); if (r.ok) pid = (await r.json()).id; }
+      if (pid) {
+        await fetch(`${base}/patients/${pid}/seed`, { method: "POST" }).catch(() => {});
+        const lr = await fetch(`${base}/patients/${pid}/logs`);
+        if (lr.ok) { const arr = await lr.json(); if (Array.isArray(arr) && arr.length) dbLogs = arr; }
+        setSettings((p) => ({ ...p, patientId: pid }));
+      }
+    } catch (e) { /* backend unreachable → fall back to local synthetic data */ }
+    setLogs(dbLogs || (s?.logs?.length ? s.logs : genSyntheticLogs()));
+    setReady(true);
+  })(); }, []);
   useEffect(() => { if (ready) saveState({ profile, logs, settings }); }, [profile, logs, settings, ready]);
 
   const ins = useMemo(() => computeInsights(logs), [logs]);
@@ -705,7 +722,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   const [partial, setPartial] = useState(""); const [busy, setBusy] = useState(false); const [text, setText] = useState(""); const [err, setErr] = useState("");
   const [reply, setReply] = useState(""); const speaker = useSpeaker(settings);
   const [flash, setFlash] = useState({}); const timers = useRef({});
-  const [insOn, setInsOn] = useState(false); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
+  const [insOn, setInsOn] = useState(true); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
   const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false); const [spoken, setSpoken] = useState({});  // schema fields Myno heard from speech
   const insRef = useRef(false); useEffect(() => { insRef.current = insOn; }, [insOn]);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
@@ -731,8 +748,10 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     } catch (e) { /* insights are best-effort; the panel just stays as-is */ }
     setAdvising(false);
   };
+  useEffect(() => { runAdvise(); }, []);  // trends are on by default — populate once on open
 
   const persist = (entry) => setLogs([...logs.filter((l) => l.date !== entry.date), entry].sort((a, b) => a.date.localeCompare(b.date)));
+  const saveToDb = (entry) => { const pid = settings.patientId; if (!pid) return; const b = (settings.backendUrl || "/api").replace(/\/$/, ""); fetch(`${b}/patients/${pid}/logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }).catch(() => {}); };
   const set = (k, v) => { const n = { ...eRef.current, [k]: v }; setE(n); eRef.current = n; persist(n); setSaved(true); };
   // The user can override an inferred category slider; their value is kept.
   const setCatScale = (key, v) => {
@@ -863,7 +882,6 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
             </div>); })}
         </div>
       )}
-      <Pill onClick={() => { persist(e); setSaved(true); if (setTab) setTab("home"); }} style={{ width: "100%", marginTop: 16 }}>{saved ? <><Check size={18} /> Saved</> : <><Plus size={18} /> Save Conversation</>}</Pill>
     </div>
   );
 
@@ -925,7 +943,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
         </div>))}
         <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
           <Pill variant="soft" onClick={() => setModal(false)} style={{ flex: 1 }}>Keep talking</Pill>
-          <Pill onClick={() => { persist(e); setSaved(true); setModal(false); }} style={{ flex: 1 }}><Check size={16} /> Done</Pill>
+          <Pill onClick={() => { persist(e); saveToDb(e); setSaved(true); setModal(false); if (setTab) setTab("home"); }} style={{ flex: 1 }}><Check size={16} /> {saved ? "Saved" : "Done"}</Pill>
         </div>
       </div>
     </div>
@@ -961,30 +979,167 @@ function MicBtn({ listening, onClick, size = 46 }) {
 
 // ---- INSIGHTS (twin) -------------------------------------------------------
 function InsightsScreen({ ins, logs, settings, wide }) {
-  const filters = ["Pain", "Acne", "Hair Growth", "Mood"].filter((f) => !(f === "Mood" && isBlocked(settings, "mood")));
-  const [filter, setFilter] = useState("Pain");
-  const painDelta = ins.painHi - ins.painLo;
-  const series = logs.slice(-30).map((l) => l.pain);
-  const sugarCorr = Math.min(99, Math.round((painDelta / Math.max(0.1, ins.painHi)) * 100 + 40));
-  const bloatCorr = Math.min(99, Math.round(((ins.bloatPain - ins.noBloatPain) / Math.max(0.1, ins.bloatPain)) * 100 + 45));
+  // metric list = standard fields + personalized categories that carry a slider
+  const STD = [["pain", "Pain"], ["mood", "Mood"], ["energy", "Energy"], ["sleep", "Sleep"], ["brainFog", "Brain fog"], ["sugar", "Sugar"]]
+    .filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet"))).map(([k, l]) => [k, l, false]);
+  const seen = {}; logs.forEach((l) => (l.categories || []).forEach((c) => { if (c && c.scale && typeof c.scale.value === "number" && c.key) seen[c.key] = c.label || c.key; }));
+  const used = new Set([...STD.map(([k]) => k), ...STD.map(([, l]) => l.toLowerCase())]);
+  const catList = []; for (const [k, l] of Object.entries(seen)) { const n = String(l).toLowerCase(); if (used.has(n)) continue; used.add(n); catList.push([k, l, true]); }
+  const METRICS = STD.concat(catList.slice(0, 5));
+  const [metric, setMetric] = useState("pain");
+  const [view, setView] = useState("insights"); // sub-view within Insights: "insights" | "track"
+  const [xKey, setXKey] = useState("sugar"); const [yKey, setYKey] = useState("pain"); const [lagDay, setLagDay] = useState(true);
+  const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", false];
+  const mSel = mEntry[0], mLbl = mEntry[1], mIsCat = mEntry[2];
+  const series = mIsCat
+    ? (() => { let last = 0; return logs.slice(-30).map((l) => { const c = (l.categories || []).find((x) => x.key === mSel); if (c && c.scale && typeof c.scale.value === "number") last = c.scale.value; return last; }); })()
+    : logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
+  const sAvg = series.length ? series.reduce((a, b) => a + b, 0) / series.length : 0;
+  // chart data
+  const heatVal = (l) => mIsCat ? (() => { const c = (l.categories || []).find((x) => x.key === mSel); return c && c.scale ? c.scale.value : null; })() : (typeof l[mSel] === "number" ? l[mSel] : null);
+  const heatMax = mIsCat ? 10 : (mSel === "pain" ? 10 : 4);
+  const heatDays = logs.slice(-84);
+  const periodDates = logs.filter((l) => l.period).map((l) => l.date);
+  const gaps = []; for (let i = 1; i < periodDates.length; i++) { const g = Math.round((new Date(periodDates[i]) - new Date(periodDates[i - 1])) / 86400000); if (g > 10) gaps.push(g); }
+  // relationship explorer: pick X, Y and same/next-day → scatter + live Pearson r
+  const NUM = [["sugar", "Sugar", 4], ["pain", "Pain", 10], ["mood", "Mood", 4], ["energy", "Energy", 4], ["sleep", "Sleep", 4], ["brainFog", "Brain fog", 4]]
+    .filter(([k]) => !(k === "sugar" && isBlocked(settings, "diet")) && !(k === "mood" && isBlocked(settings, "mood")));
+  const xMeta = NUM.find(([k]) => k === xKey) || NUM[0]; const yMeta = NUM.find(([k]) => k === yKey) || NUM[0];
+  const off = lagDay ? 1 : 0; const exPoints = [];
+  for (let i = off; i < logs.length; i++) { const x = logs[i - off][xMeta[0]], y = logs[i][yMeta[0]]; if (typeof x === "number" && typeof y === "number") exPoints.push({ x, y }); }
+  const exR = (() => { const n = exPoints.length; if (n < 8) return null; const mx = exPoints.reduce((a, p) => a + p.x, 0) / n, my = exPoints.reduce((a, p) => a + p.y, 0) / n; const cov = exPoints.reduce((a, p) => a + (p.x - mx) * (p.y - my), 0); const vx = exPoints.reduce((a, p) => a + (p.x - mx) ** 2, 0), vy = exPoints.reduce((a, p) => a + (p.y - my) ** 2, 0); if (vx <= 0 || vy <= 0) return null; return cov / Math.sqrt(vx * vy); })();
+  const exS = exR == null ? "" : (Math.abs(exR) >= 0.6 ? "strong" : Math.abs(exR) >= 0.4 ? "moderate" : Math.abs(exR) >= 0.2 ? "weak" : "negligible");
+  const exChip = (lbl, sel, on) => (<button key={lbl} onClick={on} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 10px", borderRadius: 9999, border: "none", cursor: "pointer", background: sel ? C.teal : C.container, color: sel ? "#fff" : C.inkVar }}>{lbl}</button>);
 
-  const patternCard = !isBlocked(settings, "diet") && painDelta > 0.8 && (<div style={{ background: C.tealC, borderRadius: 22, padding: 22, boxShadow: SH }}>
-    <div style={{ display: "flex", gap: 12, marginBottom: 14 }}><span style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(255,255,255,0.18)", display: "grid", placeItems: "center", flexShrink: 0 }}><Sparkles size={18} color="#fff" /></span>
-      <div><div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.tealFixed, marginBottom: 4 }}>I've noticed a pattern</div>
-        <p style={{ color: "#fff", fontSize: 15, lineHeight: 1.5, margin: 0 }}>On days you record a high intake of sugar, your pain tends to spike about a day later — around {painDelta.toFixed(1)} points higher. Want to track meals more closely this week?</p></div></div>
-    <div style={{ display: "flex", gap: 10 }}><Pill variant="filled" style={{ background: "#fff", color: C.teal, flex: 1 }}>Yes, track it</Pill><Pill variant="outline" style={{ background: "transparent", color: "#fff", borderColor: "rgba(255,255,255,0.5)", flex: 1 }}>Maybe later</Pill></div></div>);
+  // Claude analysis + computed statistics over the DB logs
+  const [analysis, setAnalysis] = useState(null); const [stats, setStats] = useState(null); const [loadingA, setLoadingA] = useState(false);
+  useEffect(() => { (async () => {
+    const pid = settings.patientId; if (!pid) return; setLoadingA(true);
+    try { const b = (settings.backendUrl || "/api").replace(/\/$/, ""); const r = await fetch(`${b}/patients/${pid}/insights`, { method: "POST" }); if (r.ok) { const j = await r.json(); setAnalysis(j.analysis); setStats(j.stats); } } catch (e) { }
+    setLoadingA(false);
+  })(); }, [settings.patientId]);
+
+  // research-backed tracker suggestions (generated daily in the background; poll while generating)
+  const [sugg, setSugg] = useState(null);
+  useEffect(() => {
+    const pid = settings.patientId; if (!pid) return;
+    let stop = false, tries = 0; const b = (settings.backendUrl || "/api").replace(/\/$/, "");
+    const load = async () => {
+      try { const r = await fetch(`${b}/patients/${pid}/suggestions`); if (!r.ok || stop) return; const j = await r.json();
+        if (stop) return; setSugg(j.suggestions || []);
+        if ((j.refreshing || !(j.suggestions || []).length) && tries < 15) { tries++; setTimeout(load, 6000); }
+      } catch (e) { }
+    };
+    load();
+    return () => { stop = true; };
+  }, [settings.patientId]);
+
+  const analysisCard = (<Card>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: head, fontWeight: 600, fontSize: 17 }}><Sparkles size={18} color={C.roseOn} /> Myno's analysis</span>
+      {loadingA && <Loader2 size={14} className="spin" color={C.outline} />}
+    </div>
+    {analysis?.summary && <p style={{ fontSize: 14, lineHeight: 1.5, color: C.ink, margin: "0 0 12px" }}>{analysis.summary}</p>}
+    {analysis?.insights?.length > 0 ? (<div style={{ display: "grid", gap: 12 }}>{analysis.insights.map((it, i) => (
+      <div key={i}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}><span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 14, color: C.teal }}>{it.title}</span><span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.teal }}>{Math.round(it.strength ?? 0)}%</span></div>
+        <div style={{ height: 6, borderRadius: 9999, background: C.high, marginBottom: 6 }}><div style={{ width: `${Math.max(0, Math.min(100, it.strength ?? 0))}%`, height: "100%", borderRadius: 9999, background: C.teal }} /></div>
+        <p style={{ fontSize: 13, lineHeight: 1.45, color: C.inkVar, margin: 0 }}>{it.detail}</p>
+      </div>))}</div>
+    ) : (!loadingA && <p style={{ fontSize: 13, color: C.inkVar }}>Keep logging — Myno analyses your trends here.</p>)}
+  </Card>);
+
+  // Real Pearson correlations computed over the DB logs
+  const correlationsCard = stats?.correlations?.length > 0 && (<Card>
+    <Label color={C.inkVar}>Correlations in your data</Label>
+    <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+      {stats.correlations.slice(0, 4).map((c, i) => { const a = Math.abs(c.r); return (
+        <div key={i}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 14, color: C.ink }}>{c.label}</span>
+            <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.teal }}>r {c.r > 0 ? "+" : ""}{c.r.toFixed(2)}</span>
+          </div>
+          <div style={{ height: 6, borderRadius: 9999, background: C.high }}><div style={{ width: `${Math.round(a * 100)}%`, height: "100%", borderRadius: 9999, background: a >= 0.6 ? C.teal : C.tealC }} /></div>
+          <div style={{ fontSize: 11.5, color: C.outline, marginTop: 3 }}>{c.strength} correlation · {c.n} days</div>
+        </div>); })}
+    </div>
+    <div style={{ fontSize: 11.5, color: C.outline, marginTop: 12, lineHeight: 1.5 }}>Pearson r ranges −1 to +1; |r| ≥ 0.6 is strong, 0.4–0.6 moderate. Association, not proof of cause.</div>
+  </Card>);
+
+  // Cycle variability: mean ± SD and coefficient of variation
+  const cy = stats?.cycle;
+  const cycleCard = cy && (<Card>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <Label color={C.inkVar}>Cycle regularity</Label>
+      <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 12, padding: "4px 10px", borderRadius: 9999, background: cy.regular ? C.tealFixed : C.rose, color: cy.regular ? C.onTealFixed : C.roseOn }}>{cy.label}</span>
+    </div>
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 12 }}>
+      <span style={{ fontFamily: head, fontWeight: 700, fontSize: 32, color: C.teal }}>{cy.meanDays}</span>
+      <span style={{ fontSize: 14, color: C.inkVar }}>± {cy.sdDays} days (mean ± SD)</span>
+    </div>
+    <div style={{ fontSize: 13, color: C.inkVar, marginTop: 8 }}>Range {cy.min}–{cy.max} days across {cy.cycles} cycles · variability (CV) {cy.cv}%</div>
+    {gaps.length > 0 && <div style={{ marginTop: 12 }}><CycleBars gaps={gaps} /></div>}
+    <div style={{ fontSize: 11.5, color: C.outline, marginTop: 10, lineHeight: 1.5 }}>Typical adult cycles run 21–35 days. Consistently longer or highly variable cycles are a common PCOS sign — worth raising with a clinician.</div>
+  </Card>);
+
+  const trendCard = stats?.trends?.length > 0 && (<Card>
+    <Label color={C.inkVar}>Direction over time</Label>
+    <div style={{ display: "grid", gap: 8, marginTop: 10 }}>{stats.trends.map((t, i) => (
+      <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+        <span style={{ color: C.ink }}>{t.label}</span>
+        <span style={{ fontFamily: head, fontWeight: 700, color: t.direction === "down" ? C.teal : C.roseOn }}>{t.direction === "up" ? "↑" : "↓"} {Math.abs(t.perWeek)}/wk</span>
+      </div>))}</div>
+    <div style={{ fontSize: 11.5, color: C.outline, marginTop: 10 }}>Least-squares slope over your logged days.</div>
+  </Card>);
+
+  const explorerCard = (<Card>
+    <Label color={C.inkVar}>Explore a relationship</Label>
+    <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}><span style={{ fontSize: 12, color: C.inkVar, fontWeight: 700, width: 14 }}>X</span>{NUM.map(([k, lbl]) => exChip(lbl, xKey === k, () => setXKey(k)))}</div>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}><span style={{ fontSize: 12, color: C.inkVar, fontWeight: 700, width: 14 }}>Y</span>{NUM.map(([k, lbl]) => exChip(lbl, yKey === k, () => setYKey(k)))}</div>
+      <div style={{ display: "flex", gap: 6 }}>{exChip("same day", !lagDay, () => setLagDay(false))}{exChip("X → next-day Y", lagDay, () => setLagDay(true))}</div>
+    </div>
+    <div style={{ marginTop: 12 }}><Scatter points={exPoints} xMax={xMeta[2]} yMax={yMeta[2]} xLabel={`${xMeta[1]}${lagDay ? " (prev day)" : ""}`} yLabel={yMeta[1]} /></div>
+    {exR != null ? <div style={{ fontSize: 13, color: C.inkVar, marginTop: 6 }}>Pearson <b style={{ color: C.teal }}>r = {exR > 0 ? "+" : ""}{exR.toFixed(2)}</b> · {exS} · {exPoints.length} days · red line = best fit</div>
+      : <div style={{ fontSize: 12, color: C.outline, marginTop: 6 }}>Not enough overlapping days.</div>}
+  </Card>);
+
+  const statsLoading = loadingA && !stats;
+  const loadingCard = (<Card style={{ display: "flex", alignItems: "center", gap: 10, color: C.inkVar, fontSize: 14 }}><Loader2 size={16} className="spin" color={C.teal} /> Computing your stats &amp; correlations…</Card>);
+
+  // research-backed "what else to track" suggestions
+  const EV = { Strong: [C.tealFixed, C.onTealFixed], Emerging: [C.rose, C.roseOn], Early: [C.container, C.inkVar] };
+  const badge = (txt, bg, fg) => <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 10, letterSpacing: "0.03em", padding: "3px 8px", borderRadius: 9999, background: bg, color: fg, whiteSpace: "nowrap" }}>{txt}</span>;
+  const suggestionsCard = (<Card>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+      <Microscope size={18} color={C.teal} /><span style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>What else to track</span>
+      {(sugg === null || sugg.length === 0) && <Loader2 size={14} className="spin" color={C.outline} style={{ marginLeft: "auto" }} />}
+    </div>
+    <p style={{ fontSize: 13, color: C.inkVar, lineHeight: 1.5, margin: "0 0 12px" }}>Research-backed ideas from recent PCOS literature (2022–2025), based on what you already track. Regenerated daily.</p>
+    {(sugg === null || sugg.length === 0) ? (
+      <p style={{ fontSize: 13, color: C.outline }}>Scanning the latest research for you…</p>
+    ) : (
+      <div style={{ display: "grid", gap: 14 }}>{sugg.map((s, i) => { const [bg, fg] = EV[s.evidence] || [C.container, C.inkVar]; return (
+        <div key={i} style={{ paddingTop: i ? 14 : 0, borderTop: i ? `1px solid ${C.high}` : "none" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: head, fontWeight: 700, fontSize: 15 }}>{s.tracker}</span>
+            <span style={{ display: "flex", gap: 6 }}>{badge(s.category, C.low, C.inkVar)}{badge(s.evidence, bg, fg)}</span>
+          </div>
+          <p style={{ fontSize: 13.5, lineHeight: 1.5, color: C.inkVar, margin: "6px 0 6px" }}>{s.explanation}</p>
+          <div style={{ fontSize: 12, color: C.outline, lineHeight: 1.5 }}>How: {s.tracking_method}</div>
+          {s.requires_device && <div style={{ fontSize: 12, color: s.device_owned ? C.teal : C.outline, marginTop: 2 }}>{s.device_owned ? `✓ works with your ${s.device_needed}` : `needs ${s.device_needed}`}</div>}
+          <a href={s.read_more} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, fontWeight: 600, color: C.teal, marginTop: 7, textDecoration: "none" }}>Read the research →</a>
+        </div>); })}</div>
+    )}
+  </Card>);
+
   const trendsCard = (<Card>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-      <div><div style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>{filter} trends</div><div style={{ fontSize: 13, color: C.inkVar }}>Past 30 days · avg {ins.avgPain.toFixed(1)}/10</div></div>
+      <div><div style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>{mLbl} trends</div><div style={{ fontSize: 13, color: C.inkVar }}>Past 30 days · avg {sAvg.toFixed(1)}</div></div>
       <div style={{ textAlign: "right", color: C.teal, fontFamily: bodyf, fontWeight: 600, fontSize: 14 }}>{series[series.length - 1] <= series[0] ? "↘ lower" : "↗ higher"}</div></div>
     <Sparkline series={series} />
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.outline, marginTop: 6 }}><span>30d ago</span><span>Today</span></div></Card>);
-  const correlations = (<div>
-    <Label color={C.inkVar}>Correlations</Label>
-    <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
-      {!isBlocked(settings, "diet") && <CorrCard icon={Droplet} bg={C.rose} on={C.roseOn} habit="High sugar intake" symptom="Next-day pain" pct={sugarCorr} note="Correlation" />}
-      <CorrCard icon={Activity} bg={C.tealFixed} on={C.tealDark} habit="Bloating days" symptom="Pain levels" pct={bloatCorr} note="Co-occurrence" />
-    </div></div>);
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.outline, marginTop: 6 }}><span>30d ago</span><span>Today</span></div>
+    <div style={{ marginTop: 16 }}><div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 600, color: C.inkVar, marginBottom: 6 }}>Daily intensity · last 12 weeks</div><Heatmap days={heatDays} valueOf={heatVal} max={heatMax} /></div></Card>);
   const highlights = (<Card style={{ background: C.low, boxShadow: "none" }}>
     <Label color={C.inkVar}>Historical highlights</Label>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
@@ -993,25 +1148,45 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     </div></Card>);
   const disclaimer = (<div style={{ padding: 14, background: C.surface, borderRadius: 14, fontSize: 12, color: C.inkVar, lineHeight: 1.5, display: "flex", gap: 8 }}>
     <Info size={15} color={C.teal} style={{ flexShrink: 0, marginTop: 2 }} />These are associations from your own logs, not certainties — and a roadmap feature uses federated learning to sharpen them across the community while your raw data stays on your device.</div>);
-  const chipsRow = (<div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6, marginBottom: 18 }}>{filters.map((f) => (
-    <button key={f} onClick={() => setFilter(f)} style={{ flexShrink: 0, fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "9px 18px", borderRadius: 9999, cursor: "pointer", border: "none", background: filter === f ? C.teal : C.container, color: filter === f ? "#fff" : C.inkVar }}>{f}</button>))}</div>);
+  const SUBVIEWS = [["insights", "Insights"], ["track", "What to track"]];
+  const subNav = (<div style={{ display: "inline-flex", gap: 4, padding: 4, background: C.container, borderRadius: 9999, marginBottom: 18 }}>
+    {SUBVIEWS.map(([id, lbl]) => { const on = view === id; return (
+      <button key={id} onClick={() => setView(id)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "8px 18px", borderRadius: 9999, cursor: "pointer", border: "none", background: on ? C.surface : "transparent", color: on ? C.teal : C.inkVar, boxShadow: on ? SH_SM : "none" }}>{lbl}</button>); })}
+  </div>);
+  const chipsRow = (<div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6, marginBottom: 18 }}>{METRICS.map(([k, lbl]) => (
+    <button key={k} onClick={() => setMetric(k)} style={{ flexShrink: 0, fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "9px 18px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.teal : C.container, color: mSel === k ? "#fff" : C.inkVar }}>{lbl}</button>))}</div>);
 
   if (wide) return (<div>
-    <H size={28} style={{ marginBottom: 16 }}>Insights</H>{chipsRow}
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
-      <div style={{ display: "grid", gap: 18 }}>{patternCard}{trendsCard}</div>
-      <div style={{ display: "grid", gap: 18 }}>{correlations}{highlights}</div>
-    </div>
-    <div style={{ marginTop: 20 }}>{disclaimer}</div>
+    <H size={28} style={{ marginBottom: 16 }}>Insights</H>{subNav}
+    {view === "track" ? (
+      <div style={{ maxWidth: 760 }}>{suggestionsCard}<div style={{ marginTop: 20 }}>{disclaimer}</div></div>
+    ) : (<>
+      {chipsRow}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+        <div style={{ display: "grid", gap: 18 }}>{analysisCard}{trendsCard}{explorerCard}</div>
+        <div style={{ display: "grid", gap: 18 }}>{statsLoading && loadingCard}{cycleCard}{correlationsCard}{trendCard}{highlights}</div>
+      </div>
+      <div style={{ marginTop: 20 }}>{disclaimer}</div>
+    </>)}
   </div>);
 
   return (<div>
-    <H size={28} style={{ margin: "8px 0 14px" }}>Insights</H>{chipsRow}
-    {patternCard && <div style={{ marginBottom: 18 }}>{patternCard}</div>}
-    <div style={{ marginBottom: 18 }}>{trendsCard}</div>
-    <div style={{ marginBottom: 18 }}>{correlations}</div>
-    {highlights}
-    <div style={{ marginTop: 16 }}>{disclaimer}</div>
+    <H size={28} style={{ margin: "8px 0 14px" }}>Insights</H>{subNav}
+    {view === "track" ? (<>
+      {suggestionsCard}
+      <div style={{ marginTop: 16 }}>{disclaimer}</div>
+    </>) : (<>
+      {chipsRow}
+      <div style={{ marginBottom: 18 }}>{analysisCard}</div>
+      {statsLoading && <div style={{ marginBottom: 18 }}>{loadingCard}</div>}
+      <div style={{ marginBottom: 18 }}>{trendsCard}</div>
+      {cycleCard && <div style={{ marginBottom: 18 }}>{cycleCard}</div>}
+      {correlationsCard && <div style={{ marginBottom: 18 }}>{correlationsCard}</div>}
+      <div style={{ marginBottom: 18 }}>{explorerCard}</div>
+      {trendCard && <div style={{ marginBottom: 18 }}>{trendCard}</div>}
+      {highlights}
+      <div style={{ marginTop: 16 }}>{disclaimer}</div>
+    </>)}
   </div>);
 }
 function Sparkline({ series }) {
@@ -1023,6 +1198,55 @@ function Sparkline({ series }) {
     <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.tealC} stopOpacity="0.25" /><stop offset="100%" stopColor={C.tealC} stopOpacity="0" /></linearGradient></defs>
     <path d={area} fill="url(#g)" /><path d={d} fill="none" stroke={C.teal} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
     <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r="4" fill="#fff" stroke={C.teal} strokeWidth="2.5" />
+  </svg>);
+}
+// 7×N calendar heatmap of a daily metric (columns = weeks)
+function Heatmap({ days, valueOf, max, color = C.teal }) {
+  const cell = 13, gap = 3, rows = 7;
+  const cols = Math.ceil(days.length / rows) || 1;
+  const w = cols * (cell + gap), h = rows * (cell + gap);
+  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" preserveAspectRatio="xMinYMin meet" style={{ display: "block", maxWidth: w }}>
+    {days.map((l, i) => { const c = Math.floor(i / rows), r = i % rows; const v = valueOf(l);
+      const op = v == null ? 1 : Math.max(0.1, Math.min(1, v / max));
+      return <rect key={i} x={c * (cell + gap)} y={r * (cell + gap)} width={cell} height={cell} rx={3} fill={v == null ? C.high : color} fillOpacity={op} />; })}
+  </svg>);
+}
+// cycle lengths over time as dots, with the normal 21–35 day band + reference lines
+function CycleBars({ gaps, lo = 21, hi = 35 }) {
+  if (!gaps.length) return null;
+  const w = 300, h = 124, padL = 22, padB = 16, padT = 14;
+  const maxV = Math.max(hi + 8, ...gaps);
+  const X = (i) => padL + (gaps.length === 1 ? (w - padL - 10) / 2 : (i / (gaps.length - 1)) * (w - padL - 12));
+  const Y = (v) => padT + (1 - v / maxV) * (h - padT - padB);
+  const pts = gaps.map((g, i) => [X(i), Y(g)]);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block" }}>
+    <rect x={padL} y={Y(hi)} width={w - padL} height={Y(lo) - Y(hi)} fill={C.tealFixed} fillOpacity={0.5} />
+    {[lo, hi].map((v) => (<g key={v}><line x1={padL} y1={Y(v)} x2={w} y2={Y(v)} stroke={C.tealFixedDim} strokeDasharray="3 3" /><text x={0} y={Y(v) + 3} style={{ fontSize: 8, fill: C.outline }}>{v}</text></g>))}
+    {gaps.length > 1 && <path d={line} fill="none" stroke={C.outlineVar} strokeWidth={1.5} />}
+    {pts.map((p, i) => { const ok = gaps[i] >= lo && gaps[i] <= hi; return (<g key={i}>
+      <circle cx={p[0]} cy={p[1]} r={4.5} fill={ok ? C.teal : C.roseOn} />
+      <text x={p[0]} y={p[1] - 8} textAnchor="middle" style={{ fontSize: 9, fontWeight: 700, fill: ok ? C.teal : C.roseOn }}>{gaps[i]}</text></g>); })}
+    <text x={w} y={h - 3} textAnchor="end" style={{ fontSize: 8, fill: C.outline }}>each cycle, over time →</text>
+  </svg>);
+}
+// scatter with ordinary-least-squares regression line
+function Scatter({ points, xMax, yMax, xLabel, yLabel }) {
+  if (points.length < 4) return null;
+  const w = 300, h = 150, pad = 28;
+  const px = (x) => pad + (x / xMax) * (w - pad - 8);
+  const py = (y) => h - pad - (y / yMax) * (h - pad - 10);
+  const n = points.length, mx = points.reduce((a, p) => a + p.x, 0) / n, my = points.reduce((a, p) => a + p.y, 0) / n;
+  const den = points.reduce((a, p) => a + (p.x - mx) ** 2, 0) || 1;
+  const slope = points.reduce((a, p) => a + (p.x - mx) * (p.y - my), 0) / den, intc = my - slope * mx;
+  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block" }}>
+    <line x1={pad} y1={h - pad} x2={w - 4} y2={h - pad} stroke={C.outlineVar} />
+    <line x1={pad} y1={8} x2={pad} y2={h - pad} stroke={C.outlineVar} />
+    {points.map((p, i) => { const jx = ((i % 5) - 2) * 0.07, jy = (((i * 3) % 5) - 2) * 0.07;
+      return <circle key={i} cx={px(p.x + jx)} cy={py(p.y + jy)} r={3} fill={C.teal} fillOpacity={0.4} />; })}
+    <line x1={px(0)} y1={py(Math.max(0, Math.min(yMax, intc)))} x2={px(xMax)} y2={py(Math.max(0, Math.min(yMax, intc + slope * xMax)))} stroke={C.roseOn} strokeWidth={2.5} />
+    <text x={(w + pad) / 2} y={h - 6} textAnchor="middle" style={{ fontSize: 9, fill: C.inkVar }}>{xLabel}</text>
+    <text x={11} y={(h - pad) / 2 + 4} textAnchor="middle" transform={`rotate(-90 11 ${(h - pad) / 2 + 4})`} style={{ fontSize: 9, fill: C.inkVar }}>{yLabel}</text>
   </svg>);
 }
 function CorrCard({ icon: Ico, bg, on, habit, symptom, pct, note }) {
@@ -1187,11 +1411,7 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setTab }) {
   const set = (k, v) => setSettings({ ...settings, [k]: v });
   return (<div>
     <H size={28} style={{ margin: "8px 0 16px" }}>Settings</H>
-    <Card style={{ marginBottom: 14, display: "grid", gap: 16 }}>
-      <Field label="Anthropic API key"><input style={input} type="password" value={settings.apiKey} onChange={(e) => set("apiKey", e.target.value)} placeholder="sk-ant-..." />
-        <p style={{ fontSize: 11, color: C.inkVar, marginTop: 5 }}>For chat & summaries. In production, proxy via your backend.</p></Field>
-      <Field label="NeMo streaming ASR endpoint"><input style={input} value={settings.nemoEndpoint} onChange={(e) => set("nemoEndpoint", e.target.value)} placeholder="wss://asr.yourdomain.com/asr" /></Field>
-      <Field label="Backend URL (database · TTS · orchestration)"><input style={input} value={settings.backendUrl} onChange={(e) => set("backendUrl", e.target.value)} placeholder="/api  or  https://…/api" /></Field>
+    <Card style={{ marginBottom: 14 }}>
       <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.teal, width: 18, height: 18 }} /><span style={{ fontSize: 15 }}>Speak replies aloud</span></label>
     </Card>
     <Card style={{ marginBottom: 14 }}>
@@ -1203,7 +1423,6 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setTab }) {
     <Card onClick={() => setTab("clinician")} style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
       <span style={{ width: 42, height: 42, borderRadius: 12, background: C.tealFixed, display: "grid", placeItems: "center" }}><Stethoscope size={20} color={C.tealDark} /></span>
       <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Clinician dashboard</div><div style={{ fontSize: 13, color: C.inkVar }}>The double-sided view for your appointment</div></div><ChevronRight size={20} color={C.outline} /></Card>
-    <Pill variant="soft" onClick={() => setLogs(genSyntheticLogs())} style={{ width: "100%" }}>Regenerate demo data</Pill>
     <p style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, textAlign: "center", marginTop: 18 }}>MYNO · DECISION SUPPORT, NOT A DIAGNOSIS · PROTOTYPE</p>
   </div>);
 }

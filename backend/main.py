@@ -13,7 +13,7 @@ Responsibilities:
 Run via docker-compose (see docker-compose.yml). Env:
   DATABASE_URL, ANTHROPIC_API_KEY, TTS_URL
 """
-import os, json, datetime as dt
+import os, json, random, math, statistics, asyncio, urllib.parse, datetime as dt
 from typing import Optional
 
 import httpx
@@ -51,6 +51,8 @@ class Patient(Base):
     integrations = Column(JSON, default=list)
     blacklist = Column(JSON, default=list)          # blocked feature keys
     adapt_state = Column(JSON, default=dict)        # inferred prefs (tone, length, distress)
+    suggestions = Column(JSON, default=list)        # research-backed tracker suggestions (daily)
+    suggestions_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     logs = relationship("DailyLog", back_populates="patient", cascade="all,delete")
     descriptors = relationship("Descriptor", back_populates="patient", cascade="all,delete")
@@ -71,6 +73,7 @@ class DailyLog(Base):
     bloating = Column(Boolean, default=False)
     cravings = Column(Boolean, default=False)
     note = Column(String, default="")
+    data = Column(JSON, default=dict)     # full daily-log JSON (all schema fields + categories)
     patient = relationship("Patient", back_populates="logs")
 
 class Descriptor(Base):
@@ -93,6 +96,11 @@ class Turn(Base):
     patient = relationship("Patient", back_populates="turns")
 
 Base.metadata.create_all(engine)
+# lightweight migration: add the JSON column to pre-existing tables
+with engine.begin() as _conn:
+    _conn.execute(text("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS data JSON DEFAULT '{}'::json"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions JSON DEFAULT '[]'::json"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions_at TIMESTAMP"))
 
 # ---------------------------------------------------------------- app
 app = FastAPI(title="Myno backend")
@@ -141,13 +149,21 @@ def update_patient(pid: int, body: dict):
         if hasattr(p, k): setattr(p, k, v)
     s.commit(); out = patient_dict(p); s.close(); return out
 
-# ----- daily logs
+# ----- daily logs (the full daily-log JSON lives in DailyLog.data; a few
+# analytics columns are mirrored for querying / legacy rows)
+def _log_dict(r: "DailyLog"):
+    base = {"date": r.date.isoformat(), "period": r.period, "pain": r.pain, "sugar": r.sugar,
+            "mood": r.mood, "energy": r.energy, "hairGrowth": r.hair_growth, "hairLoss": r.hair_loss,
+            "bloating": r.bloating, "cravings": r.cravings, "note": r.note or ""}
+    base.update(r.data or {})
+    base["date"] = r.date.isoformat()
+    return base
+
 @app.get("/patients/{pid}/logs")
 def get_logs(pid: int):
     s = Session()
     rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
-    out = [{c.name: (v.isoformat() if isinstance(v := getattr(r, c.name), dt.date) else v)
-            for c in r.__table__.columns} for r in rows]
+    out = [_log_dict(r) for r in rows]
     s.close(); return out
 
 @app.post("/patients/{pid}/logs")
@@ -155,9 +171,329 @@ def upsert_log(pid: int, body: dict):
     s = Session()
     d = dt.date.fromisoformat(body["date"])
     row = s.query(DailyLog).filter_by(patient_id=pid, date=d).first() or DailyLog(patient_id=pid, date=d)
-    for k, v in body.items():
-        if k != "date" and hasattr(row, k): setattr(row, k, v)
+    row.data = {k: v for k, v in body.items() if k != "date"}
+    row.period = body.get("period"); row.pain = body.get("pain"); row.sugar = body.get("sugar")
+    row.mood = body.get("mood"); row.energy = body.get("energy")
+    row.hair_growth = bool(body.get("hairGrowth")); row.hair_loss = bool(body.get("hairLoss"))
+    row.bloating = bool(body.get("bloating")); row.cravings = bool(body.get("cravings"))
+    row.note = body.get("note", "")
     s.add(row); s.commit(); s.close(); return {"ok": True}
+
+# ----- realistic prepopulation (idempotent) so the Insights tab has real trends
+def _seed_categories(premen, brain_fog, pain):
+    cats = []
+    if brain_fog >= 3:
+        cats.append({"key": "brain_fog", "label": "Brain fog", "value": "heavy" if brain_fog >= 4 else "foggy", "scale": {"value": min(10, brain_fog * 2 + 1), "max": 10}})
+    if premen and pain >= 6:
+        cats.append({"key": "headache", "label": "Headache", "value": "throbbing", "scale": {"value": min(10, pain), "max": 10}})
+    return cats
+
+def _seed_logs(pid: int, days: int = 120):
+    s = Session()
+    today = dt.date.today()
+    weight = round(random.uniform(72, 78), 1)
+    since = 6
+    cycle = random.randint(31, 44)        # PCOS: long / irregular cycles
+    prev_sugar = 1
+    for i in range(days, -1, -1):
+        d = today - dt.timedelta(days=i)
+        is_start = since == 0
+        premen = since > cycle - 4
+        sugar = random.randint(0, 4)
+        pain = 1 + random.randint(0, 1) + round(prev_sugar * 0.8)   # high sugar -> next-day pain
+        if is_start or since == 1: pain += 4
+        if premen: pain += 1
+        pain = max(0, min(10, pain))
+        sleep = max(0, min(4, 3 - (1 if premen else 0) + random.randint(-1, 1)))
+        brain_fog = max(0, min(4, (4 - sleep) - 1 + (1 if premen else 0) + random.randint(-1, 1)))
+        mood = max(0, min(4, 3 - (2 if premen else 0) - (1 if pain > 6 else 0) + random.randint(-1, 1)))
+        energy = max(0, min(4, sleep - (1 if pain > 6 else 0) + random.randint(-1, 1)))
+        ovulation = cycle // 2 - 2 < since < cycle // 2 + 2
+        sex_drive = max(0, min(4, 2 + (1 if ovulation else 0) - (1 if premen else 0) + random.randint(-1, 1)))
+        food_drive = max(0, min(4, sugar + (1 if premen else 0) + random.randint(-1, 1)))
+        weight = round(weight + random.uniform(-0.25, 0.28), 1)
+        cravings = prev_sugar > 2 or premen or random.random() < 0.2
+        acne = (premen and random.random() < 0.7) or random.random() < 0.12
+        bloating = pain > 5 or random.random() < 0.2
+        data = {
+            "period": is_start, "flow": (random.choice(["heavy", "medium"]) if is_start else None),
+            "birthControl": "none",
+            "pain": pain, "mood": mood, "energy": energy, "sleep": sleep, "brainFog": brain_fog,
+            "sexDrive": sex_drive, "sugar": sugar, "foodDrive": food_drive, "dietExercise": "",
+            "painMap": ("lower abdomen" if (is_start or since == 1) else ""),
+            "morningWeight": weight,
+            "hairGrowth": random.random() < 0.25, "hairLoss": random.random() < 0.12,
+            "acne": acne, "skinPatches": random.random() < 0.05, "hyperpigmentation": random.random() < 0.06,
+            "bloating": bloating, "cravings": cravings, "diagnoses": "",
+            "categories": _seed_categories(premen, brain_fog, pain), "note": "",
+        }
+        s.add(DailyLog(patient_id=pid, date=d, period=is_start, pain=pain, sugar=sugar, mood=mood,
+                       energy=energy, hair_growth=data["hairGrowth"], hair_loss=data["hairLoss"],
+                       bloating=bloating, cravings=cravings, note="", data=data))
+        prev_sugar = sugar
+        since += 1
+        if since >= cycle:
+            since = 0; cycle = random.randint(31, 44)
+    s.commit(); s.close()
+
+@app.post("/patients/{pid}/seed")
+def seed(pid: int):
+    s = Session(); n = s.query(DailyLog).filter_by(patient_id=pid).count(); s.close()
+    if n == 0:
+        _seed_logs(pid); return {"seeded": True}
+    return {"seeded": False, "count": n}
+
+# ----- insights: compute trends/correlations over the DB logs, then have Claude
+# narrate concrete, data-grounded insights for the Insights tab.
+def _mean(a):
+    a = [x for x in a if isinstance(x, (int, float))]
+    return round(sum(a) / len(a), 2) if a else None
+
+def _pearson(pairs):
+    """Pearson r (point-biserial when one var is a 0/1 flag). None if too few pairs."""
+    pairs = [(x, y) for x, y in pairs if isinstance(x, (int, float)) and isinstance(y, (int, float))]
+    n = len(pairs)
+    if n < 8:
+        return None
+    mx = sum(x for x, _ in pairs) / n
+    my = sum(y for _, y in pairs) / n
+    cov = sum((x - mx) * (y - my) for x, y in pairs)
+    vx = sum((x - mx) ** 2 for x, _ in pairs)
+    vy = sum((y - my) ** 2 for _, y in pairs)
+    if vx <= 0 or vy <= 0:
+        return None
+    return {"r": round(cov / math.sqrt(vx * vy), 2), "n": n}
+
+def _strength(r):
+    a = abs(r)
+    return ("very strong" if a >= 0.8 else "strong" if a >= 0.6 else
+            "moderate" if a >= 0.4 else "weak" if a >= 0.2 else "negligible")
+
+def _slope_per_week(ys):
+    """Least-squares slope over the index (days), expressed as units per week."""
+    pts = [(i, y) for i, y in enumerate(ys) if isinstance(y, (int, float))]
+    n = len(pts)
+    if n < 8:
+        return None
+    mx = sum(i for i, _ in pts) / n
+    my = sum(y for _, y in pts) / n
+    den = sum((i - mx) ** 2 for i, _ in pts)
+    if den <= 0:
+        return None
+    return round(sum((i - mx) * (y - my) for i, y in pts) / den * 7, 2)
+
+def _insight_summary(logs):
+    def col(k): return [l.get(k) for l in logs if isinstance(l.get(k), (int, float))]
+    hi, lo = [], []
+    for i in range(1, len(logs)):
+        ps, pn = logs[i - 1].get("sugar"), logs[i].get("pain")
+        if isinstance(ps, (int, float)) and isinstance(pn, (int, float)):
+            (hi if ps >= 3 else lo).append(pn)
+    bloat = [l.get("pain") for l in logs if l.get("bloating")]
+    nobloat = [l.get("pain") for l in logs if not l.get("bloating")]
+    starts = [l["date"] for l in logs if l.get("period")]
+    gaps = [(dt.date.fromisoformat(starts[i]) - dt.date.fromisoformat(starts[i - 1])).days for i in range(1, len(starts))]
+    gaps = [g for g in gaps if g > 10]
+    cat_trend = {}
+    for l in logs:
+        for c in (l.get("categories") or []):
+            if c.get("scale"):
+                cat_trend.setdefault(c["key"], {"label": c.get("label", c["key"]), "vals": []})["vals"].append(c["scale"]["value"])
+    cats = []
+    for k, v in cat_trend.items():
+        vals = v["vals"]
+        if len(vals) >= 3:
+            h = len(vals) // 2
+            pw = _slope_per_week(vals)
+            cats.append({"key": k, "label": v["label"], "avg": _mean(vals), "earlier": _mean(vals[:h]),
+                         "recent": _mean(vals[h:]), "n": len(vals), "perWeek": pw})
+
+    # --- Pearson correlations (point-biserial for binary flags), ranked by |r| ---
+    def lag(a, b): return [(logs[i - 1].get(a), logs[i].get(b)) for i in range(1, len(logs))]
+    def same(a, b): return [(logs[i].get(a), logs[i].get(b)) for i in range(len(logs))]
+    def flagp(flag, b): return [(1 if logs[i].get(flag) else 0, logs[i].get(b)) for i in range(len(logs))]
+    candidates = [
+        ("Higher sugar → next-day pain", lag("sugar", "pain")),
+        ("Less sleep → more brain fog", same("sleep", "brainFog")),
+        ("Less sleep → lower energy", same("sleep", "energy")),
+        ("Higher pain → lower mood", same("pain", "mood")),
+        ("Bloating days → higher pain", flagp("bloating", "pain")),
+        ("Higher sugar → next-day cravings", [(logs[i - 1].get("sugar"), 1 if logs[i].get("cravings") else 0) for i in range(1, len(logs))]),
+    ]
+    corrs = []
+    for label, pairs in candidates:
+        p = _pearson(pairs)
+        if p and abs(p["r"]) >= 0.2:
+            corrs.append({"label": label, "r": p["r"], "n": p["n"], "strength": _strength(p["r"]),
+                          "direction": "positive" if p["r"] > 0 else "negative"})
+    corrs.sort(key=lambda c: -abs(c["r"]))
+
+    # --- cycle variability (mean ± SD, coefficient of variation) ---
+    cycle = None
+    if len(gaps) >= 2:
+        m = statistics.mean(gaps); sd = statistics.pstdev(gaps)
+        reg = (21 <= m <= 35 and sd <= 4)
+        cycle = {"meanDays": round(m, 1), "sdDays": round(sd, 1), "cv": round(sd / m * 100, 1) if m else None,
+                 "min": min(gaps), "max": max(gaps), "cycles": len(gaps) + 1, "regular": reg,
+                 "label": ("Regular" if reg else ("Long / irregular" if m > 35 else "Variable"))}
+
+    # --- linear trends (units/week) for the standard metrics ---
+    trends = []
+    for k, lbl in [("pain", "Pain"), ("mood", "Mood"), ("energy", "Energy"), ("sleep", "Sleep"), ("brainFog", "Brain fog")]:
+        pw = _slope_per_week([l.get(k) for l in logs])
+        if pw is not None and abs(pw) >= 0.05:
+            trends.append({"key": k, "label": lbl, "perWeek": pw, "direction": "up" if pw > 0 else "down"})
+
+    return {
+        "loggedDays": len(logs),
+        "avgPain": _mean(col("pain")), "avgMood": _mean(col("mood")), "avgEnergy": _mean(col("energy")),
+        "avgSleep": _mean(col("sleep")), "avgBrainFog": _mean(col("brainFog")), "avgSugar": _mean(col("sugar")),
+        "painAfterHighSugar": _mean(hi), "painAfterLowSugar": _mean(lo),
+        "painWithBloating": _mean(bloat), "painWithoutBloating": _mean(nobloat),
+        "avgCycleDays": _mean(gaps), "cycleMin": (min(gaps) if gaps else None), "cycleMax": (max(gaps) if gaps else None),
+        "correlations": corrs, "cycle": cycle, "trends": trends,
+        "categoryTrends": cats,
+        "recent": {k: [l.get(k) for l in logs[-30:]] for k in ["pain", "mood", "energy", "sleep", "brainFog"]},
+    }
+
+@app.post("/patients/{pid}/insights")
+async def patient_insights(pid: int):
+    s = Session()
+    rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
+    p = s.get(Patient, pid); blocked = (p.blacklist or []) if p else []
+    logs = [_log_dict(r) for r in rows]; s.close()
+    stats = _insight_summary(logs)
+    block_line = ", ".join(FEATURES[f]["label"] for f in blocked if f in FEATURES) or "none"
+    sys = (
+        "You are Myno, a practical PCOS companion. From this person's own tracking summary, produce 2-4 "
+        "concrete, data-grounded insights — each a real trend or correlation in THEIR numbers — with brief, "
+        "actionable, non-diagnostic advice. Never diagnose or give drug doses. "
+        f"NEVER reference anything blocked: {block_line}.\n"
+        'Return ONLY JSON: {"summary":str (<=40 words overview), '
+        '"insights":[{"title":str (<=8 words),"detail":str (<=35 words),"strength":0-100}]}.'
+    )
+    raw = await claude(sys, [{"role": "user", "content": json.dumps(stats)}], max_tokens=700)
+    try:
+        a, b = raw.index("{"), raw.rindex("}"); analysis = json.loads(raw[a:b + 1])
+    except Exception:
+        analysis = {"summary": "", "insights": []}
+    return {"stats": stats, "analysis": analysis}
+
+# ----- research-backed "what else to track" suggestions (regenerated daily in
+# the background over each patient's data; surfaced dynamically in the UI)
+STANDARD_TRACKERS = [
+    "menstrual period start", "cycle length", "flow intensity", "birth control", "mood", "energy",
+    "sleep quality", "brain fog", "sex drive", "pelvic / cramp pain", "pain location", "morning body weight",
+    "cravings", "food / appetite drive", "diet & exercise", "acne / breakouts", "excess hair growth",
+    "hair loss", "skin patches", "hyperpigmentation", "bloating", "existing diagnoses",
+]
+SUGG_SYSTEM = (
+    "You are a PCOS research analyst reviewing recent literature (2022-2025). The purpose is to generate "
+    "possible items for the user to track in another part of the app.\n"
+    "The user will tell you what their app already tracks, and optionally what devices they own.\n"
+    "Return ONLY a JSON array, no markdown, no preamble. Each item:\n"
+    '{"tracker":"short name (2-5 words)","explanation":"1-2 sentences for a general audience (no jargon) on why '
+    'this is worth tracking for PCOS - focus on what the person might notice or why it matters for how they feel",'
+    '"category":"one of: Symptom | Metabolic | Hormonal | Gut | Sleep | Skin | Neurological | Reproductive",'
+    '"evidence":"Strong | Emerging | Early","tracking_method":"how the tracking app can get this information.",'
+    '"requires_device":true or false,"device_needed":"name of device if requires_device is true, else null",'
+    '"pubmed_query":"a precise 4-8 word PubMed search query to find the key supporting paper"}\n'
+    "Rules:\n- Only suggest things NOT already tracked by the app\n"
+    "- If requires_device is true AND the user does not own that device, still include it (the caller deprioritises it)\n"
+    "- Order: self-report items first, device-dependent items last\n- 6-10 suggestions total"
+)
+SUGG_TTL = dt.timedelta(hours=20)
+
+def _pubmed_link(q: str) -> str:
+    return f"https://pubmed.ncbi.nlm.nih.gov/?term={urllib.parse.quote(q or 'PCOS')}&sort=date"
+
+async def _gap_suggestions(current_trackers, devices, focus):
+    trackers_str = "\n".join(f"- {t}" for t in current_trackers)
+    devices_str = "\n".join(f"- {d}" for d in devices) if devices else "none specified"
+    focus_line = f"\nFocus area: {focus}" if focus else ""
+    prompt = f"Current app trackers:\n{trackers_str}\n\nUser's devices:\n{devices_str}{focus_line}"
+    raw = await claude(SUGG_SYSTEM, [{"role": "user", "content": prompt}], max_tokens=2000)
+    try:
+        a, b = raw.index("["), raw.rindex("]"); items = json.loads(raw[a:b + 1])
+    except Exception:
+        return []
+    dev_lower = [d.lower() for d in (devices or [])]
+    out = []
+    for s in items:
+        if not isinstance(s, dict) or not s.get("tracker"):
+            continue
+        rd = bool(s.get("requires_device"))
+        dn = s.get("device_needed") or ""
+        owned = (not rd) or any(dn.lower() in d for d in dev_lower)
+        out.append({
+            "tracker": s.get("tracker", ""), "explanation": s.get("explanation", ""),
+            "category": s.get("category", ""), "evidence": s.get("evidence", ""),
+            "tracking_method": s.get("tracking_method", ""), "requires_device": rd,
+            "device_needed": s.get("device_needed"), "device_owned": owned,
+            "read_more": _pubmed_link(s.get("pubmed_query", "PCOS")),
+        })
+    out.sort(key=lambda x: (x["requires_device"], not x["device_owned"]))
+    return out
+
+_sugg_inflight = set()
+
+async def _refresh_suggestions(pid: int, force: bool = False):
+    if pid in _sugg_inflight:
+        return
+    s = Session(); p = s.get(Patient, pid)
+    if not p:
+        s.close(); return
+    fresh = p.suggestions and p.suggestions_at and (dt.datetime.utcnow() - p.suggestions_at) < SUGG_TTL
+    if fresh and not force:
+        s.close(); return
+    rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date.desc()).limit(60).all()
+    cats = {}
+    for r in rows:
+        for c in ((r.data or {}).get("categories") or []):
+            if c.get("label"):
+                cats[c["key"]] = c["label"]
+    devices = p.integrations or []
+    s.close()
+    _sugg_inflight.add(pid)
+    try:
+        current = STANDARD_TRACKERS + list(cats.values())
+        sugg = await _gap_suggestions(current, devices, "insulin resistance")
+        if sugg:
+            s2 = Session(); p2 = s2.get(Patient, pid)
+            if p2:
+                p2.suggestions = sugg; p2.suggestions_at = dt.datetime.utcnow(); s2.commit()
+            s2.close()
+    except Exception:
+        pass
+    finally:
+        _sugg_inflight.discard(pid)
+
+async def _suggestions_daily_loop():
+    await asyncio.sleep(30)  # let startup settle; GET handles the first on-demand fill
+    while True:
+        try:
+            s = Session(); ids = [p.id for p in s.query(Patient).all()]; s.close()
+            for pid in ids:
+                await _refresh_suggestions(pid)
+        except Exception:
+            pass
+        await asyncio.sleep(24 * 3600)
+
+@app.on_event("startup")
+async def _startup():
+    asyncio.create_task(_suggestions_daily_loop())
+
+@app.get("/patients/{pid}/suggestions")
+async def get_suggestions(pid: int):
+    s = Session(); p = s.get(Patient, pid)
+    if not p:
+        s.close(); raise HTTPException(404)
+    sugg = p.suggestions or []; at = p.suggestions_at; s.close()
+    stale = (at is None) or (dt.datetime.utcnow() - at > SUGG_TTL)
+    if not sugg or stale:
+        asyncio.create_task(_refresh_suggestions(pid))
+        return {"suggestions": sugg, "refreshing": True}
+    return {"suggestions": sugg, "refreshing": False, "generatedAt": at.isoformat()}
 
 # ----- blacklist (feature blocking)
 @app.get("/patients/{pid}/blacklist")
