@@ -29,6 +29,7 @@ const SH = "0 8px 30px rgba(54,99,102,0.07)";
 const SH_SM = "0 4px 16px rgba(54,99,102,0.05)";
 const head = "'Manrope', system-ui, sans-serif";
 const bodyf = "'Hanken Grotesk', system-ui, sans-serif";
+const CHATBOX_PATH = "/chatbox";
 const FONTS = `
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Hanken+Grotesk:wght@400;500;600&display=swap');
 *{ -webkit-font-smoothing:antialiased; box-sizing:border-box; }
@@ -473,6 +474,7 @@ function TopNav({ tab, setTab, profile }) {
           {items.map(([id, label]) => { const on = tab === id; return (
             <button key={id} onClick={() => setTab(id)} style={{ fontFamily: bodyf, fontSize: 15, fontWeight: on ? 600 : 500, padding: "9px 16px", borderRadius: 9999, cursor: "pointer", border: "none",
               background: on ? C.tealFixed : "transparent", color: on ? C.tealDark : C.inkVar }}>{label}</button>); })}
+          <a href={CHATBOX_PATH} style={{ fontFamily: bodyf, fontSize: 15, fontWeight: 500, padding: "9px 16px", borderRadius: 9999, textDecoration: "none", color: C.inkVar }}>Chatbox</a>
         </nav>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
           <button onClick={() => setTab("settings")} style={{ background: "none", border: "none", cursor: "pointer", color: tab === "settings" ? C.teal : C.inkVar, display: "grid", placeItems: "center" }}><Cog size={22} /></button>
@@ -584,6 +586,14 @@ function HomeScreen({ profile, logs, setLogs, ins, setTab, wide }) {
       <span style={{ fontFamily: head, fontWeight: 700, fontSize: 22 }}>Record your day</span>
       <span style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.18)", display: "grid", placeItems: "center" }}><Plus size={20} color="#fff" /></span>
     </button>);
+  const chatboxCard = (
+    <a href={CHATBOX_PATH} style={{ textDecoration: "none", color: "inherit" }}>
+      <Card style={{ display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
+        <span style={{ width: 42, height: 42, borderRadius: 12, background: C.tealFixed, display: "grid", placeItems: "center", flexShrink: 0 }}><MessageCircle size={20} color={C.tealDark} /></span>
+        <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Open chatbox mode</div><div style={{ fontSize: 13, color: C.inkVar }}>Text-first check-in with inferred daily sliders</div></div>
+        <ChevronRight size={20} color={C.outline} />
+      </Card>
+    </a>);
   const trackedToday = chips.length > 0 && (
     <div><Label color={C.inkVar}>Tracked today</Label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>{chips.map((c) => (<span key={c} style={{ fontFamily: bodyf, fontSize: 13, fontWeight: 500, padding: "8px 14px", borderRadius: 9999, background: C.surface, border: `1px solid ${C.outlineVar}`, color: C.inkVar }}>{c}</span>))}</div></div>);
@@ -598,7 +608,7 @@ function HomeScreen({ profile, logs, setLogs, ins, setTab, wide }) {
     <H size={30} style={{ marginBottom: 22 }}>{profile.name ? `Welcome back, ${profile.name}` : "Welcome back"}</H>
     <div style={{ display: "grid", gridTemplateColumns: "1.05fr 0.95fr", gap: 24, alignItems: "start" }}>
       <div style={{ display: "grid", gap: 20 }}>{periodCard}{calendarBlock}</div>
-      <div style={{ display: "grid", gap: 18 }}>{phaseTiles}{recordCTA}{trackedToday}{prepareCard}</div>
+      <div style={{ display: "grid", gap: 18 }}>{phaseTiles}{recordCTA}{chatboxCard}{trackedToday}{prepareCard}</div>
     </div>
   </div>);
 
@@ -607,6 +617,7 @@ function HomeScreen({ profile, logs, setLogs, ins, setTab, wide }) {
     <div style={{ marginTop: 22 }}>{calendarBlock}</div>
     <div style={{ marginTop: 18 }}>{phaseTiles}</div>
     <div style={{ marginTop: 18 }}>{recordCTA}</div>
+    <div style={{ marginTop: 18 }}>{chatboxCard}</div>
     {trackedToday && <div style={{ marginTop: 20 }}>{trackedToday}</div>}
     <div style={{ marginTop: 20 }}>{prepareCard}</div>
   </div>);

@@ -8,9 +8,168 @@ TTS keep the same data flow. It only adds a lightweight chatbot-style page.
 Run:
   uvicorn main_chatbox:app --host 0.0.0.0 --port 8080
 """
-from fastapi.responses import HTMLResponse
+import json
 
-from main import app
+from fastapi import HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+
+from main import FEATURES, Descriptor, Patient, Session, Turn, _avg_cycle, app, claude
+
+
+class ChatboxTurnIn(BaseModel):
+    role: str
+    text: str
+
+
+class ChatboxChatIn(BaseModel):
+    message: str
+    turns: list[ChatboxTurnIn] = []
+
+
+class ChatboxExtractIn(BaseModel):
+    text: str
+    context: str = ""
+    blocked: list[str] = []
+    categories: list[dict] = []
+
+
+@app.post("/chatbox/patients/{pid}/chat")
+async def chatbox_chat(pid: int, body: ChatboxChatIn):
+    s = Session()
+    p = s.get(Patient, pid)
+    if not p:
+        s.close()
+        raise HTTPException(404, "no such patient")
+
+    blacklist = p.blacklist or []
+    blocked_labels = [FEATURES[f]["label"] for f in blacklist if f in FEATURES]
+    descriptors = s.query(Descriptor).filter_by(patient_id=pid).order_by(Descriptor.created_at.desc()).limit(20).all()
+    desc_lines = "; ".join(f'{d.concept}: "{d.phrase}"' for d in descriptors) or "none yet"
+    db_history = (
+        s.query(Turn)
+        .filter_by(patient_id=pid)
+        .order_by(Turn.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    db_history = list(reversed(db_history))
+    db_msgs = [{"role": t.role, "content": t.content} for t in db_history]
+    client_msgs = [
+        {
+            "role": "assistant" if t.role == "assistant" else "user",
+            "content": t.text.strip()[:1200],
+        }
+        for t in (body.turns or [])[-20:]
+        if t.role in {"assistant", "user"} and t.text.strip()
+    ]
+    base_msgs = client_msgs or db_msgs
+    recent_questions = [
+        msg["content"].strip()
+        for msg in base_msgs
+        if msg["role"] == "assistant" and "?" in (msg["content"] or "")
+    ][-6:]
+    recent_question_lines = "\n".join(f"- {q}" for q in recent_questions) or "none"
+    msgs = list(base_msgs)
+    msgs.append({"role": "user", "content": body.message})
+    avg_gap = _avg_cycle(s, pid)
+
+    system = f"""You are Myno, a calm information-gathering PCOS companion.
+Your job in this chatbox is to understand the patient's situation well enough to infer daily tracking markers at the end of the conversation.
+
+EACH TURN:
+- Briefly acknowledge what they said in their own words.
+- Ask ONE new concrete follow-up question that gathers more patient-specific information: timing, duration, severity, cycle pattern, symptoms, triggers, recent changes, or what happened today.
+- Prefer questions that help fill missing daily markers: period today, pain, mood, energy, sugar/cravings, bloating, hair growth/loss, and any personal marker they mention.
+- Reuse the patient's vocabulary. Known phrasings -> {desc_lines}.
+- Adapt to them. Current read: {json.dumps(p.adapt_state or {})}. Goals: {p.goals or []}. Avg tracked cycle: {avg_gap} days.
+
+QUESTION STYLE:
+- Do NOT ask "have you checked this with a doctor", "have you seen a clinician", or similar referral-style questions.
+- Do NOT redirect the conversation to medical appointment logistics.
+- If safety or diagnosis caveats are needed, keep them brief and still ask for more concrete information.
+
+REPEAT AVOIDANCE:
+- Recent questions already asked:
+{recent_question_lines}
+- Do NOT ask a question that is semantically the same as one of those recent questions.
+- If the patient already answered a topic with "no", "none", "not really", "I don't know", or similar, treat that as answered and move to a different daily marker.
+- If several markers remain, rotate to a new slot in this priority: period/timing, pain, mood, energy, cravings/sugar, bloating, hair/skin, personal marker.
+
+HARD CONSTRAINTS:
+- NEVER ask about, request, or volunteer anything in this blocked list: {blocked_labels or 'none'}.
+- NEVER diagnose or say whether they have PCOS.
+- No specific drug doses.
+- Keep the reply under ~55 words.
+
+Return ONLY JSON, no prose, no code fences:
+{{"reply": str,
+  "descriptors": [{{"concept": str, "phrase": str}}],
+  "adapt": {{"tone": "gentle"|"neutral"|"upbeat", "length": "short"|"medium", "distress": 0-3}}
+}}"""
+
+    raw = await claude(system, msgs)
+    reply, new_desc, adapt = "", [], {}
+    try:
+        a, b = raw.index("{"), raw.rindex("}")
+        obj = json.loads(raw[a:b + 1])
+        reply = obj.get("reply", "")
+        new_desc = obj.get("descriptors", []) or []
+        adapt = obj.get("adapt", {}) or {}
+    except Exception:
+        reply = raw
+
+    s.add(Turn(patient_id=pid, role="user", content=body.message))
+    s.add(Turn(patient_id=pid, role="assistant", content=reply))
+    for d in new_desc[:5]:
+        if d.get("concept") and d.get("phrase"):
+            s.add(Descriptor(patient_id=pid, concept=d["concept"][:40], phrase=d["phrase"][:200]))
+    if adapt:
+        p.adapt_state = {**(p.adapt_state or {}), **adapt}
+    s.commit()
+    s.close()
+    return {"reply": reply, "learned": new_desc, "adapt": adapt}
+
+
+def _chatbox_extract_sys(blocked: list[str]) -> str:
+    block_line = ", ".join(blocked) if blocked else "none"
+    return (
+        "You are Myno, converting the completed chatbox conversation into daily tracking markers. "
+        "Infer values from the WHOLE conversation. Do not ask follow-up questions in this response.\n"
+        "All numeric marker values MUST be integers from 0 to 10 inclusive.\n"
+        "- pain: 0 means no pain, 5 moderate pain, 10 extreme pain.\n"
+        "- mood: 0 means very low/distressed mood, 5 mixed or neutral mood, 10 very good/steady mood.\n"
+        "- energy: 0 means depleted, 5 moderate energy, 10 very high energy.\n"
+        "- sugar: 0 means no notable sugar intake/cravings, 5 moderate, 10 extreme/high.\n"
+        "- For any personalized category with a scale, ALWAYS use "
+        "{\"scale\":{\"value\":int,\"max\":10}} where value is 0-10. "
+        "Use 10 as the most intense/highest amount/strongest presence for that category.\n"
+        "- Use null for standard numeric fields that cannot be inferred. Use false for boolean fields not mentioned.\n"
+        "- Keep personalized categories in the patient's own words, max 6 categories, stable lower_snake_case keys.\n"
+        f"- NEVER create, infer, or ask about anything in this blocked list: {block_line}.\n"
+        "Return ONLY JSON, no prose, no code fences: "
+        "{\"period\":true|false|null,\"pain\":0-10|null,\"mood\":0-10|null,\"energy\":0-10|null,"
+        "\"sugar\":0-10|null,\"hairGrowth\":bool,\"hairLoss\":bool,\"bloating\":bool,\"cravings\":bool,"
+        "\"categories\":[{\"key\":str,\"label\":str,\"value\":str,\"scale\":{\"value\":int,\"max\":10}}],"
+        "\"say\":str}."
+    )
+
+
+@app.post("/chatbox/extract")
+async def chatbox_extract(body: ChatboxExtractIn):
+    ctx = (body.context or "").strip()
+    cats = json.dumps(body.categories or [])
+    user = (
+        (f"Conversation so far: {ctx}\n" if ctx else "")
+        + f"Current personalized categories: {cats}\n\n"
+        + f'Completed conversation to score: "{body.text}"'
+    )
+    raw = await claude(_chatbox_extract_sys(body.blocked or []), [{"role": "user", "content": user}], max_tokens=650)
+    try:
+        a, b = raw.index("{"), raw.rindex("}")
+        return json.loads(raw[a:b + 1])
+    except Exception:
+        return {}
 
 
 CHATBOX_HTML = r"""<!doctype html>
@@ -168,6 +327,13 @@ CHATBOX_HTML = r"""<!doctype html>
 
     .secondary { padding: 0 11px; }
 
+    .end {
+      padding: 0 12px;
+      border-color: var(--text);
+      background: var(--text);
+      color: #fff;
+    }
+
     main {
       min-height: 0;
       overflow-y: auto;
@@ -191,6 +357,15 @@ CHATBOX_HTML = r"""<!doctype html>
       grid-template-columns: minmax(0, 1fr) 330px;
       gap: 18px;
       align-items: start;
+    }
+
+    .workspace.chatting {
+      grid-template-columns: minmax(0, 780px);
+      justify-content: center;
+    }
+
+    .workspace.chatting .marker-pane {
+      display: none;
     }
 
     .chat-pane {
@@ -348,6 +523,22 @@ CHATBOX_HTML = r"""<!doctype html>
       color: var(--muted);
       font-size: 13px;
       line-height: 1.45;
+    }
+
+    .missing-list {
+      margin-top: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .missing-item {
+      border: 1px solid #f1c9c5;
+      border-radius: 10px;
+      padding: 10px 11px;
+      background: #fff8f7;
+      color: #7d2a22;
+      font-size: 13px;
+      line-height: 1.35;
     }
 
     .welcome {
@@ -526,19 +717,14 @@ CHATBOX_HTML = r"""<!doctype html>
         <input id="patientId" class="patient" inputmode="numeric" placeholder="Patient ID" aria-label="Patient ID" />
         <button id="loadPatient" class="secondary" type="button">Load</button>
         <button id="newPatient" class="secondary" type="button">New</button>
+        <button id="endConversation" class="end" type="button">End chat</button>
       </div>
     </header>
 
     <main id="scroll">
-      <div class="workspace">
+      <div id="workspace" class="workspace chatting">
         <section class="chat-pane" aria-label="Conversation">
-          <div id="messages" class="messages">
-            <div class="welcome">
-              Start a regular chat with Myno. Each message still goes to
-              <code>/patients/{id}/chat</code>, and this chatbox also extracts daily markers through
-              <code>/extract</code> so today's patient log can be updated as you talk.
-            </div>
-          </div>
+          <div id="messages" class="messages"></div>
         </section>
 
         <aside class="marker-pane" aria-label="Daily markers">
@@ -546,13 +732,14 @@ CHATBOX_HTML = r"""<!doctype html>
             <div class="marker-head">
               <div>
                 <div class="marker-title">Daily markers</div>
-                <div class="marker-subtitle">Updated from this chat and saved to today's log.</div>
+                <div class="marker-subtitle">Inferred after the conversation and saved to today's log.</div>
               </div>
               <div id="markerStatus" class="marker-status">Waiting</div>
             </div>
             <div id="periodMarker"></div>
             <div id="standardMarkers" class="marker-list"></div>
             <div id="booleanMarkers"></div>
+            <div id="missingPrompts" class="missing-list"></div>
           </section>
 
           <section class="marker-panel">
@@ -575,15 +762,22 @@ CHATBOX_HTML = r"""<!doctype html>
         <textarea id="input" rows="1" placeholder="Message Myno..." autocomplete="off"></textarea>
         <button id="send" class="send" type="submit" aria-label="Send">↑</button>
       </form>
-      <div class="hint">Press Enter to send. Shift+Enter adds a line break.</div>
+      <div id="composerHint" class="hint">Answer Myno's current question. Press Enter to send. Shift+Enter adds a line break.</div>
     </div>
   </section>
 
   <script>
-    const apiBase = location.pathname.startsWith("/api") ? "/api" : "";
+    const apiBase = location.pathname.startsWith("/api") || (location.pathname.startsWith("/chatbox") && location.port !== "8080") ? "/api" : "";
     const storageKey = "myno.chatbox.patientId";
     const markerStoragePrefix = "myno.chatbox.markers.";
     const today = new Date().toISOString().slice(0, 10);
+    const openingQuestion = "Let's start today's check-in. Did your period start or continue today?";
+    const answerPlaceholder = "Answer Myno's question...";
+    const waitingPlaceholder = "Myno is preparing the next question...";
+    const endedPlaceholder = "Chat ended. Adjust today's sliders in the marker panel.";
+    const activeHint = "Answer Myno's current question. Press Enter to send. Shift+Enter adds a line break.";
+    const waitingHint = "Myno is reading your answer and preparing the next question.";
+    const endedHint = "Chat ended. Use the marker panel to adjust missing values or any slider that feels off.";
     const fieldFeature = {
       pain: "pain",
       mood: "mood",
@@ -593,10 +787,10 @@ CHATBOX_HTML = r"""<!doctype html>
       hairLoss: "hair_skin"
     };
     const sliderMarkers = [
-      { key: "pain", label: "Pain", max: 10, words: ["none", "mild", "moderate", "strong", "severe"] },
-      { key: "mood", label: "Mood", max: 4, words: ["low", "fragile", "mixed", "steady", "good"] },
-      { key: "energy", label: "Energy", max: 4, words: ["spent", "low", "okay", "steady", "bright"] },
-      { key: "sugar", label: "Sugar / cravings", max: 4, words: ["none", "low", "some", "high", "very high"] }
+      { key: "pain", label: "Pain", max: 10, words: ["none", "trace", "very mild", "mild", "noticeable", "moderate", "uncomfortable", "strong", "severe", "very severe", "extreme"] },
+      { key: "mood", label: "Mood", max: 10, words: ["very low", "low", "heavy", "fragile", "mixed", "neutral", "settled", "steady", "good", "very good", "bright"] },
+      { key: "energy", label: "Energy", max: 10, words: ["depleted", "drained", "very low", "low", "limited", "moderate", "usable", "steady", "good", "high", "very high"] },
+      { key: "sugar", label: "Sugar / cravings", max: 10, words: ["none", "trace", "very low", "low", "some", "moderate", "noticeable", "high", "very high", "intense", "extreme"] }
     ];
     const booleanMarkers = [
       { key: "hairGrowth", label: "Hair growth" },
@@ -606,26 +800,33 @@ CHATBOX_HTML = r"""<!doctype html>
     ];
 
     const statusEl = document.getElementById("status");
+    const workspaceEl = document.getElementById("workspace");
     const markerStatusEl = document.getElementById("markerStatus");
     const periodMarkerEl = document.getElementById("periodMarker");
     const standardMarkersEl = document.getElementById("standardMarkers");
     const booleanMarkersEl = document.getElementById("booleanMarkers");
     const categoryMarkersEl = document.getElementById("categoryMarkers");
+    const missingPromptsEl = document.getElementById("missingPrompts");
     const messagesEl = document.getElementById("messages");
     const scrollEl = document.getElementById("scroll");
     const formEl = document.getElementById("form");
     const inputEl = document.getElementById("input");
     const sendEl = document.getElementById("send");
+    const composerHintEl = document.getElementById("composerHint");
+    const endConversationEl = document.getElementById("endConversation");
     const patientIdEl = document.getElementById("patientId");
     const loadPatientEl = document.getElementById("loadPatient");
     const newPatientEl = document.getElementById("newPatient");
 
     let patientId = localStorage.getItem(storageKey) || "";
+    let patientReady = false;
     let busy = false;
     let entry = defaultEntry();
     let blockedKeys = [];
     let blockedLabels = [];
     let flash = {};
+    let conversationEnded = false;
+    let conversationTurns = [];
     const flashTimers = {};
 
     function api(path) {
@@ -643,8 +844,68 @@ CHATBOX_HTML = r"""<!doctype html>
 
     function setBusy(next) {
       busy = next;
-      sendEl.disabled = next;
-      inputEl.disabled = next;
+      sendEl.disabled = next || conversationEnded;
+      inputEl.disabled = next || conversationEnded;
+      endConversationEl.disabled = next || conversationEnded;
+      if (!conversationEnded) {
+        inputEl.placeholder = next ? waitingPlaceholder : answerPlaceholder;
+        composerHintEl.textContent = next ? waitingHint : activeHint;
+      }
+    }
+
+    function setConversationEnded(next) {
+      conversationEnded = next;
+      workspaceEl.classList.toggle("chatting", !next);
+      endConversationEl.textContent = next ? "Chat ended" : "End chat";
+      inputEl.placeholder = next ? endedPlaceholder : answerPlaceholder;
+      composerHintEl.textContent = next ? endedHint : activeHint;
+      sendEl.disabled = busy || next;
+      inputEl.disabled = busy || next;
+      endConversationEl.disabled = busy || next;
+      if (!next) {
+        setMarkerStatus("Waiting");
+        clearNode(missingPromptsEl);
+      }
+    }
+
+    function startNewConversation() {
+      conversationTurns = [];
+      clearNode(messagesEl);
+      setConversationEnded(false);
+      appendMessage("assistant", openingQuestion, "Question 1");
+      conversationTurns.push({ role: "assistant", text: openingQuestion });
+    }
+
+    function currentTranscript() {
+      return conversationTurns
+        .map((turn) => `${turn.role === "user" ? "Patient" : "Myno"}: ${turn.text}`)
+        .join("\n");
+    }
+
+    function missingFromFields(fields) {
+      const missing = [];
+      const add = (label, prompt) => missing.push({ label, prompt });
+      if (fields.period == null) add("Period", "Set the period control to yes or no for today.");
+      if (fields.pain == null && !isFieldBlocked("pain")) add("Pain", "Adjust the pain slider to your best 0-10 estimate.");
+      if (fields.mood == null && !isFieldBlocked("mood")) add("Mood", "Adjust the mood slider to your best 0-10 estimate.");
+      if (fields.energy == null) add("Energy", "Adjust the energy slider to your best 0-10 estimate.");
+      if (fields.sugar == null && !isFieldBlocked("sugar")) add("Sugar / cravings", "Adjust the sugar/cravings slider to your best 0-10 estimate.");
+      if (fields.bloating !== true) add("Bloating", "Turn this on if bloating or abdominal fullness happened today.");
+      if (fields.hairGrowth !== true && fields.hairLoss !== true && !isFieldBlocked("hairGrowth")) add("Hair / skin", "Turn on the matching marker if hair growth, hair loss, acne, or skin changes should be tracked.");
+      return missing.slice(0, 5);
+    }
+
+    function renderMissingPrompts(missing) {
+      clearNode(missingPromptsEl);
+      const items = missing.length
+        ? missing
+        : [{ label: "Review", prompt: "All required fields were inferred. Adjust any slider or checkbox that feels off." }];
+      items.forEach((item) => {
+        const node = document.createElement("div");
+        node.className = "missing-item";
+        node.textContent = `${item.label}: ${item.prompt}`;
+        missingPromptsEl.appendChild(node);
+      });
     }
 
     function appendMessage(role, text, meta) {
@@ -687,14 +948,47 @@ CHATBOX_HTML = r"""<!doctype html>
       }
     }
 
+    function clamp10(value, fallback = 0) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.max(0, Math.min(10, Math.round(n)));
+    }
+
+    function rescaleTo10(value, max, fallback = 0) {
+      const n = Number(value);
+      const m = Number(max);
+      if (!Number.isFinite(n)) return fallback;
+      if (!Number.isFinite(m) || m <= 0 || m === 10) return clamp10(n, fallback);
+      return clamp10((n / m) * 10, fallback);
+    }
+
+    function normalizeScale(scale) {
+      if (!scale || typeof scale.value !== "number") return null;
+      return { value: rescaleTo10(scale.value, scale.max, 0), max: 10 };
+    }
+
+    function normalizeEntryScores(next) {
+      return {
+        ...next,
+        pain: clamp10(next.pain, 0),
+        mood: clamp10(next.mood, 5),
+        energy: clamp10(next.energy, 5),
+        sugar: clamp10(next.sugar, 5),
+        categories: (Array.isArray(next.categories) ? next.categories : []).map((cat) => {
+          const scale = normalizeScale(cat.scale);
+          return scale ? { ...cat, scale } : { ...cat };
+        })
+      };
+    }
+
     function defaultEntry() {
       return {
         date: today,
         period: null,
         pain: 0,
-        mood: 2,
-        energy: 2,
-        sugar: 2,
+        mood: 5,
+        energy: 5,
+        sugar: 5,
         hairGrowth: false,
         hairLoss: false,
         bloating: false,
@@ -718,7 +1012,7 @@ CHATBOX_HTML = r"""<!doctype html>
 
     function rememberEntry(next = entry) {
       if (!patientId) return;
-      localStorage.setItem(markerKey(patientId), JSON.stringify(next));
+      localStorage.setItem(markerKey(patientId), JSON.stringify(normalizeEntryScores(next)));
     }
 
     function normalizeLog(row) {
@@ -726,9 +1020,9 @@ CHATBOX_HTML = r"""<!doctype html>
         date: row.date || today,
         period: row.period ?? null,
         pain: row.pain ?? 0,
-        mood: row.mood ?? 2,
-        energy: row.energy ?? 2,
-        sugar: row.sugar ?? 2,
+        mood: row.mood ?? 5,
+        energy: row.energy ?? 5,
+        sugar: row.sugar ?? 5,
         hairGrowth: row.hair_growth ?? row.hairGrowth ?? false,
         hairLoss: row.hair_loss ?? row.hairLoss ?? false,
         bloating: row.bloating ?? false,
@@ -739,18 +1033,19 @@ CHATBOX_HTML = r"""<!doctype html>
     }
 
     function toLogPayload(next = entry) {
+      const scored = normalizeEntryScores(next);
       return {
-        date: next.date,
-        period: next.period,
-        pain: next.pain,
-        mood: next.mood,
-        energy: next.energy,
-        sugar: next.sugar,
-        hair_growth: !!next.hairGrowth,
-        hair_loss: !!next.hairLoss,
-        bloating: !!next.bloating,
-        cravings: !!next.cravings,
-        note: next.note || ""
+        date: scored.date,
+        period: scored.period,
+        pain: scored.pain,
+        mood: scored.mood,
+        energy: scored.energy,
+        sugar: scored.sugar,
+        hair_growth: !!scored.hairGrowth,
+        hair_loss: !!scored.hairLoss,
+        bloating: !!scored.bloating,
+        cravings: !!scored.cravings,
+        note: scored.note || ""
       };
     }
 
@@ -761,7 +1056,7 @@ CHATBOX_HTML = r"""<!doctype html>
 
     function markerWord(marker, value) {
       if (marker.words) {
-        const idx = Math.max(0, Math.min(marker.words.length - 1, Math.round((value / marker.max) * (marker.words.length - 1))));
+        const idx = Math.max(0, Math.min(marker.words.length - 1, Math.round((clamp10(value) / marker.max) * (marker.words.length - 1))));
         return marker.words[idx];
       }
       return "";
@@ -789,7 +1084,7 @@ CHATBOX_HTML = r"""<!doctype html>
     }
 
     async function persistEntry(next = entry) {
-      entry = { ...next, date: today };
+      entry = normalizeEntryScores({ ...next, date: today });
       rememberEntry(entry);
       renderMarkers();
       if (!patientId) return;
@@ -807,6 +1102,7 @@ CHATBOX_HTML = r"""<!doctype html>
     }
 
     function addSliderCard(parent, marker, value, onInput, onCommit, note = "") {
+      const initialValue = clamp10(value);
       const card = document.createElement("div");
       card.className = `marker-card ${flash[marker.key] ? "updated" : ""}`.trim();
 
@@ -823,7 +1119,7 @@ CHATBOX_HTML = r"""<!doctype html>
         const word = markerWord(marker, nextValue);
         valueEl.textContent = word ? `${word} · ${nextValue}/${marker.max}` : `${nextValue}/${marker.max}`;
       };
-      updateValue(value);
+      updateValue(initialValue);
 
       row.append(label, valueEl);
       card.appendChild(row);
@@ -833,8 +1129,8 @@ CHATBOX_HTML = r"""<!doctype html>
       input.type = "range";
       input.min = "0";
       input.max = String(marker.max);
-      input.value = String(value);
-      input.style.background = sliderBackground(value, marker.max);
+      input.value = String(initialValue);
+      input.style.background = sliderBackground(initialValue, marker.max);
       input.addEventListener("input", () => {
         const nextValue = Number(input.value);
         input.style.background = sliderBackground(nextValue, marker.max);
@@ -897,7 +1193,7 @@ CHATBOX_HTML = r"""<!doctype html>
       sliderMarkers
         .filter((marker) => !isFieldBlocked(marker.key))
         .forEach((marker) => {
-          const value = Number(entry[marker.key] ?? 0);
+          const value = clamp10(entry[marker.key], marker.key === "pain" ? 0 : 5);
           addSliderCard(
             standardMarkersEl,
             marker,
@@ -945,23 +1241,23 @@ CHATBOX_HTML = r"""<!doctype html>
         categoryMarkersEl.appendChild(empty);
       } else {
         cats.forEach((cat) => {
-          const scale = cat.scale && typeof cat.scale.value === "number" && cat.scale.max > 0 ? cat.scale : null;
+          const scale = normalizeScale(cat.scale);
           if (scale) {
             addSliderCard(
               categoryMarkersEl,
-              { key: cat.key, label: cat.label || cat.key, max: scale.max },
+              { key: cat.key, label: cat.label || cat.key, max: 10 },
               scale.value,
               (nextValue) => {
                 entry = {
                   ...entry,
-                  categories: (entry.categories || []).map((c) => c.key === cat.key ? { ...c, scale: { ...(c.scale || {}), value: nextValue, max: scale.max } } : c)
+                  categories: (entry.categories || []).map((c) => c.key === cat.key ? { ...c, scale: { ...(c.scale || {}), value: clamp10(nextValue), max: 10 } } : c)
                 };
                 rememberEntry(entry);
               },
               (nextValue) => {
                 const next = {
                   ...entry,
-                  categories: (entry.categories || []).map((c) => c.key === cat.key ? { ...c, scale: { ...(c.scale || {}), value: nextValue, max: scale.max } } : c)
+                  categories: (entry.categories || []).map((c) => c.key === cat.key ? { ...c, scale: { ...(c.scale || {}), value: clamp10(nextValue), max: 10 } } : c)
                 };
                 entry = next;
                 rememberEntry(entry);
@@ -989,7 +1285,7 @@ CHATBOX_HTML = r"""<!doctype html>
     }
 
     async function loadMarkers(id) {
-      entry = { ...defaultEntry(), ...readStoredEntry(id), date: today };
+      entry = normalizeEntryScores({ ...defaultEntry(), ...readStoredEntry(id), date: today });
       renderMarkers();
       setMarkerStatus("Loading");
 
@@ -1011,13 +1307,13 @@ CHATBOX_HTML = r"""<!doctype html>
         if (res.ok && Array.isArray(rows)) {
           const found = rows.find((row) => row.date === today);
           const stored = readStoredEntry(id);
-          entry = {
+          entry = normalizeEntryScores({
             ...defaultEntry(),
             ...(found ? normalizeLog(found) : {}),
             ...stored,
             date: today,
             categories: Array.isArray(stored.categories) ? stored.categories : []
-          };
+          });
         }
         setMarkerStatus("Ready");
       } catch {
@@ -1034,24 +1330,24 @@ CHATBOX_HTML = r"""<!doctype html>
           key: String(cat.key).slice(0, 48),
           label: String(cat.label).slice(0, 80),
           value: cat.value ? String(cat.value).slice(0, 160) : "",
-          ...(cat.scale && typeof cat.scale.value === "number" && cat.scale.max > 0
-            ? { scale: { value: Number(cat.scale.value), max: Number(cat.scale.max) } }
+          ...(normalizeScale(cat.scale)
+            ? { scale: normalizeScale(cat.scale) }
             : {})
         }));
     }
 
-    async function extractAndPersist(id, message) {
+    async function extractAndPersist(id, text) {
       setMarkerStatus("Reading");
       const base = {
         ...entry,
-        note: (entry.note ? `${entry.note} ` : "") + message
+        note: (entry.note ? `${entry.note} ` : "") + text
       };
 
-      const res = await fetch(api("/extract"), {
+      const res = await fetch(api("/chatbox/extract"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          text: message,
+          text,
           context: entry.note || "",
           blocked: blockedLabels,
           categories: entry.categories || []
@@ -1064,8 +1360,9 @@ CHATBOX_HTML = r"""<!doctype html>
       const changed = [];
       const apply = (key, value) => {
         if (value === null || value === undefined || isFieldBlocked(key)) return;
-        if (entry[key] !== value) changed.push(key);
-        next[key] = value;
+        const normalized = ["pain", "mood", "energy", "sugar"].includes(key) ? clamp10(value, key === "pain" ? 0 : 5) : value;
+        if (entry[key] !== normalized) changed.push(key);
+        next[key] = normalized;
       };
 
       apply("period", fields.period);
@@ -1088,6 +1385,7 @@ CHATBOX_HTML = r"""<!doctype html>
 
       await persistEntry(next);
       lightUp(changed);
+      return { fields, changed };
     }
 
     async function createPatient() {
@@ -1106,7 +1404,9 @@ CHATBOX_HTML = r"""<!doctype html>
       patientId = String(data.id);
       patientIdEl.value = patientId;
       localStorage.setItem(storageKey, patientId);
+      patientReady = true;
       await loadMarkers(patientId);
+      startNewConversation();
       setStatus(`Patient ${patientId} ready`, "ready");
       return patientId;
     }
@@ -1122,30 +1422,33 @@ CHATBOX_HTML = r"""<!doctype html>
       patientId = String(data.id);
       patientIdEl.value = patientId;
       localStorage.setItem(storageKey, patientId);
+      patientReady = true;
       await loadMarkers(patientId);
+      startNewConversation();
       setStatus(`Patient ${patientId} ready`, "ready");
       return patientId;
     }
 
     async function ensurePatient() {
+      if (patientId && patientReady) return patientId;
       if (patientId) return loadPatient(patientId);
       return createPatient();
     }
 
     async function sendMessage(message) {
+      if (conversationEnded) return;
       const id = await ensurePatient();
+      const priorTurns = conversationTurns.slice(-20);
       appendMessage("user", message);
+      conversationTurns.push({ role: "user", text: message });
       setBusy(true);
       setStatus("Myno is thinking", "");
-      const markerPromise = extractAndPersist(id, message).catch((err) => {
-        setMarkerStatus(err.message || "Markers skipped");
-      });
 
       try {
-        const res = await fetch(api(`/patients/${encodeURIComponent(id)}/chat`), {
+        const res = await fetch(api(`/chatbox/patients/${encodeURIComponent(id)}/chat`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message })
+          body: JSON.stringify({ message, turns: priorTurns })
         });
         const data = await parseResponse(res);
         if (!res.ok) throw new Error(data.detail || "Chat request failed");
@@ -1154,14 +1457,51 @@ CHATBOX_HTML = r"""<!doctype html>
           ? `Learned ${data.learned.length} descriptor${data.learned.length === 1 ? "" : "s"}`
           : "";
         appendMessage("assistant", data.reply || "", learned);
-        await markerPromise;
+        conversationTurns.push({ role: "assistant", text: data.reply || "" });
         setStatus(`Patient ${id} ready`, "ready");
       } catch (err) {
         appendMessage("assistant", err.message || "Something went wrong.", "Request failed");
         setStatus("Backend error", "error");
       } finally {
         setBusy(false);
-        inputEl.focus();
+        if (!conversationEnded) inputEl.focus();
+      }
+    }
+
+    async function endConversation() {
+      if (busy) return;
+      const id = await ensurePatient();
+      const userTurns = conversationTurns.filter((turn) => turn.role === "user" && turn.text.trim());
+      if (!userTurns.length) {
+        appendMessage("assistant", "Please answer the current question first, then I can infer your markers.", "More information needed");
+        return;
+      }
+
+      setBusy(true);
+      setStatus("Inferring daily markers", "");
+      setMarkerStatus("Inferring");
+
+      try {
+        const transcript = currentTranscript();
+        const { fields } = await extractAndPersist(id, transcript);
+        setConversationEnded(true);
+        renderMissingPrompts(missingFromFields(fields || {}));
+
+        const missing = missingFromFields(fields || {});
+        const modelLead = fields?.say ? `${fields.say} ` : "";
+        const prompt = missing.length
+          ? `${modelLead}I inferred what I could and saved the standard log. Chat is now ended; please use the marker panel to adjust the missing sliders or controls yourself: ${missing.map((item) => item.label.toLowerCase()).join(", ")}.`
+          : `${modelLead}I inferred today's marker scores and saved the standard log. Chat is now ended; please review the sliders and adjust anything that feels off.`;
+        appendMessage("assistant", prompt, "Conversation ended");
+        setStatus(`Patient ${id} ready`, "ready");
+      } catch (err) {
+        appendMessage("assistant", err.message || "I could not infer the final markers.", "Inference failed");
+        setStatus("Inference error", "error");
+        setMarkerStatus("Failed");
+      } finally {
+        setBusy(false);
+        if (conversationEnded) endConversationEl.disabled = true;
+        if (!conversationEnded) inputEl.focus();
       }
     }
 
@@ -1173,7 +1513,7 @@ CHATBOX_HTML = r"""<!doctype html>
     formEl.addEventListener("submit", (event) => {
       event.preventDefault();
       const message = inputEl.value.trim();
-      if (!message || busy) return;
+      if (!message || busy || conversationEnded) return;
       inputEl.value = "";
       resizeInput();
       sendMessage(message);
@@ -1198,12 +1538,21 @@ CHATBOX_HTML = r"""<!doctype html>
     newPatientEl.addEventListener("click", () => {
       localStorage.removeItem(storageKey);
       patientId = "";
+      patientReady = false;
       createPatient().catch((err) => {
         setStatus(err.message || "Create failed", "error");
       });
     });
 
+    endConversationEl.addEventListener("click", () => {
+      endConversation().catch((err) => {
+        appendMessage("assistant", err.message || "I could not end the conversation cleanly.", "Inference failed");
+        setStatus("Inference error", "error");
+      });
+    });
+
     patientIdEl.value = patientId;
+    setConversationEnded(false);
     renderMarkers();
     ensurePatient().catch((err) => {
       setStatus(err.message || "Backend unavailable", "error");
