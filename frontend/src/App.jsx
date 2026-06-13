@@ -663,7 +663,6 @@ function HomeScreen({ profile, logs, setLogs, ins, setTab, wide }) {
     <div style={{ marginTop: 22 }}>{calendarBlock}</div>
     <div style={{ marginTop: 18 }}>{phaseTiles}</div>
     <div style={{ marginTop: 18 }}>{recordCTA}</div>
-    <div style={{ marginTop: 18 }}>{chatboxCard}</div>
     {trackedToday && <div style={{ marginTop: 20 }}>{trackedToday}</div>}
     <div style={{ marginTop: 20 }}>{prepareCard}</div>
   </div>);
@@ -713,8 +712,21 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   const [flash, setFlash] = useState({}); const timers = useRef({});
   const [insOn, setInsOn] = useState(true); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
   const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false); const [spoken, setSpoken] = useState({});  // schema fields Myno heard from speech
+  const [litOn, setLitOn] = useState(false); const [lit, setLit] = useState(null);  // opt-in literature-review insights
   const insRef = useRef(false); useEffect(() => { insRef.current = insOn; }, [insOn]);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
+  // When the user turns Literature on, pull research-backed items (poll while generating).
+  useEffect(() => {
+    if (!litOn) return; const pid = settings.patientId; if (!pid) return;
+    let stop = false, tries = 0; const b = (settings.backendUrl || "/api").replace(/\/$/, "");
+    const load = async () => {
+      try { const r = await fetch(`${b}/patients/${pid}/suggestions`); if (!r.ok || stop) return; const j = await r.json();
+        if (stop) return; setLit(j.suggestions || []);
+        if ((j.refreshing || !(j.suggestions || []).length) && tries < 15) { tries++; setTimeout(load, 6000); }
+      } catch (e) { }
+    };
+    load(); return () => { stop = true; };
+  }, [litOn, settings.patientId]);
 
   // Live insights run in the BACKGROUND (mic stays enabled) — they can take a
   // while, so they never block the conversation.
@@ -847,6 +859,20 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   // SIDE — the personalized tracker Myno builds from the conversation. New and
   // changed categories rise in and flash a teal "updated" notification.
   const cats = e.categories || [];
+  // Literature insights, shown in BOTH panels when the toggle is on.
+  const EVL = { Strong: [C.tealFixed, C.onTealFixed], Emerging: [C.rose, C.roseOn], Early: [C.container, C.inkVar] };
+  const litSection = (max) => (
+    <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.high}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}><Microscope size={15} color={C.teal} /><span style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: C.inkVar }}>From the literature</span>{(lit === null || lit.length === 0) && <Loader2 size={12} className="spin" color={C.outline} style={{ marginLeft: "auto" }} />}</div>
+      {(lit === null || lit.length === 0) ? <p style={{ fontSize: 12, color: C.outline }}>Scanning recent PCOS research…</p> : (
+        <div style={{ display: "grid", gap: 10 }}>{lit.slice(0, max).map((s, i) => { const [bg, fg] = EVL[s.evidence] || [C.container, C.inkVar]; return (
+          <div key={i}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}><span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13.5 }}>{s.tracker}</span><span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 9, padding: "2px 7px", borderRadius: 9999, background: bg, color: fg, whiteSpace: "nowrap" }}>{s.evidence}</span></div>
+            <p style={{ fontSize: 12, color: C.inkVar, lineHeight: 1.45, margin: "3px 0 2px" }}>{s.explanation}</p>
+            <a href={s.read_more} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11.5, fontWeight: 600, color: C.teal, textDecoration: "none" }}>Read the research →</a>
+          </div>); })}</div>)}
+    </div>);
+
   const dayBlock = (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -871,6 +897,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
             </div>); })}
         </div>
       )}
+      {litOn && litSection(6)}
     </div>
   );
 
@@ -915,6 +942,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
           <button onClick={() => speaker.speak(advice.say)} title="Hear it" style={{ background: "rgba(0,0,0,0.06)", border: "none", borderRadius: 9999, width: 26, height: 26, display: "grid", placeItems: "center", cursor: "pointer", color: C.teal, flexShrink: 0 }}><Volume2 size={13} /></button>
         </div>
       ) : (!advising && <p style={{ fontSize: 12, color: C.inkVar, marginTop: 12 }}>Keep talking — patterns from your history &amp; today show up here.</p>)}
+      {litOn && litSection(3)}
     </Card>);
 
   // The "End conversation" sheet — fill the standard schema fields by hand.
@@ -945,6 +973,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
         <PersonalityPicker value={settings.personality} onChange={(p) => setSettings((s) => ({ ...s, personality: p }))} />
         <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
+        <Pill variant={litOn ? "filled" : "outline"} onClick={() => setLitOn((v) => !v)} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><Microscope size={15} /> Literature</Pill>
       </div>
     </div>
     <p style={{ color: C.inkVar, marginBottom: 18 }}>Just talk — Myno listens, talks back, and builds your personal tracker as you go.</p>
@@ -1246,77 +1275,211 @@ function CorrCard({ icon: Ico, bg, on, habit, symptom, pct, note }) {
   </Card>);
 }
 
-// ---- CHAT (convo mode + voice mode + TTS) ----------------------------------
-function ChatScreen({ profile, settings, ins }) {
-  const greeting = `Hi${profile.name ? " " + profile.name : ""} — I'm here whenever something's on your mind. I can't diagnose you, but I can help you understand things and prepare. What's going on?`;
-  const [msgs, setMsgs] = useState([{ role: "assistant", text: greeting }]);
-  const [text, setText] = useState(""); const [loading, setLoading] = useState(false); const [partial, setPartial] = useState("");
-  const [voiceMode, setVoiceMode] = useState(false); const [learned, setLearned] = useState([]); const [error, setError] = useState("");
-  const scroller = useRef(); const speaker = useSpeaker(settings); const vmRef = useRef(false);
-  useEffect(() => { vmRef.current = voiceMode; }, [voiceMode]);
-  useEffect(() => { scroller.current?.scrollTo(0, scroller.current.scrollHeight); }, [msgs, loading, partial]);
+// ---- CHAT: text-first daily check-in. Myno gathers patient-specific detail
+// (the backend pulls the patient's descriptors, history, adaptation state and
+// tracked cycle from the DB), then infers the day's tracking markers, which the
+// patient reviews in the side panel and saves to today's log.
+function ChatScreen({ profile, settings, setLogs, logs, wide }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const base = (settings.backendUrl || "/api").replace(/\/$/, "");
+  const pid = settings.patientId;
+  const opening = `Hi${profile.name ? " " + profile.name : ""} — let's do today's check-in. Did your period start or continue today, and how have you been feeling so far?`;
 
-  const buildSys = () => { const blocked = blockedLabels(settings); return `You are Myno, a warm voice companion for someone navigating possible or diagnosed PCOS. Acknowledge feelings in their own words, then ask ONE relevant next question.
-You know PCOS: Rotterdam criteria (2 of 3 — irregular ovulation; clinical/biochemical hyperandrogenism; polycystic morphology on ultrasound), exclude mimics (thyroid, prolactin, CAH, Cushing's); links to insulin resistance, type 2 diabetes, cardiovascular and mood risks. Goals: ${profile.goals.join(", ") || "not set"}. Tracked cycle ~${ins.avgGap ?? "?"} days.
-NEVER ask about or volunteer anything blocked: ${blocked.length ? blocked.join(", ") : "none"}. NEVER diagnose; a clinician decides — offer to help prepare. No drug doses.${settings.voice ? " Spoken aloud — keep under ~45 words." : " Under 130 words."}`; };
+  const baseEntry = () => ({ date: today, period: null, pain: 0, mood: 5, energy: 5, sugar: 5, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [] });
+  const fromLog = (l) => l ? { period: l.period ?? null, pain: l.pain ?? 0, mood: l.mood ?? 5, energy: l.energy ?? 5, sugar: l.sugar ?? 5, hairGrowth: !!l.hairGrowth, hairLoss: !!l.hairLoss, bloating: !!l.bloating, cravings: !!l.cravings, note: l.note || "", categories: Array.isArray(l.categories) ? l.categories : [] } : {};
+
+  const [turns, setTurns] = useState([{ role: "assistant", text: opening }]);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [learned, setLearned] = useState([]);
+  const [entry, setEntry] = useState(() => ({ ...baseEntry(), ...fromLog(logs.find((l) => l.date === today)) }));
+  const [ended, setEnded] = useState(false);
+  const [reviewPending, setReviewPending] = useState(false);
+  const [status, setStatus] = useState("Waiting");
+  const scroller = useRef();
+  useEffect(() => { scroller.current?.scrollTo(0, scroller.current.scrollHeight); }, [turns, busy]);
+
+  const SLIDERS = [
+    { key: "pain", label: "Pain", words: scaleLabels.pain },
+    { key: "mood", label: "Mood", words: scaleLabels.mood },
+    { key: "energy", label: "Energy", words: scaleLabels.energy },
+    { key: "sugar", label: "Sugar / cravings", words: scaleLabels.sugar },
+  ].filter((m) => !fieldBlocked(settings, m.key));
+  const BOOLS = [
+    { key: "hairGrowth", label: "Hair growth" },
+    { key: "hairLoss", label: "Hair loss" },
+    { key: "bloating", label: "Bloating" },
+    { key: "cravings", label: "Cravings" },
+  ].filter((m) => !fieldBlocked(settings, m.key));
+
+  const cleanCategories = (cats) => (Array.isArray(cats) ? cats : [])
+    .filter((c) => c && c.key && c.label).slice(0, 6)
+    .map((c) => { const scale = normalizedScale(c.scale); return { key: String(c.key).slice(0, 48), label: String(c.label).slice(0, 80), value: c.value ? String(c.value).slice(0, 160) : "", ...(scale ? { scale } : {}) }; });
+
+  const applyFields = (e, f) => {
+    const next = { ...e };
+    const set = (k, v, scale) => { if (v === null || v === undefined || fieldBlocked(settings, k)) return; next[k] = scale ? clampScale(v, k === "pain" ? 0 : 5) : v; };
+    set("period", f.period);
+    set("pain", f.pain, true); set("mood", f.mood, true); set("energy", f.energy, true); set("sugar", f.sugar, true);
+    set("hairGrowth", f.hairGrowth || e.hairGrowth); set("hairLoss", f.hairLoss || e.hairLoss);
+    set("bloating", f.bloating || e.bloating); set("cravings", f.cravings || e.cravings);
+    if (Array.isArray(f.categories)) next.categories = cleanCategories(f.categories);
+    return next;
+  };
 
   const send = async (t) => {
-    const q = (t || text).trim(); if (!q || loading) return;
-    setPartial(""); setError(""); const history = [...msgs, { role: "user", text: q }]; setMsgs(history); setText(""); setLoading(true); speaker.stop();
-    try { const { reply, learned: lrn } = await chatTurn({ settings, message: q, history: msgs, system: buildSys() });
-      setMsgs([...history, { role: "assistant", text: reply }]);
-      if (lrn?.length) setLearned((p) => [...lrn, ...p].slice(0, 6)); speaker.speak(reply);
-      if (vmRef.current) setTimeout(() => { if (vmRef.current && !voice.listening) voice.toggle(); }, 600);
+    const q = (t || text).trim(); if (!q || busy || ended) return;
+    if (!pid) { setError("No patient is set up yet — open the app from Home so Myno can connect to the backend."); return; }
+    setError(""); const prior = turns.slice(-20); const next = [...turns, { role: "user", text: q }];
+    setTurns(next); setText(""); setBusy(true);
+    try {
+      const res = await fetch(`${base}/chatbox/patients/${pid}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: q, turns: prior }) });
+      let data = {}; try { data = await res.json(); } catch (e) {}
+      if (!res.ok) throw new Error(data.detail || `Chat request failed (${res.status}).`);
+      setTurns([...next, { role: "assistant", text: data.reply || "" }]);
+      if (data.learned?.length) setLearned((p) => [...data.learned, ...p].slice(0, 6));
     } catch (e) {
-      // Show the real failure; don't fabricate a spoken reply, and stop the
-      // convo loop so it isn't talking into a dead backend.
-      setError(e?.message || "Something went wrong reaching Myno.");
-      if (vmRef.current && voice.listening) voice.toggle();
-    }
-    finally { setLoading(false); }
+      setError(e?.message || "Couldn't reach Myno.");
+      setTurns([...next, { role: "assistant", text: e?.message || "Something went wrong.", err: true }]);
+    } finally { setBusy(false); }
   };
-  const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => send(t) });
-  useEffect(() => { if (voiceMode) { speaker.speak(msgs[msgs.length - 1]?.text || greeting); setTimeout(() => { if (vmRef.current && !voice.listening) voice.toggle(); }, 1400); } else { speaker.stop(); if (voice.listening) voice.toggle(); } }, [voiceMode]);
 
-  if (voiceMode) return (<div style={{ textAlign: "center", paddingTop: 10, minHeight: 500 }}>
-    <div style={{ fontFamily: head, fontWeight: 800, fontSize: 30, color: C.tealFixedDim, lineHeight: 1.05, textAlign: "left", marginBottom: 30 }}>Convo<br />mode</div>
-    <div style={{ display: "grid", placeItems: "center", marginBottom: 18 }}>
-      <div style={{ width: 140, height: 140, borderRadius: "50%", display: "grid", placeItems: "center", background: voice.listening ? C.rose : speaker.speaking ? C.tealFixed : C.surface, border: `2px solid ${voice.listening ? C.roseOn : speaker.speaking ? C.teal : C.outlineVar}`, boxShadow: SH, animation: (voice.listening || speaker.speaking) ? "pulse 1.6s infinite" : "none" }}>
-        {speaker.speaking ? <Volume2 size={46} color={C.teal} /> : voice.listening ? <Mic size={46} color={C.roseOn} /> : <MicOff size={42} color={C.outline} />}</div>
-      <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 600, letterSpacing: "0.06em", color: C.inkVar, marginTop: 14 }}>{speaker.speaking ? "MYNO IS SPEAKING" : voice.listening ? "LISTENING…" : loading ? "THINKING…" : "TAP TO SPEAK"}</div>
-    </div>
-    <Card style={{ minHeight: 90, textAlign: "left", boxShadow: SH }}><div style={{ fontSize: 16, lineHeight: 1.5 }}>{partial ? <i style={{ color: C.inkVar }}>{partial}…</i> : msgs[msgs.length - 1]?.text}</div></Card>
-    <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 22 }}>
-      <Pill variant={voice.listening ? "rose" : "filled"} onClick={voice.toggle}>{voice.listening ? <><MicOff size={16} /> Stop</> : <><Mic size={16} /> Speak</>}</Pill>
-      {speaker.speaking && <Pill variant="soft" onClick={speaker.stop}><VolumeX size={16} /> Hush</Pill>}
-      <Pill variant="soft" onClick={() => setVoiceMode(false)}>Exit</Pill></div>
-    {error && <div style={{ display: "flex", gap: 8, alignItems: "flex-start", justifyContent: "center", marginTop: 14, padding: "10px 14px", borderRadius: 12, background: C.rose, color: C.error, fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}</div>}
-    {voice.note && <p style={{ fontSize: 12, color: C.error, marginTop: 12 }}>{voice.note}</p>}
-  </div>);
+  const saveLog = async (e) => {
+    const body = { ...e, date: today };
+    if (pid) {
+      const res = await fetch(`${base}/patients/${pid}/logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error("Could not save today's log.");
+    }
+    setLogs([...logs.filter((l) => l.date !== today), body].sort((a, b) => a.date.localeCompare(b.date)));
+  };
 
-  return (<div style={{ display: "flex", flexDirection: "column", minHeight: 520 }}>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "6px 0 14px" }}>
-      <H size={26}>Talk to Myno</H>
-      <div style={{ display: "flex", gap: 8 }}>
-        {speaker.speaking && <Pill variant="rose" onClick={speaker.stop} style={{ padding: "10px 16px", fontSize: 14 }}><VolumeX size={15} /> Stop voice</Pill>}
-        <Pill variant="outline" onClick={() => setVoiceMode(true)} style={{ padding: "10px 16px", fontSize: 14 }}><Volume2 size={15} /> Voice</Pill></div></div>
-    <div ref={scroller} style={{ flex: 1, overflowY: "auto", display: "grid", gap: 12, paddingBottom: 10, maxHeight: 380 }}>
-      {msgs.map((m, i) => (<div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-        {m.role === "assistant" && <LeafMark size={36} />}
-        <div style={{ maxWidth: "80%", padding: "13px 16px", borderRadius: 20, fontSize: 15, lineHeight: 1.45, boxShadow: m.role === "user" ? "none" : SH_SM,
-          background: m.role === "user" ? C.teal : C.surface, color: m.role === "user" ? "#fff" : C.ink, borderTopRightRadius: m.role === "user" ? 4 : 20, borderTopLeftRadius: m.role === "user" ? 20 : 4 }}>{m.text}</div></div>))}
-      {partial && <div style={{ display: "flex", justifyContent: "flex-end" }}><div style={{ background: C.tealFixed, color: C.onTealFixed, borderRadius: 18, padding: "11px 15px", fontSize: 15, fontStyle: "italic" }}>{partial}…</div></div>}
-      {loading && <div style={{ display: "flex", gap: 8, alignItems: "center", color: C.inkVar, fontSize: 13 }}><LeafMark size={36} /><Loader2 size={14} className="spin" /> thinking…</div>}
+  const endChat = async () => {
+    if (busy) return;
+    if (!turns.some((t) => t.role === "user" && t.text.trim())) { setError("Answer at least one question first, then Myno can infer your markers."); return; }
+    setError(""); setBusy(true); setStatus("Inferring");
+    try {
+      const transcript = turns.map((t) => `${t.role === "user" ? "Patient" : "Myno"}: ${t.text}`).join("\n");
+      const res = await fetch(`${base}/chatbox/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: transcript, context: entry.note || "", blocked: blockedLabels(settings), categories: entry.categories || [] }) });
+      let f = {}; try { f = await res.json(); } catch (e) {}
+      if (!res.ok) throw new Error(f.detail || "Marker inference failed.");
+      setEntry((e) => applyFields(e, f));
+      setEnded(true); setReviewPending(true); setStatus("Review & save");
+      const say = f.say ? `${f.say} ` : "";
+      setTurns((t0) => [...t0, { role: "assistant", text: `${say}I've inferred today's markers from our chat. Review the panel, adjust anything that feels off, then save your log.` }]);
+    } catch (e) {
+      setError(e?.message || "I couldn't infer the markers."); setStatus("Failed");
+    } finally { setBusy(false); }
+  };
+
+  const confirmLog = async () => {
+    if (busy) return;
+    setBusy(true); setStatus("Saving");
+    try { await saveLog(entry); setReviewPending(false); setStatus("Saved"); setTurns((t0) => [...t0, { role: "assistant", text: "Saved today's log with your confirmed markers." }]); }
+    catch (e) { setError(e?.message || "Save failed."); setStatus("Save failed"); }
+    finally { setBusy(false); }
+  };
+
+  const markerEdit = (patch) => { setEntry((e) => ({ ...e, ...patch })); if (ended) setReviewPending(true); };
+
+  const panel = (
+    <div style={{ display: "grid", gap: 14 }}>
+      <Card style={{ padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+          <Label>Daily markers</Label>
+          <span style={{ fontFamily: bodyf, fontSize: 12, color: C.inkVar }}>{status}</span>
+        </div>
+        <p style={{ fontSize: 12, color: C.inkVar, margin: "0 0 14px" }}>Inferred from your chat. Adjust anything, then save to today's log.</p>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontFamily: bodyf, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Period today</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[["Yes", true], ["No", false]].map(([l, v]) => (
+              <button key={l} onClick={() => markerEdit({ period: v })} style={{ flex: 1, fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "10px 0", borderRadius: 12, cursor: "pointer", border: `1.5px solid ${entry.period === v ? C.teal : C.outlineVar}`, background: entry.period === v ? C.tealFixed : C.surface, color: entry.period === v ? C.tealDark : C.inkVar }}>{l}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 14 }}>
+          {SLIDERS.map((m) => (
+            <div key={m.key}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
+                <span style={{ fontWeight: 600, color: C.ink }}>{m.label}</span>
+                <span style={{ color: C.teal, fontWeight: 600 }}>{scaleDisplay(entry[m.key], 10, m.words)}</span>
+              </div>
+              <Slider value={clampScale(entry[m.key])} max={10} onChange={(v) => markerEdit({ [m.key]: v })} />
+            </div>
+          ))}
+        </div>
+
+        {BOOLS.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontFamily: bodyf, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Other signals</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {BOOLS.map((m) => { const on = !!entry[m.key]; return (
+                <button key={m.key} onClick={() => markerEdit({ [m.key]: !on })} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "8px 14px", borderRadius: 9999, cursor: "pointer", border: `1.5px solid ${on ? C.rose : C.outlineVar}`, background: on ? C.rose : C.surface, color: on ? C.roseOn : C.inkVar }}>{m.label}</button>); })}
+            </div>
+          </div>
+        )}
+
+        <Pill onClick={confirmLog} disabled={busy} style={{ width: "100%", marginTop: 16 }}>
+          {busy && status === "Saving" ? <Loader2 size={16} className="spin" /> : <Check size={16} />} {status === "Saved" && !reviewPending ? "Saved — update log" : "Save today's log"}
+        </Pill>
+      </Card>
+
+      <Card style={{ padding: 18 }}>
+        <Label>Personal markers</Label>
+        <p style={{ fontSize: 12, color: C.inkVar, margin: "4px 0 12px" }}>In your own words, from what you mention in the chat.</p>
+        {(entry.categories || []).length === 0 ? (
+          <p style={{ fontSize: 13, color: C.inkVar, margin: 0 }}>These appear when you mention symptoms, patterns, or body signals.</p>
+        ) : (
+          <div style={{ display: "grid", gap: 14 }}>
+            {entry.categories.map((c, i) => { const scale = normalizedScale(c.scale); return (
+              <div key={c.key || i}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: scale ? 6 : 0 }}>
+                  <span style={{ fontWeight: 600, color: C.ink }}>{c.label || c.key}</span>
+                  <span style={{ color: scale ? C.teal : C.inkVar, fontWeight: 600 }}>{scale ? `${scale.value}/10` : (c.value || "noted")}</span>
+                </div>
+                {scale && <Slider value={clampScale(scale.value)} max={10} onChange={(v) => markerEdit({ categories: entry.categories.map((x) => x.key === c.key ? { ...x, scale: { value: clampScale(v), max: 10 } } : x) })} />}
+                {scale && c.value && <div style={{ fontSize: 12, color: C.inkVar, marginTop: 4 }}>{c.value}</div>}
+              </div>
+            ); })}
+          </div>
+        )}
+      </Card>
     </div>
-    {msgs.length <= 1 && (<div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "4px 0 12px" }}>{["I'm scared this is PCOS", "Why are my periods irregular?", "How do I bring this up with my GP?"].map((c) => (<button key={c} onClick={() => send(c)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "9px 14px", borderRadius: 9999, background: C.surface, border: `1.5px solid ${C.outlineVar}`, color: C.ink, cursor: "pointer" }}>{c}</button>))}</div>)}
-    {learned.length > 0 && (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10, fontSize: 12, color: C.inkVar }}><Sparkles size={13} color={C.roseOn} /> Learning your words:{learned.map((d, i) => (<span key={i} style={{ padding: "3px 9px", borderRadius: 12, background: C.rose, color: C.roseOn }}>{d.concept}: "{d.phrase}"</span>))}</div>)}
-    <div style={{ display: "flex", gap: 10, alignItems: "center", background: C.surface, borderRadius: 9999, padding: 6, boxShadow: SH }}>
-      <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder={voice.listening ? "Listening…" : "Say it or type it…"} style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 16, padding: "8px 14px", background: "transparent" }} />
-      <MicBtn listening={voice.listening} onClick={voice.toggle} />
+  );
+
+  const chat = (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: 520 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "6px 0 14px", gap: 12 }}>
+        <H size={26}>Daily check-in</H>
+        <Pill variant="outline" onClick={endChat} disabled={busy || ended} style={{ padding: "10px 16px", fontSize: 14 }}>{ended ? <><Check size={15} /> Chat ended</> : "End chat & infer markers"}</Pill>
+      </div>
+      <div ref={scroller} style={{ flex: 1, overflowY: "auto", display: "grid", gap: 12, paddingBottom: 10, maxHeight: 420 }}>
+        {turns.map((m, i) => (<div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+          {m.role === "assistant" && <LeafMark size={36} />}
+          <div style={{ maxWidth: "80%", padding: "13px 16px", borderRadius: 20, fontSize: 15, lineHeight: 1.45, boxShadow: m.role === "user" ? "none" : SH_SM,
+            background: m.role === "user" ? C.teal : m.err ? C.rose : C.surface, color: m.role === "user" ? "#fff" : m.err ? C.error : C.ink, borderTopRightRadius: m.role === "user" ? 4 : 20, borderTopLeftRadius: m.role === "user" ? 20 : 4 }}>{m.text}</div></div>))}
+        {busy && !ended && <div style={{ display: "flex", gap: 8, alignItems: "center", color: C.inkVar, fontSize: 13 }}><LeafMark size={36} /><Loader2 size={14} className="spin" /> thinking…</div>}
+      </div>
+      {learned.length > 0 && (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", margin: "10px 0", fontSize: 12, color: C.inkVar }}><Sparkles size={13} color={C.roseOn} /> Learning your words:{learned.map((d, i) => (<span key={i} style={{ padding: "3px 9px", borderRadius: 12, background: C.rose, color: C.roseOn }}>{d.concept}: "{d.phrase}"</span>))}</div>)}
+      {!ended && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", background: C.surface, borderRadius: 9999, padding: 6, boxShadow: SH, marginTop: 10 }}>
+          <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Answer Myno…" disabled={busy} style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 16, padding: "8px 14px", background: "transparent" }} />
+          <button onClick={() => send()} disabled={busy || !text.trim()} style={{ width: 44, height: 44, borderRadius: "50%", border: "none", background: C.teal, color: "#fff", display: "grid", placeItems: "center", cursor: busy || !text.trim() ? "not-allowed" : "pointer", opacity: busy || !text.trim() ? 0.5 : 1 }}><ArrowRight size={20} /></button>
+        </div>
+      )}
+      {error && <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, padding: "10px 14px", borderRadius: 12, background: C.rose, color: C.error, fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}</div>}
     </div>
-    {error && <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, padding: "10px 14px", borderRadius: 12, background: C.rose, color: C.error, fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}</div>}
-    {voice.note && <p style={{ fontSize: 12, color: C.error, textAlign: "center", marginTop: 10 }}>{voice.note}</p>}
-  </div>);
+  );
+
+  return (
+    <div style={{ display: wide ? "grid" : "block", gridTemplateColumns: wide ? "minmax(0,1fr) 340px" : undefined, gap: 22, alignItems: "start" }}>
+      {chat}
+      <div style={{ marginTop: wide ? 0 : 22, position: wide ? "sticky" : "static", top: 88 }}>{panel}</div>
+    </div>
+  );
 }
 
 // ---- PREPARE ---------------------------------------------------------------

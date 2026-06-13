@@ -1,4 +1,0 @@
-services:
-  backend:
-    environment:
-      TTS_URL: ""
