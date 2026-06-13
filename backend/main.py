@@ -483,6 +483,176 @@ async def _suggestions_daily_loop():
 async def _startup():
     asyncio.create_task(_suggestions_daily_loop())
 
+# ----- advocacy report ("GP visit prep"): match a curated advocacy bank against
+# the patient's DB-derived metrics, then have Claude personalize the framing.
+ADVOCACY_BANK = [
+    {"id": "pain_severe_frequent", "category": "pain", "trigger_conditions": {"type": "threshold", "metric": "pain_severe_days_per_cycle", "operator": ">=", "value": 3},
+     "clinical_framing": "I have severe pain on {pain_severe_days_per_cycle} days during most cycles, mainly around days 1-3, and it interferes with work and daily activities.",
+     "keywords_phrases": ["This level of pain is affecting my quality of life.", "I'd like this pain documented in my notes.", "I'd like to discuss pain management options beyond over-the-counter medication."],
+     "questions_to_ask": ["Given this pain pattern, could we explore whether further investigation (e.g. an ultrasound) is appropriate?", "What pain management options are suitable given my other PCOS symptoms?"]},
+    {"id": "cycle_irregularity", "category": "cycle_regularity", "trigger_conditions": {"type": "threshold", "metric": "cycle_length_std_dev", "operator": ">=", "value": 7},
+     "clinical_framing": "My cycle length has varied by roughly {cycle_length_std_dev} days over the last {period_days} days, ranging from {cycle_length_min} to {cycle_length_max} days.",
+     "keywords_phrases": ["I'd like this irregularity recorded as part of my history.", "This pattern has been consistent over several months, not a one-off."],
+     "questions_to_ask": ["Given this irregularity, would it be appropriate to check hormone levels (e.g. LH, FSH, testosterone) or have an ultrasound?", "Could this pattern be related to PCOS, and if so, what would the next step be?"]},
+    {"id": "missed_periods", "category": "cycle_regularity", "trigger_conditions": {"type": "threshold", "metric": "missed_periods_last_6mo", "operator": ">=", "value": 2},
+     "clinical_framing": "I've missed {missed_periods_last_6mo} periods in the last 6 months.",
+     "keywords_phrases": ["I'd like this gap recorded in my notes.", "I'd like to understand what's causing this before it continues."],
+     "questions_to_ask": ["Should we investigate this with bloodwork or imaging?", "Is this consistent with PCOS, or could it indicate something else worth ruling out?"]},
+    {"id": "fatigue_persistent", "category": "fatigue_energy", "trigger_conditions": {"type": "threshold", "metric": "fatigue_days_per_week", "operator": ">=", "value": 4},
+     "clinical_framing": "I experience significant fatigue on {fatigue_days_per_week} days most weeks, even with adequate sleep.",
+     "keywords_phrases": ["This fatigue isn't explained by my sleep or lifestyle.", "I'd like to rule out other causes, such as thyroid issues or anaemia.", "I'd like this logged so we can track whether it changes."],
+     "questions_to_ask": ["Could we test thyroid function and iron/ferritin levels given this fatigue pattern?", "Could this fatigue be linked to insulin resistance, given my PCOS?"]},
+    {"id": "mood_low_frequent", "category": "mood", "trigger_conditions": {"type": "threshold", "metric": "mood_low_days_per_month", "operator": ">=", "value": 10},
+     "clinical_framing": "I've logged low mood on {mood_low_days_per_month} days in the last month, and it feels connected to my cycle and hormone patterns.",
+     "keywords_phrases": ["I'd like this considered as part of my hormonal health picture, not just on its own.", "I'm not only asking for a general mental health referral - I think this may be connected to my PCOS."],
+     "questions_to_ask": ["Could there be a hormonal contribution to this mood pattern that's worth addressing alongside any mental health support?"]},
+    {"id": "hirsutism", "category": "hair_skin", "trigger_conditions": {"type": "boolean", "metric": "hirsutism_descriptor_present", "value": True},
+     "clinical_framing": "I've noticed increased hair growth in a male-pattern distribution (e.g. {hirsutism_areas}), which has developed or changed over {hirsutism_duration}.",
+     "keywords_phrases": ["I'd like this assessed as a possible sign of androgen excess.", "I'd like this documented alongside my other symptoms."],
+     "questions_to_ask": ["Could we test androgen levels (e.g. free testosterone, DHEAS) given this symptom?", "If this is androgen-related, what treatment options are available?"]},
+    {"id": "acne_persistent", "category": "hair_skin", "trigger_conditions": {"type": "threshold", "metric": "acne_flare_frequency_per_month", "operator": ">=", "value": 2},
+     "clinical_framing": "I've had acne flare-ups {acne_flare_frequency_per_month} times in the last month, mostly along my jawline and chin - a pattern often linked to hormone levels.",
+     "keywords_phrases": ["I'd like this considered alongside my other symptoms, not just as a skin issue.", "Topical treatments alone haven't addressed this."],
+     "questions_to_ask": ["Could this acne pattern be related to my hormone levels, and is that worth investigating?"]},
+    {"id": "weight_change_unexplained", "category": "weight", "trigger_conditions": {"type": "threshold_abs", "metric": "weight_change_kg_3mo", "operator": ">=", "value": 3},
+     "clinical_framing": "I've had a change of roughly {weight_change_kg_3mo}kg over the last 3 months without a corresponding change in my diet or activity.",
+     "keywords_phrases": ["I'd like this change documented.", "I'm not looking for general weight advice - I'd like to understand why this is happening given my other symptoms."],
+     "questions_to_ask": ["Could this weight change be related to insulin resistance or another hormonal factor?", "Is it worth checking blood sugar or insulin levels given this pattern?"]},
+    {"id": "insulin_resistance_pattern", "category": "metabolic", "trigger_conditions": {"type": "boolean", "metric": "insulin_resistance_symptoms_present", "value": True},
+     "clinical_framing": "I've noticed a pattern of {insulin_resistance_symptom_description}, which can be associated with insulin resistance in PCOS.",
+     "keywords_phrases": ["I'd like to rule out insulin resistance given this pattern and my PCOS symptoms.", "I'd like this tested rather than just managed with general dietary advice."],
+     "questions_to_ask": ["Could we do a fasting glucose/insulin test or HbA1c given these symptoms?", "If insulin resistance is confirmed, what management options would be appropriate?"]},
+    {"id": "sleep_disturbance", "category": "sleep", "trigger_conditions": {"type": "threshold", "metric": "sleep_disturbance_nights_per_week", "operator": ">=", "value": 3},
+     "clinical_framing": "I have disrupted sleep on {sleep_disturbance_nights_per_week} nights most weeks, and it doesn't seem to correlate with stress or lifestyle changes.",
+     "keywords_phrases": ["I'd like this connected to my other symptoms when reviewing my hormone health.", "This has been ongoing for several months."],
+     "questions_to_ask": ["Could this sleep pattern be related to my hormone levels or PCOS?"]},
+    {"id": "fertility_concern", "category": "fertility", "trigger_conditions": {"type": "boolean", "metric": "fertility_concern_flag", "value": True},
+     "clinical_framing": "I have concerns about my fertility given my cycle pattern and PCOS, and I'd like to discuss this proactively rather than waiting until I'm trying to conceive.",
+     "keywords_phrases": ["I'd like to understand my options now, even though I'm not trying to conceive yet.", "I'd like a referral to discuss this if that's appropriate."],
+     "questions_to_ask": ["What does my cycle pattern suggest about my fertility, and is there anything worth addressing now?", "Would a referral to a gynaecologist or fertility specialist be appropriate given my history?"]},
+    {"id": "documentation_request_general", "category": "general", "trigger_conditions": {"type": "always"},
+     "clinical_framing": "Regardless of what we decide today, I'd like to make sure these symptoms and this data are recorded in my notes.",
+     "keywords_phrases": ["Could this be added to my chart, even if no action is taken today?", "I'd like a record of this conversation for future appointments."],
+     "questions_to_ask": []},
+    {"id": "pcos_diagnosis_review", "category": "general", "trigger_conditions": {"type": "composite", "metric": "no_formal_pcos_diagnosis", "value": True, "min_matched_categories": 2},
+     "clinical_framing": "I haven't had a formal diagnosis confirming or ruling out PCOS, but I'm experiencing several symptoms commonly associated with it ({matched_categories}).",
+     "keywords_phrases": ["I'd like to work towards a clearer picture - even a working diagnosis would help me know what to track and discuss going forward.", "I'd like this combination of symptoms considered together rather than individually."],
+     "questions_to_ask": ["Given these symptoms together, does pursuing a PCOS diagnosis (e.g. via the Rotterdam criteria) seem appropriate?", "What would the next steps be to confirm or rule this out?"]},
+]
+ADVOCACY_BL_MAP = {"hair_skin": "hair_skin", "mood": "mood", "weight": "weight", "pain": "pain", "fertility": "fertility", "diet": "metabolic"}
+
+def _cmp(v, op, t):
+    return {">=": v >= t, "<=": v <= t, ">": v > t, "<": v < t, "==": v == t}.get(op, False)
+
+def _eval_trigger(trig, ins):
+    tt = trig["type"]
+    if tt == "always":
+        return True
+    if tt in ("threshold", "threshold_abs"):
+        v = ins.get(trig["metric"])
+        if v is None:
+            return False
+        return _cmp(abs(v) if tt == "threshold_abs" else v, trig["operator"], trig["value"])
+    if tt == "boolean":
+        return ins.get(trig["metric"]) == trig["value"]
+    return None  # composite handled later
+
+def _match_bank(ins, blocked):
+    avail = [e for e in ADVOCACY_BANK if e["category"] not in blocked]
+    simple, composite = [], []
+    for e in avail:
+        if e["trigger_conditions"]["type"] == "composite":
+            composite.append(e)
+        elif _eval_trigger(e["trigger_conditions"], ins):
+            simple.append(e)
+    matched_cats = {e["category"] for e in simple}
+    for e in composite:
+        t = e["trigger_conditions"]
+        if ins.get(t["metric"]) == t["value"] and len(matched_cats) >= t["min_matched_categories"]:
+            e = dict(e); e["_matched_categories"] = sorted(matched_cats); simple.append(e)
+    return simple
+
+def _advocacy_metrics(logs, patient):
+    days = max(1, len(logs))
+    def avg(k):
+        xs = [l[k] for l in logs if isinstance(l.get(k), (int, float))]
+        return sum(xs) / len(xs) if xs else None
+    def cnt(pred):
+        return sum(1 for l in logs if pred(l))
+    starts = [l["date"] for l in logs if l.get("period")]
+    gaps = [(dt.date.fromisoformat(starts[i]) - dt.date.fromisoformat(starts[i - 1])).days for i in range(1, len(starts))]
+    gaps = [g for g in gaps if g > 10]
+    cycles = max(1, len(gaps))
+    wlogs = [l for l in logs if isinstance(l.get("morningWeight"), (int, float))]
+    sugar_avg = avg("sugar") or 0
+    cravings_rate = cnt(lambda l: l.get("cravings")) / days
+    ir = cravings_rate > 0.35 and sugar_avg >= 2.5
+    diag = ""
+    for l in reversed(logs):
+        if l.get("diagnoses"):
+            diag = str(l["diagnoses"]); break
+    goals = (patient.goals or []) if patient else []
+    return {
+        "period_days": days,
+        "cycle_length_avg": round(statistics.mean(gaps), 1) if gaps else None,
+        "cycle_length_std_dev": round(statistics.pstdev(gaps), 1) if len(gaps) >= 2 else 0,
+        "cycle_length_min": min(gaps) if gaps else None,
+        "cycle_length_max": max(gaps) if gaps else None,
+        "missed_periods_last_6mo": sum(1 for g in gaps if g > 45),
+        "pain_severe_days_per_cycle": round(cnt(lambda l: isinstance(l.get("pain"), (int, float)) and l["pain"] >= 7) / cycles, 1),
+        "fatigue_days_per_week": round(cnt(lambda l: isinstance(l.get("energy"), (int, float)) and l["energy"] <= 1) / days * 7, 1),
+        "mood_low_days_per_month": round(cnt(lambda l: isinstance(l.get("mood"), (int, float)) and l["mood"] <= 1) / days * 30, 1),
+        "energy_avg_score": round((avg("energy") or 0) * 2.5, 1),
+        "hirsutism_descriptor_present": (cnt(lambda l: l.get("hairGrowth")) / days) > 0.15,
+        "hirsutism_areas": "the areas you've noted", "hirsutism_duration": "recent months",
+        "acne_flare_frequency_per_month": round(cnt(lambda l: l.get("acne")) / days * 30, 1),
+        "weight_change_kg_3mo": round(wlogs[-1]["morningWeight"] - wlogs[0]["morningWeight"], 1) if len(wlogs) >= 2 else 0,
+        "insulin_resistance_symptoms_present": ir,
+        "insulin_resistance_symptom_description": "frequent sugar cravings and afternoon energy dips" if ir else None,
+        "sleep_disturbance_nights_per_week": round(cnt(lambda l: isinstance(l.get("sleep"), (int, float)) and l["sleep"] <= 1) / days * 7, 1),
+        "fertility_concern_flag": any("concei" in str(g).lower() or "fertil" in str(g).lower() for g in goals),
+        "prior_dismissal_flag": False,
+        "no_formal_pcos_diagnosis": "pcos" not in diag.lower(),
+    }
+
+ADVOCACY_SYSTEM = (
+    "You are generating a GP visit preparation report for a patient with PCOS or a related endocrine condition.\n"
+    "You will be given the patient's logged-data insights, their stored descriptors (their own words), a list of "
+    "advocacy bank entries whose trigger_conditions matched, their blacklist, and their adapt_state.\n"
+    "Your task:\n1. Write a brief, factual trends summary using the patient's own descriptor language where it fits.\n"
+    "2. From the matched entries, select the most relevant (prioritise strongest triggers / most impact in a short "
+    "appointment). You need not use all.\n3. Personalize each clinical_framing by filling {placeholders} with the "
+    "patient's actual numbers from the insights.\n4. Do NOT alter keywords_phrases or questions_to_ask - copy them "
+    "verbatim.\n5. Introduce no new medical claims, diagnoses, tests, or terminology beyond the matched entries.\n"
+    "6. Never reference a blacklisted category.\n7. Match tone/length to adapt_state; keep talking_points concise "
+    "and scannable.\n"
+    "Respond with ONLY a JSON object (no markdown, no preamble): "
+    '{"trends_summary":"...","flagged_patterns":["..."],"talking_points":[{"category":"...","clinical_framing":"...",'
+    '"keywords_phrases":["..."],"questions_to_ask":["..."]}],"documentation_request_text":"..."}'
+)
+
+@app.post("/patients/{pid}/advocacy")
+async def advocacy(pid: int):
+    s = Session(); p = s.get(Patient, pid)
+    if not p:
+        s.close(); raise HTTPException(404)
+    rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
+    logs = [_log_dict(r) for r in rows]
+    descriptors = [{"concept": d.concept, "phrase": d.phrase} for d in s.query(Descriptor).filter_by(patient_id=pid).all()]
+    blacklist = p.blacklist or []; adapt = p.adapt_state or {}
+    metrics = _advocacy_metrics(logs, p)
+    s.close()
+    blocked = {ADVOCACY_BL_MAP.get(b, b) for b in blacklist}
+    matched = _match_bank(metrics, blocked)
+    payload = {"period_days": metrics["period_days"], "insights": metrics, "descriptors": descriptors,
+               "blacklist": blacklist, "adapt_state": adapt, "matched_advocacy_entries": matched}
+    raw = await claude(ADVOCACY_SYSTEM, [{"role": "user", "content": json.dumps(payload)}], max_tokens=2000)
+    try:
+        a, b = raw.index("{"), raw.rindex("}"); report = json.loads(raw[a:b + 1])
+    except Exception:
+        report = {"trends_summary": "", "flagged_patterns": [], "talking_points": [], "documentation_request_text": ""}
+    return {"report": report, "matched": [e["id"] for e in matched], "metrics": metrics}
+
 @app.get("/patients/{pid}/suggestions")
 async def get_suggestions(pid: int):
     s = Session(); p = s.get(Patient, pid)
@@ -582,6 +752,159 @@ Return ONLY JSON, no prose, no code fences:
         p.adapt_state = {**(p.adapt_state or {}), **adapt}
     s.commit(); s.close()
     return {"reply": reply, "learned": new_desc, "adapt": adapt}
+
+# ----- chatbox-mode: a text-first daily check-in that gathers patient-specific
+# detail (pulling the patient's descriptors, conversation history, adaptation
+# state and tracked cycle from the DB) and then infers the day's tracking
+# markers. This powers the Chat tab.
+class ChatboxTurnIn(BaseModel):
+    role: str
+    text: str
+
+class ChatboxChatIn(BaseModel):
+    message: str
+    turns: list[ChatboxTurnIn] = []
+
+class ChatboxExtractIn(BaseModel):
+    text: str
+    context: str = ""
+    blocked: list[str] = []
+    categories: list[dict] = []
+
+@app.post("/chatbox/patients/{pid}/chat")
+async def chatbox_chat(pid: int, body: ChatboxChatIn):
+    s = Session()
+    p = s.get(Patient, pid)
+    if not p:
+        s.close()
+        raise HTTPException(404, "no such patient")
+
+    blacklist = p.blacklist or []
+    blocked_labels = [FEATURES[f]["label"] for f in blacklist if f in FEATURES]
+    descriptors = s.query(Descriptor).filter_by(patient_id=pid).order_by(Descriptor.created_at.desc()).limit(20).all()
+    desc_lines = "; ".join(f'{d.concept}: "{d.phrase}"' for d in descriptors) or "none yet"
+    db_history = (
+        s.query(Turn)
+        .filter_by(patient_id=pid)
+        .order_by(Turn.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    db_history = list(reversed(db_history))
+    db_msgs = [{"role": t.role, "content": t.content} for t in db_history]
+    client_msgs = [
+        {
+            "role": "assistant" if t.role == "assistant" else "user",
+            "content": t.text.strip()[:1200],
+        }
+        for t in (body.turns or [])[-20:]
+        if t.role in {"assistant", "user"} and t.text.strip()
+    ]
+    base_msgs = client_msgs or db_msgs
+    recent_questions = [
+        msg["content"].strip()
+        for msg in base_msgs
+        if msg["role"] == "assistant" and "?" in (msg["content"] or "")
+    ][-6:]
+    recent_question_lines = "\n".join(f"- {q}" for q in recent_questions) or "none"
+    msgs = list(base_msgs)
+    msgs.append({"role": "user", "content": body.message})
+    avg_gap = _avg_cycle(s, pid)
+
+    system = f"""You are Myno, a calm information-gathering PCOS companion.
+Your job in this chatbox is to understand the patient's situation well enough to infer daily tracking markers at the end of the conversation.
+
+EACH TURN:
+- Briefly acknowledge what they said in their own words.
+- Ask ONE new concrete follow-up question that gathers more patient-specific information: timing, duration, severity, cycle pattern, symptoms, triggers, recent changes, or what happened today.
+- Prefer questions that help fill missing daily markers: period today, pain, mood, energy, sugar/cravings, bloating, hair growth/loss, and any personal marker they mention.
+- Reuse the patient's vocabulary. Known phrasings -> {desc_lines}.
+- Adapt to them. Current read: {json.dumps(p.adapt_state or {})}. Goals: {p.goals or []}. Avg tracked cycle: {avg_gap} days.
+
+QUESTION STYLE:
+- Do NOT ask "have you checked this with a doctor", "have you seen a clinician", or similar referral-style questions.
+- Do NOT redirect the conversation to medical appointment logistics.
+- If safety or diagnosis caveats are needed, keep them brief and still ask for more concrete information.
+
+REPEAT AVOIDANCE:
+- Recent questions already asked:
+{recent_question_lines}
+- Do NOT ask a question that is semantically the same as one of those recent questions.
+- If the patient already answered a topic with "no", "none", "not really", "I don't know", or similar, treat that as answered and move to a different daily marker.
+- If several markers remain, rotate to a new slot in this priority: period/timing, pain, mood, energy, cravings/sugar, bloating, hair/skin, personal marker.
+
+HARD CONSTRAINTS:
+- NEVER ask about, request, or volunteer anything in this blocked list: {blocked_labels or 'none'}.
+- NEVER diagnose or say whether they have PCOS.
+- No specific drug doses.
+- Keep the reply under ~55 words.
+
+Return ONLY JSON, no prose, no code fences:
+{{"reply": str,
+  "descriptors": [{{"concept": str, "phrase": str}}],
+  "adapt": {{"tone": "gentle"|"neutral"|"upbeat", "length": "short"|"medium", "distress": 0-3}}
+}}"""
+
+    raw = await claude(system, msgs)
+    reply, new_desc, adapt = "", [], {}
+    try:
+        a, b = raw.index("{"), raw.rindex("}")
+        obj = json.loads(raw[a:b + 1])
+        reply = obj.get("reply", "")
+        new_desc = obj.get("descriptors", []) or []
+        adapt = obj.get("adapt", {}) or {}
+    except Exception:
+        reply = raw
+
+    s.add(Turn(patient_id=pid, role="user", content=body.message))
+    s.add(Turn(patient_id=pid, role="assistant", content=reply))
+    for d in new_desc[:5]:
+        if d.get("concept") and d.get("phrase"):
+            s.add(Descriptor(patient_id=pid, concept=d["concept"][:40], phrase=d["phrase"][:200]))
+    if adapt:
+        p.adapt_state = {**(p.adapt_state or {}), **adapt}
+    s.commit()
+    s.close()
+    return {"reply": reply, "learned": new_desc, "adapt": adapt}
+
+def _chatbox_extract_sys(blocked: list[str]) -> str:
+    block_line = ", ".join(blocked) if blocked else "none"
+    return (
+        "You are Myno, converting the completed chatbox conversation into daily tracking markers. "
+        "Infer values from the WHOLE conversation. Do not ask follow-up questions in this response.\n"
+        "All numeric marker values MUST be integers from 0 to 10 inclusive.\n"
+        "- pain: 0 means no pain, 5 moderate pain, 10 extreme pain.\n"
+        "- mood: 0 means very low/distressed mood, 5 mixed or neutral mood, 10 very good/steady mood.\n"
+        "- energy: 0 means depleted, 5 moderate energy, 10 very high energy.\n"
+        "- sugar: 0 means no notable sugar intake/cravings, 5 moderate, 10 extreme/high.\n"
+        "- For any personalized category with a scale, ALWAYS use "
+        "{\"scale\":{\"value\":int,\"max\":10}} where value is 0-10. "
+        "Use 10 as the most intense/highest amount/strongest presence for that category.\n"
+        "- Use null for standard numeric fields that cannot be inferred. Use false for boolean fields not mentioned.\n"
+        "- Keep personalized categories in the patient's own words, max 6 categories, stable lower_snake_case keys.\n"
+        f"- NEVER create, infer, or ask about anything in this blocked list: {block_line}.\n"
+        "Return ONLY JSON, no prose, no code fences: "
+        "{\"period\":true|false|null,\"pain\":0-10|null,\"mood\":0-10|null,\"energy\":0-10|null,"
+        "\"sugar\":0-10|null,\"hairGrowth\":bool,\"hairLoss\":bool,\"bloating\":bool,\"cravings\":bool,"
+        "\"categories\":[{\"key\":str,\"label\":str,\"value\":str,\"scale\":{\"value\":int,\"max\":10}}],"
+        "\"say\":str}."
+    )
+
+@app.post("/chatbox/extract")
+async def chatbox_extract(body: ChatboxExtractIn):
+    ctx = (body.context or "").strip()
+    cats = json.dumps(body.categories or [])
+    user = (
+        (f"Conversation so far: {ctx}\n" if ctx else "")
+        + f"Current personalized categories: {cats}\n\n"
+        + f'Completed conversation to score: "{body.text}"'
+    )
+    raw = await claude(_chatbox_extract_sys(body.blocked or []), [{"role": "user", "content": user}], max_tokens=650)
+    try:
+        a, b = raw.index("{"), raw.rindex("}")
+        return json.loads(raw[a:b + 1])
+    except Exception:
+        return {}
 
 # ----- voice → structured daily-log fields + a spoken reply (server-side model;
 # no key in the browser). Myno talks back: acknowledges, and asks ONE clarifying

@@ -29,7 +29,6 @@ const SH = "0 8px 30px rgba(54,99,102,0.07)";
 const SH_SM = "0 4px 16px rgba(54,99,102,0.05)";
 const head = "'Manrope', system-ui, sans-serif";
 const bodyf = "'Hanken Grotesk', system-ui, sans-serif";
-const CHATBOX_PATH = "/chatbox";
 const FONTS = `
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Hanken+Grotesk:wght@400;500;600&display=swap');
 *{ -webkit-font-smoothing:antialiased; box-sizing:border-box; }
@@ -483,8 +482,7 @@ export default function App() {
     {tab === "insights" && <InsightsScreen {...ctx} />}
     {tab === "chat" && <ChatScreen {...ctx} />}
     {tab === "settings" && <SettingsScreen {...ctx} />}
-    {tab === "prepare" && <PrepareScreen {...ctx} />}
-    {tab === "clinician" && <ClinicianScreen {...ctx} />}
+    {(tab === "advocacy" || tab === "prepare" || tab === "clinician") && <AdvocacyScreen {...ctx} />}
   </>);
 
   // --- mobile shell (centered phone column + bottom nav) ---
@@ -501,7 +499,7 @@ export default function App() {
       <div style={{ width: "100%", maxWidth: 560 }}><Onboarding profile={profile} setProfile={setProfile} /></div>
     </div>);
 
-  const contentMax = { home: 1140, insights: 1140, clinician: 940, prepare: 880, chat: 720, record: 1180, settings: 640 }[tab] || 1080;
+  const contentMax = { home: 1140, insights: 1140, advocacy: 900, clinician: 940, prepare: 880, chat: 1100, record: 1180, settings: 640 }[tab] || 1080;
   // --- desktop / web shell (top navigation bar + wide content — the website view) ---
   if (wide) return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: bodyf, color: C.ink, backgroundImage: GRAD }}>
@@ -520,7 +518,7 @@ export default function App() {
 
 // ---- desktop top navigation (website view) ---------------------------------
 function TopNav({ tab, setTab, profile }) {
-  const items = [["home", "Home"], ["record", "Record"], ["insights", "Insights"], ["chat", "Chat"], ["prepare", "Prepare"], ["clinician", "Clinician"]];
+  const items = [["home", "Home"], ["record", "Record"], ["insights", "Insights"], ["chat", "Chat"], ["advocacy", "Advocacy"]];
   return (
     <header style={{ position: "sticky", top: 0, zIndex: 20, background: "rgba(251,249,248,0.9)", backdropFilter: "blur(10px)", borderBottom: `1px solid ${C.high}` }}>
       <div style={{ maxWidth: 1140, margin: "0 auto", padding: "12px 40px", display: "flex", alignItems: "center", gap: 8 }}>
@@ -531,7 +529,6 @@ function TopNav({ tab, setTab, profile }) {
           {items.map(([id, label]) => { const on = tab === id; return (
             <button key={id} onClick={() => setTab(id)} style={{ fontFamily: bodyf, fontSize: 15, fontWeight: on ? 600 : 500, padding: "9px 16px", borderRadius: 9999, cursor: "pointer", border: "none",
               background: on ? C.tealFixed : "transparent", color: on ? C.tealDark : C.inkVar }}>{label}</button>); })}
-          <a href={CHATBOX_PATH} style={{ fontFamily: bodyf, fontSize: 15, fontWeight: 500, padding: "9px 16px", borderRadius: 9999, textDecoration: "none", color: C.inkVar }}>Chatbox</a>
         </nav>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
           <button onClick={() => setTab("settings")} style={{ background: "none", border: "none", cursor: "pointer", color: tab === "settings" ? C.teal : C.inkVar, display: "grid", placeItems: "center" }}><Cog size={22} /></button>
@@ -643,19 +640,11 @@ function HomeScreen({ profile, logs, setLogs, ins, setTab, wide }) {
       <span style={{ fontFamily: head, fontWeight: 700, fontSize: 22 }}>Record your day</span>
       <span style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.18)", display: "grid", placeItems: "center" }}><Plus size={20} color="#fff" /></span>
     </button>);
-  const chatboxCard = (
-    <a href={CHATBOX_PATH} style={{ textDecoration: "none", color: "inherit" }}>
-      <Card style={{ display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
-        <span style={{ width: 42, height: 42, borderRadius: 12, background: C.tealFixed, display: "grid", placeItems: "center", flexShrink: 0 }}><MessageCircle size={20} color={C.tealDark} /></span>
-        <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Open chatbox mode</div><div style={{ fontSize: 13, color: C.inkVar }}>Text-first check-in with inferred daily sliders</div></div>
-        <ChevronRight size={20} color={C.outline} />
-      </Card>
-    </a>);
   const trackedToday = chips.length > 0 && (
     <div><Label color={C.inkVar}>Tracked today</Label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>{chips.map((c) => (<span key={c} style={{ fontFamily: bodyf, fontSize: 13, fontWeight: 500, padding: "8px 14px", borderRadius: 9999, background: C.surface, border: `1px solid ${C.outlineVar}`, color: C.inkVar }}>{c}</span>))}</div></div>);
   const prepareCard = (
-    <Card onClick={() => setTab("prepare")} style={{ display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
+    <Card onClick={() => setTab("advocacy")} style={{ display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
       <span style={{ width: 42, height: 42, borderRadius: 12, background: C.rose, display: "grid", placeItems: "center", flexShrink: 0 }}><Stethoscope size={20} color={C.roseOn} /></span>
       <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Prepare for your appointment</div><div style={{ fontSize: 13, color: C.inkVar }}>A clinician-ready summary from your tracking</div></div>
       <ChevronRight size={20} color={C.outline} />
@@ -665,7 +654,7 @@ function HomeScreen({ profile, logs, setLogs, ins, setTab, wide }) {
     <H size={30} style={{ marginBottom: 22 }}>{profile.name ? `Welcome back, ${profile.name}` : "Welcome back"}</H>
     <div style={{ display: "grid", gridTemplateColumns: "1.05fr 0.95fr", gap: 24, alignItems: "start" }}>
       <div style={{ display: "grid", gap: 20 }}>{periodCard}{calendarBlock}</div>
-      <div style={{ display: "grid", gap: 18 }}>{phaseTiles}{recordCTA}{chatboxCard}{trackedToday}{prepareCard}</div>
+      <div style={{ display: "grid", gap: 18 }}>{phaseTiles}{recordCTA}{trackedToday}{prepareCard}</div>
     </div>
   </div>);
 
@@ -1331,74 +1320,44 @@ NEVER ask about or volunteer anything blocked: ${blocked.length ? blocked.join("
 }
 
 // ---- PREPARE ---------------------------------------------------------------
-function PrepareScreen({ profile, ins, flags, score, decision, axes, settings, setTab }) {
-  const [summary, setSummary] = useState(""); const [loading, setLoading] = useState(false);
+// ---- ADVOCACY (Prepare + Clinician merged) ---------------------------------
+function AdvocacyScreen({ profile, ins, flags, score, decision, axes, settings, setTab }) {
+  const [rep, setRep] = useState(null); const [loadingR, setLoadingR] = useState(false);
+  useEffect(() => { (async () => {
+    const pid = settings.patientId; if (!pid) return; setLoadingR(true);
+    try { const b = (settings.backendUrl || "/api").replace(/\/$/, ""); const r = await fetch(`${b}/patients/${pid}/advocacy`, { method: "POST" }); if (r.ok) { const j = await r.json(); setRep(j.report); } } catch (e) { }
+    setLoadingR(false);
+  })(); }, [settings.patientId]);
+
   const bandColor = decision.abstain ? "#a9772a" : decision.band === "elevated" ? C.roseOn : C.teal;
   const bandBg = decision.abstain ? "#f6ecd8" : decision.band === "elevated" ? C.rose : C.tealFixed;
-  const flagList = [flags.irregularCycle && `Cycles averaging ${ins.avgGap} days (irregular)`,
-    !isBlocked(settings, "hair_skin") && (flags.mfgHigh || flags.selfHirsutism) && "Excess hair growth",
-    !isBlocked(settings, "hair_skin") && flags.alopecia && "Scalp hair thinning", flags.acne && "Persistent acne",
-    !isBlocked(settings, "weight") && flags.weightGain && "Difficult weight gain",
-    !isBlocked(settings, "diet") && !isBlocked(settings, "pain") && (ins.painHi - ins.painLo) > 1 && "Pain rising after high-sugar days"].filter(Boolean);
-  const questions = ["Could my symptoms be PCOS, and what else could explain them?", "Which blood tests and scans do I need, and when?",
-    (profile.goals.includes("conceive") && !isBlocked(settings, "fertility")) ? "How does this affect my chances of conceiving?" : "What can I do about my most bothersome symptom?"];
-  const gen = async () => { setLoading(true); try {
-    const findings = { age: profile.age, avgCycle: ins.avgGap, band: decision.abstain ? "uncertain" : decision.band, ovulatory: axes.ovulatory.met, androgen: axes.androgen.met, flags: flagList, goals: profile.goals };
-    const out = await callClaude({ apiKey: settings.apiKey, maxTokens: 500, messages: [{ role: "user", content: `Write a short neutral plain-language PCOS pre-screen summary. Never diagnose; only use these findings; under 85 words; warm.\n${JSON.stringify(findings)}` }] });
-    setSummary(out); } catch (e) {} setLoading(false); };
-  return (<div>
-    <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 10, margin: "6px 0 14px" }}>
-      <button onClick={() => setTab("home")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><ArrowLeft size={22} /></button><H size={24}>Prepare</H></div>
-    <Card style={{ marginBottom: 14 }}>
-      <Label>Where things stand</Label>
-      <div style={{ display: "flex", justifyContent: "center", margin: "8px 0" }}><Triad axes={axes} /></div>
-      <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: 14, borderRadius: 14, background: bandBg }}>
-        {decision.abstain ? <AlertTriangle size={18} color={bandColor} style={{ flexShrink: 0, marginTop: 2 }} /> : <Info size={18} color={bandColor} style={{ flexShrink: 0, marginTop: 2 }} />}
-        <span style={{ fontSize: 14, lineHeight: 1.45, color: decision.band === "elevated" ? C.roseOn : C.onTealFixed }}>{decision.abstain ? "Your signs are genuinely on the line — Myno won't guess. A clinician can run what it can't." : decision.band === "elevated" ? "Several signs line up with PCOS. Not a diagnosis — a strong reason to be assessed." : "Few PCOS signs stand out today. Keep tracking; bring this if symptoms persist."}</span></div>
-    </Card>
-    <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Symptoms to flag</Label>
-      {flagList.length ? <ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 7 }}>{flagList.map((f) => (<li key={f} style={{ fontSize: 15 }}>{f}</li>))}</ul> : <p style={{ fontSize: 14, color: C.inkVar, marginTop: 8 }}>Nothing notable yet — keep tracking.</p>}</Card>
-    <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Questions to ask</Label><ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 7 }}>{questions.map((q) => (<li key={q} style={{ fontSize: 15 }}>{q}</li>))}</ul></Card>
-    {summary && <Card style={{ marginBottom: 14, background: C.tealFixed, boxShadow: "none" }}><Label color={C.tealDark}>Plain-language summary</Label><p style={{ fontSize: 14, lineHeight: 1.6, margin: "8px 0 0", color: C.onTealFixed }}>{summary}</p></Card>}
-    <div style={{ display: "flex", gap: 10 }}>
-      <Pill variant="outline" onClick={gen} disabled={loading} style={{ flex: 1 }}>{loading ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />} Summary</Pill>
-      <Pill onClick={() => window.print()} style={{ flex: 1 }}><Printer size={16} /> Print</Pill></div>
-  </div>);
-}
+  const standCard = (<Card style={{ marginBottom: 14 }}>
+    <Label>Where things stand</Label>
+    <div style={{ display: "flex", justifyContent: "center", margin: "8px 0" }}><Triad axes={axes} /></div>
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: 14, borderRadius: 14, background: bandBg }}>
+      {decision.abstain ? <AlertTriangle size={18} color={bandColor} style={{ flexShrink: 0, marginTop: 2 }} /> : <Info size={18} color={bandColor} style={{ flexShrink: 0, marginTop: 2 }} />}
+      <span style={{ fontSize: 14, lineHeight: 1.45, color: decision.band === "elevated" ? C.roseOn : C.onTealFixed }}>{decision.abstain ? "Your signs are genuinely on the line — Myno won't guess. A clinician can run what it can't." : decision.band === "elevated" ? "Several signs line up with PCOS. Not a diagnosis — a strong reason to be assessed." : "Few PCOS signs stand out today. Keep tracking; bring this if symptoms persist."}</span></div>
+  </Card>);
 
-// ---- CLINICIAN -------------------------------------------------------------
-function ClinicianScreen({ profile, ins, flags, score, decision, axes, setTab }) {
-  const [dec, setDec] = useState(null); const bmi = flags.bmi ? flags.bmi.toFixed(1) : "—";
-  const tests = [(flags.mfgHigh || flags.selfHirsutism || flags.acne || flags.alopecia) && "Total & free testosterone, SHBG, FAI",
-    "TSH + prolactin — exclude thyroid / hyperprolactinaemia", "17-OHP — exclude non-classic CAH",
-    (flags.irregularCycle || flags.longCycle) && "Pelvic ultrasound — antral follicle count",
-    (flags.highBMI || flags.acanthosis) && "HbA1c / OGTT + fasting lipids"].filter(Boolean);
+  // FOR ME — the advocacy report (data-driven talking points)
+  const meView = (<>
+    {standCard}
+    {(loadingR && !rep) && <Card style={{ display: "flex", alignItems: "center", gap: 10, color: C.inkVar, fontSize: 14, marginBottom: 14 }}><Loader2 size={16} className="spin" color={C.teal} /> Preparing your talking points from your data…</Card>}
+    {rep?.trends_summary && <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Your trends</Label><p style={{ fontSize: 14.5, lineHeight: 1.55, margin: "8px 0 0" }}>{rep.trends_summary}</p></Card>}
+    {rep?.flagged_patterns?.length > 0 && <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Patterns worth flagging</Label><ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 7 }}>{rep.flagged_patterns.map((f, i) => <li key={i} style={{ fontSize: 14.5 }}>{f}</li>)}</ul></Card>}
+    {(rep?.talking_points || []).map((t, i) => (<Card key={i} style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15.5, lineHeight: 1.45 }}>{t.clinical_framing}</div>
+      {t.keywords_phrases?.length > 0 && (<div style={{ marginTop: 12 }}><Label color={C.teal}>Say it like this</Label><ul style={{ margin: "8px 0 0", paddingLeft: 18, display: "grid", gap: 6 }}>{t.keywords_phrases.map((k, j) => <li key={j} style={{ fontSize: 14, lineHeight: 1.45 }}>{k}</li>)}</ul></div>)}
+      {t.questions_to_ask?.length > 0 && (<div style={{ marginTop: 12 }}><Label color={C.roseOn}>Ask</Label><ul style={{ margin: "8px 0 0", paddingLeft: 18, display: "grid", gap: 6 }}>{t.questions_to_ask.map((q, j) => <li key={j} style={{ fontSize: 14, lineHeight: 1.45 }}>{q}</li>)}</ul></div>)}
+    </Card>))}
+    {rep?.documentation_request_text && <Card style={{ marginBottom: 14, background: C.tealFixed, boxShadow: "none" }}><Label color={C.tealDark}>Before you leave</Label><p style={{ fontSize: 14, lineHeight: 1.6, margin: "8px 0 0", color: C.onTealFixed }}>{rep.documentation_request_text}</p></Card>}
+    {rep && <div className="no-print"><Pill onClick={() => window.print()} style={{ width: "100%" }}><Printer size={16} /> Print to bring along</Pill></div>}
+  </>);
+
   return (<div>
-    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "6px 0 4px" }}>
-      <button onClick={() => setTab("settings")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><ArrowLeft size={22} /></button>
-      <div><Label>Clinician view</Label><H size={22}>{profile.name || "Patient"} · longitudinal</H></div></div>
-    <p style={{ color: C.inkVar, fontSize: 14, margin: "8px 0 16px" }}>Three months of patient-reported tracking, the twin's associations, and a flagged model read you can override.</p>
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-      <Mini label="Avg cycle" value={`${ins.avgGap ?? "—"}d`} flag={ins.avgGap > 35} />
-      <Mini label="BMI" value={bmi} flag={flags.bmi >= 30} />
-      <Mini label="Avg pain" value={`${ins.avgPain.toFixed(1)}/10`} flag={ins.avgPain > 5} />
-      <Mini label="Model read" value={`${(score * 100).toFixed(0)}%`} flag={decision.band === "elevated"} amber={decision.abstain} />
-    </div>
-    <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Rotterdam mapping</Label>
-      <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-        {[["Oligo/anovulation", axes.ovulatory.met, axes.ovulatory.note], ["Hyperandrogenism", axes.androgen.met, axes.androgen.note], ["Polycystic morphology", null, "Ultrasound required"]].map(([k, met, note]) => (
-          <div key={k} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 11, padding: "3px 9px", borderRadius: 8, background: met == null ? C.high : met ? C.rose : C.tealFixed, color: met == null ? C.outline : met ? C.roseOn : C.tealDark }}>{met == null ? "PENDING" : met ? "PRESENT" : "ABSENT"}</span>
-            <div style={{ flex: 1 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{k}</div><div style={{ fontSize: 12, color: C.inkVar }}>{note}</div></div></div>))}</div>
-      {decision.abstain && <div style={{ marginTop: 10, padding: "8px 12px", background: "#f6ecd8", borderRadius: 10, fontSize: 13, display: "flex", gap: 8, color: "#7a5a1e" }}><AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 2 }} /> Conformal layer abstained (score in [{LO},{HI}]). Indeterminate.</div>}</Card>
-    <Card style={{ marginBottom: 14, background: C.tealC, boxShadow: SH }}><div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.tealFixed }}>Twin association</div>
-      <p style={{ color: "#fff", fontSize: 15, lineHeight: 1.5, margin: "6px 0 0" }}>Pain averages {(ins.painHi - ins.painLo).toFixed(1)} pts higher the day after high-sugar intake — consider metabolic workup.</p></Card>
-    <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Suggested tests · linked to insights</Label>
-      <div style={{ display: "grid", gap: 7, marginTop: 10 }}>{tests.map((t) => (<label key={t} style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 14, padding: "9px 12px", background: C.low, borderRadius: 10, cursor: "pointer" }}><input type="checkbox" style={{ accentColor: C.teal, width: 16, height: 16 }} /> {t}</label>))}</div></Card>
-    <Card><Label color={C.inkVar}>Clinician decision (you lead)</Label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>{["Refer for ultrasound + bloods", "Manage as likely PCOS", "Unlikely — reassure", "Reassess in 3 months"].map((o) => (
-        <button key={o} onClick={() => setDec(o)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "9px 14px", borderRadius: 9999, cursor: "pointer", border: `1.5px solid ${dec === o ? C.teal : C.outlineVar}`, background: dec === o ? C.tealFixed : C.surface, color: dec === o ? C.tealDark : C.ink }}>{o}</button>))}</div>
-      {dec && <p style={{ marginTop: 12, fontSize: 13, color: C.teal, display: "flex", gap: 6, alignItems: "center" }}><Check size={15} /> Logged: "{dec}" — overrides the model read.</p>}</Card>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "6px 0 16px" }}>
+      <button className="no-print" onClick={() => setTab("home")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><ArrowLeft size={22} /></button><H size={24}>Advocacy</H></div>
+    {meView}
   </div>);
 }
 function Mini({ label, value, flag, amber }) {
@@ -1420,9 +1379,9 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setTab }) {
         <button key={k} onClick={() => set("blacklist", on ? settings.blacklist.filter((x) => x !== k) : [...(settings.blacklist || []), k])} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "9px 14px", borderRadius: 9999, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7, background: on ? C.rose : C.surface, color: on ? C.roseOn : C.inkVar, border: `1.5px solid ${on ? C.rose : C.outlineVar}` }}>{on ? <Lock size={13} /> : <Check size={13} color={C.outlineVar} />} {f.label}</button>); })}</div>
       <p style={{ fontSize: 11, color: C.inkVar, marginTop: 10 }}>Blocked topics vanish from your daily tracker and are never raised in conversation — enforced in-app and on the server.</p>
     </Card>
-    <Card onClick={() => setTab("clinician")} style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
+    <Card onClick={() => setTab("advocacy")} style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
       <span style={{ width: 42, height: 42, borderRadius: 12, background: C.tealFixed, display: "grid", placeItems: "center" }}><Stethoscope size={20} color={C.tealDark} /></span>
-      <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Clinician dashboard</div><div style={{ fontSize: 13, color: C.inkVar }}>The double-sided view for your appointment</div></div><ChevronRight size={20} color={C.outline} /></Card>
+      <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Advocacy &amp; appointment prep</div><div style={{ fontSize: 13, color: C.inkVar }}>Your talking points and the clinician view</div></div><ChevronRight size={20} color={C.outline} /></Card>
     <p style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, textAlign: "center", marginTop: 18 }}>MYNO · DECISION SUPPORT, NOT A DIAGNOSIS · PROTOTYPE</p>
   </div>);
 }
