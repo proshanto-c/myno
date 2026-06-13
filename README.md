@@ -1,13 +1,15 @@
-# Myno — full stack
+Here's the rewritten README, in a neutral third-person repo voice:
 
-A PCOS digital twin: voice-first tracking, a companion that asks personalized
-questions and **speaks** its replies, a feature **blacklist**, personalised
-associations, and a clinician dashboard. Everything runs in Docker.
+---
+
+# Myno — Full-Stack PCOS Digital Twin
+
+Myno is a voice-first PCOS tracking app with a personalized AI companion, clinician dashboard, and GPU-accelerated speech services. Everything runs in Docker.
 
 ```
                 ┌─────────────────────────────────────────────┐
-   Browser ─────┤  frontend (nginx)  /  →  /api  →  /asr        │
-   (Myno UI)    └──────┬───────────────┬──────────────┬─────────┘
+   Browser ─────┤  frontend (nginx)  /  →  /api  →  /asr      │
+   (Myno UI)    └──────┬───────────────┬──────────────┬────────┘
                        │ /api          │ /asr (ws)    │ (audio)
                  ┌─────▼─────┐   ┌─────▼──────┐  ┌────▼─────┐
                  │  backend  │   │    asr     │  │   tts    │
@@ -20,91 +22,89 @@ associations, and a clinician dashboard. Everything runs in Docker.
                  └───────────┘
 ```
 
-| Service | What it is | Port | GPU |
+| Service | Description | Port | GPU |
 |---|---|---|---|
-| `frontend` | React app behind nginx; proxies `/api`→backend, `/asr`→asr | 80 | — |
+| `frontend` | React app behind nginx; proxies `/api` → backend, `/asr` → asr | 80 | — |
 | `backend` | FastAPI: chat orchestration, DB, personalization, blacklist, TTS proxy | 8080 | — |
 | `asr` | NeMo cache-aware streaming ASR (`nemotron-speech-streaming-en-0.6b`) | 8000 | ✓ |
 | `tts` | NeMo FastPitch + HiFi-GAN text-to-speech | 8001 | ✓ |
 | `db` | Postgres 16 | 5432 | — |
 
-## Run it
+---
 
-On the A100 host (Docker + NVIDIA Container Toolkit + `docker login nvcr.io`):
+## Getting started
+
+**Requirements:** Docker, NVIDIA Container Toolkit, and `docker login nvcr.io` on the A100 host.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 docker compose up --build
 ```
 
-First boot is slow: the NeMo images are large and download the ASR/TTS
-checkpoints on startup. Then open `http://<host>/`.
+First boot is slow — the NeMo images are large and download ASR/TTS checkpoints on startup. Then open `http://<host>/`.
 
-> **Microphone needs TLS.** Browsers only grant mic access over https/wss. Put a
-> reverse proxy with a cert in front (see `NeMo_A100_Deployment.md`), then in
-> Myno's **Settings** set the ASR endpoint to `wss://<host>/asr` and the Backend
-> URL to `/api`.
+> **Microphone requires TLS.** Browsers only grant mic access over HTTPS/WSS. Put a reverse proxy with a certificate in front (see `NeMo_A100_Deployment.md`), then in Myno's **Settings** set the ASR endpoint to `wss://<host>/asr` and the Backend URL to `/api`.
 
-If you only have the two GPUs’ worth of memory on one card, ASR + TTS coexist
-fine — each is well under 4 GB.
+ASR and TTS coexist on a single card — each uses well under 4 GB of VRAM.
 
-## How the requested pieces work
+---
 
-**TTS that speaks *and* shows text.** The backend `/tts` proxies the NeMo TTS
-service. The frontend splits each reply into sentences, requests audio per
-sentence, and plays them through a queue so speech starts almost immediately and
-feels seamless. The exact text being spoken is always rendered in the chat / the
-live caption in **Voice mode** — spoken and written content are the same string.
-No TTS endpoint? It falls back to the browser's `speechSynthesis`.
+## Features
 
-**Asks personalized questions.** `/patients/{id}/chat` builds the system prompt
-from the patient's profile, recent turns, tracked cycle stats, and their stored
-**personal descriptors** (their own words for things like mood). It acknowledges
-in their words, then asks one relevant next question.
+### Spoken + written replies in sync
+The backend `/tts` endpoint proxies the NeMo TTS service. The frontend splits each reply into sentences, requests audio per sentence, and plays them through a queue so speech starts almost immediately. The exact text being spoken is rendered in the chat bubble and as a live caption in **Voice mode** — the spoken and written content are always the same string. If no TTS endpoint is configured, the app falls back to the browser's `speechSynthesis`.
 
-**Learns the patient's words + adapts.** Each turn, Claude also returns any new
-`descriptors` (e.g. `mood: "foggy and flat"`) and an `adapt` block (tone, length,
-distress). The backend stores descriptors and merges `adapt` into the patient's
-`adapt_state`, which is fed back next turn — so Myno gets gentler/briefer/more
-detailed based on the person.
+### Personalized questions
+`/patients/{id}/chat` builds the system prompt from the patient's profile, recent turns, tracked cycle stats, and stored **personal descriptors** — the patient's own words for symptoms and moods. Each turn, the companion acknowledges what was shared and asks one relevant follow-up question.
 
-**Blacklist (feature blocking).** A patient can block topics in Settings (mood,
-diet, hair/skin, weight, fertility, pain). Blocked topics are (a) hidden from the
-daily tracker, (b) stripped from the prep checklist, and (c) hard-forbidden in the
-chat system prompt — enforced client-side **and** again server-side from the
-`blacklist` column, so the model never asks about or volunteers them.
+### Adaptive language learning
+Each Claude response includes a `descriptors` block (e.g. `mood: "foggy and flat"`) and an `adapt` block (tone, length, distress level). The backend stores descriptors and merges `adapt` into `adapt_state`, which is fed back into the next turn's system prompt. Over time, Myno adjusts to be gentler, briefer, or more detailed based on the patient's cues.
 
-## Database schema (created automatically by SQLAlchemy)
+### Feature blacklist
+Patients can block topics in Settings (mood, diet, hair/skin, weight, fertility, pain). Blocked topics are hidden from the daily tracker, stripped from the prep checklist, and hard-forbidden in the chat system prompt. The blacklist is enforced both client-side and server-side from the `blacklist` DB column — the model never asks about or volunteers blocked subjects.
 
-- `patients` — profile, `goals`, `integrations`, `blacklist` (jsonb), `adapt_state` (jsonb)
-- `daily_logs` — one row per patient per day (period, pain, sugar, mood, energy, hair, etc.)
-- `descriptors` — the patient's own phrasings: `(concept, phrase)`
-- `turns` — full conversation history
-- All foreign-keyed to `patients`, cascade delete.
+---
 
-## API surface (backend)
+## Database schema
+
+Tables are created automatically by SQLAlchemy.
+
+| Table | Contents |
+|---|---|
+| `patients` | Profile, goals, integrations, `blacklist` (jsonb), `adapt_state` (jsonb) |
+| `daily_logs` | One row per patient per day — period, pain, sugar, mood, energy, hair, etc. |
+| `descriptors` | Patient vocabulary: `(concept, phrase)` pairs |
+| `turns` | Full conversation history |
+
+All tables foreign-key to `patients` with cascade delete.
+
+---
+
+## API reference
 
 ```
 GET    /healthz
-POST   /patients                 create
-GET    /patients/{id}            read
-PATCH  /patients/{id}            update
-GET    /patients/{id}/logs       list daily logs
-POST   /patients/{id}/logs       upsert a day
-GET    /patients/{id}/blacklist  blocked features + catalogue
-PUT    /patients/{id}/blacklist  set blocked features
-GET    /patients/{id}/descriptors  learned vocabulary
-POST   /patients/{id}/chat       {message} → {reply, learned, adapt}
-POST   /tts                      {text} → audio/wav (proxies the TTS service)
+POST   /patients                    Create patient
+GET    /patients/{id}               Get patient
+PATCH  /patients/{id}               Update patient
+GET    /patients/{id}/logs          List daily logs
+POST   /patients/{id}/logs          Upsert a day's log
+GET    /patients/{id}/blacklist     Get blocked features + catalogue
+PUT    /patients/{id}/blacklist     Set blocked features
+GET    /patients/{id}/descriptors   Get learned vocabulary
+POST   /patients/{id}/chat          {message} → {reply, learned, adapt}
+POST   /tts                         {text} → audio/wav (proxies TTS service)
 ```
 
-## Demo without the GPU box
+---
 
-The frontend degrades gracefully: leave the endpoints blank in Settings and it
-uses the browser's speech recognition + synthesis and calls Claude directly with
-the API key field. Wire the real services when you're on the A100.
+## Demo without a GPU
 
-## Files
+Leave the ASR and Backend URL fields blank in **Settings** and the app uses the browser's built-in speech recognition and synthesis, calling Claude directly with an API key entered in the settings panel. Wire up the real services when running on the A100.
+
+---
+
+## Repository layout
 
 ```
 myno-stack/
@@ -113,18 +113,11 @@ myno-stack/
   backend/    main.py  Dockerfile
   asr/        nemo_asr_server.py  Dockerfile
   tts/        nemo_tts_server.py  Dockerfile
-  frontend/   src/App.jsx (Myno) + src/main.jsx + Vite scaffold + nginx.conf + Dockerfile
+  frontend/   src/App.jsx  src/main.jsx  nginx.conf  Dockerfile
 ```
 
-## Frontend notes
+### Frontend notes
 
-- **One responsive build.** ≥1024px shows the **website view** (top navigation +
-  wide two-column dashboards); narrower shows the **mobile view** (Serene Care
-  with the bottom tab bar). It switches on resize.
-- **Persistence.** The app reads/writes a key-value `window.storage`. In this
-  standalone build, `src/main.jsx` shims it with `localStorage`, so a patient's
-  profile, logs, and settings persist on the device.
-- **Endpoints.** In **Settings**, set Backend URL to `/api` and the ASR endpoint
-  to `wss://<host>/asr` (both proxied by nginx). Leave blank to demo with browser
-  speech + direct Claude.
-
+- **Responsive layout.** Viewports ≥ 1024 px render a website view with top navigation and wide two-column dashboards. Narrower viewports switch to a mobile view with a bottom tab bar. The layout updates on resize.
+- **Persistence.** The app reads and writes via `window.storage`. In the standalone build, `src/main.jsx` shims this with `localStorage`, so a patient's profile, logs, and settings persist on the device.
+- **Endpoint configuration.** In **Settings**, set Backend URL to `/api` and the ASR endpoint to `wss://<host>/asr` (both proxied by nginx). Leave blank to demo with browser speech and direct Claude access.
