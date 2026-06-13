@@ -138,16 +138,26 @@ async function chatTurn({ settings, message, history, system }) {
 // browser; avoids the CORS "Failed to fetch"); direct-Claude only as a demo
 // fallback when a key is set and the backend can't be reached. -----------------
 const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — reply briefly and directly: note what you heard in a few words and move on, warm but matter-of-fact (skip heavy empathy, reassurance, exclamations); INFER ratings/severities yourself and never ask for numbers or 1-to-10 ratings; ask a short clarifying question only when genuinely needed (never about numbers), else just acknowledge (spoken, under ~25 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":int} (max 10 for severity, 5 for amount); KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard analytics fields when clearly implied. ONLY JSON: {"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. null/false for standard fields not mentioned; omit scale where it doesn't fit.`;
-async function extractFields({ settings, text, context = "", blocked = [], categories = [] }) {
+// Selectable conversation personalities (only the spoken-reply tone changes).
+const PERSONALITIES = [["direct", "Direct"], ["warm", "Warm"], ["coach", "Coach"], ["clinical", "Clinical"], ["friend", "Friend"]];
+const PSTYLE = {
+  direct: "Be brief and matter-of-fact; skip heavy empathy, reassurance and exclamations.",
+  warm: "Be gentle and empathetic; acknowledge how they feel in a caring way, then move on.",
+  coach: "Be encouraging and action-oriented; affirm their effort and nudge one small step.",
+  clinical: "Be precise and neutral like a calm clinician; factual, no emotional language.",
+  friend: "Be casual and conversational like a supportive friend; relaxed and relatable.",
+};
+const pstyle = (p) => PSTYLE[p] || PSTYLE.direct;
+async function extractFields({ settings, text, context = "", blocked = [], categories = [], personality = "direct" }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
   try {
-    const res = await fetch(`${base}/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, context, blocked, categories }) });
+    const res = await fetch(`${base}/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, context, blocked, categories, personality }) });
     if (res.ok) return await res.json();
     throw new Error(`extract ${res.status}`);
   } catch (e) {
     if (settings.apiKey) {
       const ctx = context ? `Conversation so far: ${context}\n` : "";
-      const out = await callClaude({ apiKey: settings.apiKey, maxTokens: 500, messages: [{ role: "user", content: `${EXTRACT_SYS}\n\n${ctx}Current categories: ${JSON.stringify(categories)}\n\nThey just said: "${text}"` }] });
+      const out = await callClaude({ apiKey: settings.apiKey, maxTokens: 500, messages: [{ role: "user", content: `${EXTRACT_SYS}\nTone for "say": ${pstyle(personality)}\n\n${ctx}Current categories: ${JSON.stringify(categories)}\n\nThey just said: "${text}"` }] });
       return JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
     }
     throw e;
@@ -156,10 +166,10 @@ async function extractFields({ settings, text, context = "", blocked = [], categ
 
 // ---- live insights: blend tracked history with the running conversation -------
 const ADVISE_SYS = `You are Myno, a warm, practical PCOS companion. Combine the person's tracked history (history_summary) with what they're telling you now to surface ONE clear insight — a trend or correlation grounded in THEIR data — plus brief, actionable, non-diagnostic advice. Never diagnose or give drug doses. ONLY JSON: {"headline":str (<=8 words), "correlations":[{"label":str,"strength":0-100}] (0-3), "say":str (<=45 words of warm advice)}.`;
-async function extractAdvise({ settings, note, categories = [], summary = {}, blocked = [] }) {
+async function extractAdvise({ settings, note, categories = [], summary = {}, blocked = [], personality = "direct" }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
   try {
-    const res = await fetch(`${base}/advise`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, categories, summary, blocked }) });
+    const res = await fetch(`${base}/advise`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, categories, summary, blocked, personality }) });
     if (res.ok) return await res.json();
     throw new Error(`advise ${res.status}`);
   } catch (e) {
@@ -356,12 +366,12 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [profile, setProfile] = useState(BLANK);
   const [logs, setLogs] = useState([]);
-  const [settings, setSettings] = useState({ apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null });
+  const [settings, setSettings] = useState({ apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct" });
   const vw = useViewport();
   const wide = vw >= 1024;
 
   useEffect(() => { (async () => { const s = await loadState();
-    if (s) { setProfile(s.profile || BLANK); setLogs(s.logs?.length ? s.logs : genSyntheticLogs()); setSettings({ apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, ...(s.settings || {}) }); }
+    if (s) { setProfile(s.profile || BLANK); setLogs(s.logs?.length ? s.logs : genSyntheticLogs()); setSettings({ apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", ...(s.settings || {}) }); }
     else setLogs(genSyntheticLogs()); setReady(true); })(); }, []);
   useEffect(() => { if (ready) saveState({ profile, logs, settings }); }, [profile, logs, settings, ready]);
 
@@ -580,7 +590,7 @@ function CycleCalendar({ logs }) {
 }
 
 // ---- RECORD (quiz / convo) -------------------------------------------------
-function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
+function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const existing = logs.find((l) => l.date === todayStr);
   const [e, setE] = useState(existing || { date: todayStr, period: existing?.period ?? null, pain: 0, sugar: 2, mood: 2, energy: 2, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [] });
@@ -610,7 +620,7 @@ function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
         recentEnergy: logs.slice(-14).map((l) => l.energy), recentSugar: logs.slice(-14).map((l) => l.sugar),
         today: { pain: cur.pain, mood: cur.mood, energy: cur.energy, sugar: cur.sugar, bloating: cur.bloating, categories: cur.categories },
       };
-      const a = await extractAdvise({ settings, note: cur.note || "", categories: cur.categories || [], summary, blocked: blockedLabels(settings) });
+      const a = await extractAdvise({ settings, note: cur.note || "", categories: cur.categories || [], summary, blocked: blockedLabels(settings), personality: settings.personality });
       if (a && (a.say || a.headline)) setAdvice(a);
     } catch (e) { /* insights are best-effort; the panel just stays as-is */ }
     setAdvising(false);
@@ -638,7 +648,7 @@ function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
     const base = { ...eRef.current, note: (eRef.current.note ? eRef.current.note + " " : "") + said };
     let merged = base; let say = ""; let focus = null;
     try {
-      const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), categories: eRef.current.categories || [] });
+      const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), categories: eRef.current.categories || [], personality: settings.personality });
       const next = { ...base, period: f.period ?? base.period, pain: f.pain ?? base.pain, mood: f.mood ?? base.mood, energy: f.energy ?? base.energy, sugar: f.sugar ?? base.sugar, hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings };
       if (Array.isArray(f.categories)) {
         const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, JSON.stringify([c.value, c.scale?.value])]));
@@ -760,9 +770,14 @@ function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
     </Card>);
 
   return (<div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 4 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 4, flexWrap: "wrap" }}>
       <H size={26}>Record your day</H>
-      <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+        <select value={settings.personality || "direct"} onChange={(ev) => setSettings((s) => ({ ...s, personality: ev.target.value }))} title="Myno's personality" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "11px 12px", borderRadius: 9999, border: `1.5px solid ${C.outlineVar}`, background: C.surface, color: C.ink, cursor: "pointer", outline: "none" }}>
+          {PERSONALITIES.map(([k, lbl]) => <option key={k} value={k}>{lbl}</option>)}
+        </select>
+        <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
+      </div>
     </div>
     <p style={{ color: C.inkVar, marginBottom: 18 }}>Just talk — Myno listens, talks back, and builds your personal tracker as you go.</p>
     {wide ? (

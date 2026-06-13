@@ -250,19 +250,33 @@ Return ONLY JSON, no prose, no code fences:
 # ----- voice → structured daily-log fields + a spoken reply (server-side model;
 # no key in the browser). Myno talks back: acknowledges, and asks ONE clarifying
 # question when something important is ambiguous, so the patient can just answer.
+# Selectable conversation personalities — only the TONE of Myno's spoken reply
+# changes; the structural rules (infer ratings, no numbers, brevity) are fixed.
+PERSONALITIES = {
+    "direct": "Be brief and matter-of-fact — note what you heard in a few words and move on; skip heavy empathy, reassurance, and exclamations.",
+    "warm": "Be gentle and empathetic — acknowledge how they feel in a caring, reassuring way, then move on.",
+    "coach": "Be encouraging and action-oriented — affirm their effort and nudge one small positive step.",
+    "clinical": "Be precise and neutral, like a calm clinician — factual and concise, with no emotional language.",
+    "friend": "Be casual and conversational, like a supportive friend — relaxed, relatable, a little informal.",
+}
+
+def _style(personality: str) -> str:
+    return PERSONALITIES.get(personality or "direct", PERSONALITIES["direct"])
+
 class ExtractIn(BaseModel):
     text: str
     context: str = ""
     blocked: list[str] = []
     categories: list[dict] = []
+    personality: str = "direct"
 
-def _extract_sys(blocked: list[str]) -> str:
+def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
     block_line = ", ".join(blocked) if blocked else "none"
     return (
         "You are Myno, a warm voice companion helping someone log their PCOS day just by talking. "
         "From the WHOLE conversation so far and what they just said, do three things: reply out loud, "
         "maintain a personalized tracker, and update the standard analytics fields.\n"
-        "- 'say': reply briefly and directly — note what you heard in a few words and move on. Be warm but matter-of-fact: skip heavy empathy, reassurance, and exclamations. INFER any ratings/severities yourself — never ask for numbers, scores, or 1-to-10 ratings. Ask a short clarifying question only when genuinely needed (never about numbers), otherwise just acknowledge. Spoken aloud — under ~25 words. Never diagnose.\n"
+        f"- 'say' TONE: {_style(personality)} INFER any ratings/severities yourself — never ask for numbers, scores, or 1-to-10 ratings. Ask a short clarifying question only when genuinely needed (never about numbers), otherwise just acknowledge. Spoken aloud — under ~28 words. Never diagnose.\n"
         "- 'categories': a SMALL evolving set (max 6) of the things THIS person actually talks about, in THEIR words "
         "(e.g. {\"key\":\"brain_fog\",\"label\":\"Brain fog\",\"value\":\"heavy this morning\"}). Reuse the same key when updating an existing one; add a new category when they raise something new; drop nothing unless clearly resolved. "
         "'value' is a short human phrase in their language. Build on the categories provided; keep keys stable (lower_snake_case).\n"
@@ -287,7 +301,7 @@ async def extract(body: ExtractIn):
         + f"Current personalized categories: {cats}\n\n"
         + f'They just said: "{body.text}"'
     )
-    raw = await claude(_extract_sys(body.blocked or []), [{"role": "user", "content": user}], max_tokens=500)
+    raw = await claude(_extract_sys(body.blocked or [], body.personality), [{"role": "user", "content": user}], max_tokens=500)
     try:
         a, b = raw.index("{"), raw.rindex("}")
         return json.loads(raw[a:b + 1])
@@ -300,18 +314,20 @@ class AdviseIn(BaseModel):
     categories: list[dict] = []
     summary: dict = {}
     blocked: list[str] = []
+    personality: str = "direct"
 
 @app.post("/advise")
 async def advise(body: AdviseIn):
     block_line = ", ".join(body.blocked) if body.blocked else "none"
     sys = (
-        "You are Myno, a warm, practical PCOS companion. Combine the person's tracked history (history_summary) with what "
+        "You are Myno, a practical PCOS companion. Combine the person's tracked history (history_summary) with what "
         "they are telling you right now to surface ONE clear, useful insight: a trend or correlation grounded in THEIR data, "
         "plus brief, actionable, non-diagnostic advice. Never diagnose or give drug doses; a clinician decides. "
-        f"NEVER reference anything in this blocked list: {block_line}. Keep it spoken-friendly and kind.\n"
+        f"NEVER reference anything in this blocked list: {block_line}.\n"
+        f"Advice TONE: {_style(body.personality)}\n"
         'Return ONLY JSON, no prose: {"headline":str (<=8 words naming the trend/insight), '
         '"correlations":[{"label":str,"strength":0-100}] (0-3, from their data), '
-        '"say":str (<=35 words of warm, practical advice)}. Be concise.'
+        '"say":str (<=35 words of practical advice)}. Be concise.'
     )
     user = json.dumps({"today_conversation": body.note, "categories": body.categories, "history_summary": body.summary})
     raw = await claude(sys, [{"role": "user", "content": user}], max_tokens=320)
