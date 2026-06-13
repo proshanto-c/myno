@@ -1,2 +1,4 @@
 anthropic-api-key
 .env
+frontend/node_modules/
+frontend/dist/
