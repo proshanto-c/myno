@@ -587,7 +587,7 @@ function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
   const [partial, setPartial] = useState(""); const [busy, setBusy] = useState(false); const [text, setText] = useState(""); const [err, setErr] = useState("");
   const [reply, setReply] = useState(""); const speaker = useSpeaker(settings);
   const [flash, setFlash] = useState({}); const timers = useRef({});
-  const [insOn, setInsOn] = useState(false); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain");
+  const [insOn, setInsOn] = useState(false); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
   const insRef = useRef(false); useEffect(() => { insRef.current = insOn; }, [insOn]);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
 
@@ -633,19 +633,26 @@ function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
   const ingest = async (said) => {
     if (!said) return; setPartial(""); setErr(""); setBusy(true);
     const base = { ...eRef.current, note: (eRef.current.note ? eRef.current.note + " " : "") + said };
-    let merged = base; let say = "";
+    let merged = base; let say = ""; let focus = null;
     try {
       const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), categories: eRef.current.categories || [] });
       const next = { ...base, period: f.period ?? base.period, pain: f.pain ?? base.pain, mood: f.mood ?? base.mood, energy: f.energy ?? base.energy, sugar: f.sugar ?? base.sugar, hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings };
       if (Array.isArray(f.categories)) {
-        const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, c.value]));
+        const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, JSON.stringify([c.value, c.scale?.value])]));
         const clean = f.categories.filter((c) => c && c.key && c.label).slice(0, 6);
-        lightUp(clean.filter((c) => prevMap[c.key] !== c.value).map((c) => c.key));
+        const changed = clean.filter((c) => prevMap[c.key] !== JSON.stringify([c.value, c.scale?.value])).map((c) => c.key);
+        lightUp(changed);
         next.categories = clean;
+        // most relevant changed category that has a graphable slider (highest severity)
+        const scaled = clean.filter((c) => changed.includes(c.key) && c.scale && typeof c.scale.value === "number" && c.scale.max > 0);
+        if (scaled.length) focus = scaled.reduce((a, b) => (b.scale.value / b.scale.max > a.scale.value / a.scale.max ? b : a)).key;
       }
+      if (!focus) { const std = ["pain", "mood", "energy", "sugar"].filter((k) => next[k] != null && next[k] !== base[k]); if (std.length) focus = std.includes("pain") ? "pain" : std[0]; }
       merged = next; say = f.say || "";
     } catch (e) { setErr("Couldn't reach the model to read that — is the backend up?"); }
     setE(merged); eRef.current = merged; persist(merged); setSaved(true); setBusy(false);
+    // Surface the trend the user just talked about, with a blink to draw the eye.
+    if (focus) { setMetric(focus); setMetricBlink(true); clearTimeout(timers.current._blink); timers.current._blink = setTimeout(() => setMetricBlink(false), 1700); }
     // Mic stays OFF through transcription, inference, and Myno's spoken reply —
     // it only comes back on for the next turn (hands-free).
     const resume = () => { if (convoRef.current) voice.start(); };
@@ -708,17 +715,28 @@ function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
 
   // OPT-IN — live trends, correlations & advice from history + this conversation
   const toggleIns = () => { const nv = !insOn; setInsOn(nv); if (nv) runAdvise(); };
-  const METRICS = [["pain", "Pain"], ["mood", "Mood"], ["energy", "Energy"], ["sugar", "Sugar"]].filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet")));
-  const mSel = METRICS.some(([k]) => k === metric) ? metric : (METRICS[0]?.[0] || "pain");
-  const series = logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
+  // Trend metrics = the standard analytics fields PLUS any personalized
+  // categories that carry a slider value (they earn their own line as the days
+  // of logging accumulate; today reflects live slider edits and speech).
+  const seenCats = {};
+  logs.slice(-30).concat([e]).forEach((l) => (l?.categories || []).forEach((c) => { if (c && c.scale && typeof c.scale.value === "number" && c.key) seenCats[c.key] = c.label || c.key; }));
+  const METRICS = [["pain", "Pain"], ["mood", "Mood"], ["energy", "Energy"], ["sugar", "Sugar"]]
+    .filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet")))
+    .map(([k, l]) => [k, l, false])
+    .concat(Object.entries(seenCats).slice(0, 4).map(([k, l]) => [k, l, true]));
+  const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", false];
+  const mSel = mEntry[0]; const mIsCat = mEntry[2];
+  const series = mIsCat
+    ? (() => { let last = 0; return logs.slice(-30).map((l) => { const c = (l.categories || []).find((x) => x.key === mSel); if (c && c.scale && typeof c.scale.value === "number") last = c.scale.value; return last; }); })()
+    : logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
   const insightsPanel = (
-    <Card style={{ padding: 16, position: wide ? "sticky" : "static", top: 88 }}>
+    <Card style={{ padding: 16, position: wide ? "sticky" : "static", top: 88, boxShadow: metricBlink ? `0 0 0 3px ${C.teal}` : SH_SM, transition: "box-shadow .3s ease" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <Label color={C.inkVar}>Live trends</Label>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Label color={C.inkVar}>Live trends</Label>{metricBlink && <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.teal, animation: "pulse 0.8s ease infinite" }} />}</span>
         {advising && <Loader2 size={13} className="spin" color={C.outline} />}
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>{METRICS.map(([k, lbl]) => (
-        <button key={k} onClick={() => setMetric(k)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 11px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.teal : C.container, color: mSel === k ? "#fff" : C.inkVar }}>{lbl}</button>))}</div>
+        <button key={k} onClick={() => setMetric(k)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 11px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.teal : C.container, color: mSel === k ? "#fff" : C.inkVar, animation: (metricBlink && mSel === k) ? "pulse 0.9s ease 2" : "none" }}>{lbl}</button>))}</div>
       {series.length > 1 && (<><Sparkline series={series} /><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.outline, marginTop: 4 }}><span>30d ago</span><span>today</span></div></>)}
       {advice?.headline && <div style={{ display: "flex", gap: 6, alignItems: "flex-start", marginTop: 14, fontFamily: head, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: C.teal }}><Sparkles size={14} color={C.roseOn} style={{ flexShrink: 0, marginTop: 1 }} /> {advice.headline}</div>}
       {advice?.correlations?.length > 0 && (<div style={{ display: "grid", gap: 8, marginTop: 10 }}>{advice.correlations.map((c, i) => (

@@ -47,7 +47,20 @@ def _soften(audio: np.ndarray) -> np.ndarray:
     if audio.size == 0:
         return audio
     peak = float(np.max(np.abs(audio))) or 1.0
-    return (audio / peak * SOFT_GAIN).astype(np.float32)  # normalize, then ease
+    audio = audio / peak * SOFT_GAIN  # normalize, then ease
+    # Trim trailing near-silence (vocoder tail) and apply short fades to remove
+    # the edge clicks / static at the start and (especially) end of each clip.
+    thresh = 0.02
+    nz = np.where(np.abs(audio) > thresh)[0]
+    if nz.size:
+        end = min(audio.size, nz[-1] + int(SAMPLE_RATE * 0.03))  # keep ~30ms tail
+        audio = audio[: end]
+    n = min(int(SAMPLE_RATE * 0.012), audio.size // 2)  # ~12 ms fade
+    if n > 0:
+        ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)
+        audio[:n] *= ramp
+        audio[-n:] *= ramp[::-1]
+    return audio.astype(np.float32)
 
 
 class TTSEngine:
