@@ -197,11 +197,12 @@ def _seed_logs(pid: int, days: int = 120):
     prev_sugar = 1
     for i in range(days, -1, -1):
         d = today - dt.timedelta(days=i)
-        is_start = since == 0
+        bleeding = since < 5            # period spans ~5 days (multi-day, for a realistic calendar)
+        flow = (["heavy", "heavy", "medium", "medium", "light"][since] if bleeding else None)
         premen = since > cycle - 4
         sugar = random.randint(0, 4)
         pain = 1 + random.randint(0, 1) + round(prev_sugar * 0.8)   # high sugar -> next-day pain
-        if is_start or since == 1: pain += 4
+        if since < 2: pain += 4
         if premen: pain += 1
         pain = max(0, min(10, pain))
         sleep = max(0, min(4, 3 - (1 if premen else 0) + random.randint(-1, 1)))
@@ -216,18 +217,18 @@ def _seed_logs(pid: int, days: int = 120):
         acne = (premen and random.random() < 0.7) or random.random() < 0.12
         bloating = pain > 5 or random.random() < 0.2
         data = {
-            "period": is_start, "flow": (random.choice(["heavy", "medium"]) if is_start else None),
+            "period": bleeding, "flow": flow,
             "birthControl": "none",
             "pain": pain, "mood": mood, "energy": energy, "sleep": sleep, "brainFog": brain_fog,
             "sexDrive": sex_drive, "sugar": sugar, "foodDrive": food_drive, "dietExercise": "",
-            "painMap": ("lower abdomen" if (is_start or since == 1) else ""),
+            "painMap": ("lower abdomen" if since < 2 else ""),
             "morningWeight": weight,
             "hairGrowth": random.random() < 0.25, "hairLoss": random.random() < 0.12,
             "acne": acne, "skinPatches": random.random() < 0.05, "hyperpigmentation": random.random() < 0.06,
             "bloating": bloating, "cravings": cravings, "diagnoses": "",
             "categories": _seed_categories(premen, brain_fog, pain), "note": "",
         }
-        s.add(DailyLog(patient_id=pid, date=d, period=is_start, pain=pain, sugar=sugar, mood=mood,
+        s.add(DailyLog(patient_id=pid, date=d, period=bleeding, pain=pain, sugar=sugar, mood=mood,
                        energy=energy, hair_growth=data["hairGrowth"], hair_loss=data["hairLoss"],
                        bloating=bloating, cravings=cravings, note="", data=data))
         prev_sugar = sugar
@@ -753,10 +754,10 @@ Return ONLY JSON, no prose, no code fences:
     s.commit(); s.close()
     return {"reply": reply, "learned": new_desc, "adapt": adapt}
 
-# ----- chatbox-mode: a text-first daily check-in that gathers patient-specific
-# detail (pulling the patient's descriptors, conversation history, adaptation
-# state and tracked cycle from the DB) and then infers the day's tracking
-# markers. This powers the Chat tab.
+# ----- chat: a warm, practical PCOS companion that talks WITH the patient and
+# grounds its guidance in the patient's own tracked insights (trends and
+# correlations computed from their daily logs) plus their personal vocabulary,
+# history and adaptation state from the DB. This powers the Chat tab.
 class ChatboxTurnIn(BaseModel):
     role: str
     text: str
@@ -765,11 +766,27 @@ class ChatboxChatIn(BaseModel):
     message: str
     turns: list[ChatboxTurnIn] = []
 
-class ChatboxExtractIn(BaseModel):
-    text: str
-    context: str = ""
-    blocked: list[str] = []
-    categories: list[dict] = []
+def _insight_brief(ins: dict) -> str:
+    """A compact, prompt-friendly digest of _insight_summary for the chat model."""
+    if not ins or not ins.get("loggedDays"):
+        return "no tracked history yet"
+    parts = [f"{ins['loggedDays']} days logged"]
+    cyc = ins.get("cycle")
+    if cyc:
+        parts.append(f"cycle: {cyc['label'].lower()} (mean {cyc['meanDays']}d, range {cyc['min']}-{cyc['max']}d)")
+    elif ins.get("avgCycleDays"):
+        parts.append(f"avg cycle {round(ins['avgCycleDays'])}d")
+    for key, label in [("avgPain", "pain"), ("avgMood", "mood"), ("avgEnergy", "energy")]:
+        v = ins.get(key)
+        if v:
+            parts.append(f"avg {label} {round(v, 1)}/10")
+    for c in (ins.get("correlations") or [])[:3]:
+        parts.append(f"{c['label']} (strength {c['strength']}/100)")
+    for t in (ins.get("trends") or [])[:3]:
+        parts.append(f"{t['label']} trending {t['direction']}")
+    for c in (ins.get("categoryTrends") or [])[:2]:
+        parts.append(f"{c['label']} avg {round(c['avg'], 1)}/10")
+    return "; ".join(parts)
 
 @app.post("/chatbox/patients/{pid}/chat")
 async def chatbox_chat(pid: int, body: ChatboxChatIn):
@@ -801,43 +818,30 @@ async def chatbox_chat(pid: int, body: ChatboxChatIn):
         if t.role in {"assistant", "user"} and t.text.strip()
     ]
     base_msgs = client_msgs or db_msgs
-    recent_questions = [
-        msg["content"].strip()
-        for msg in base_msgs
-        if msg["role"] == "assistant" and "?" in (msg["content"] or "")
-    ][-6:]
-    recent_question_lines = "\n".join(f"- {q}" for q in recent_questions) or "none"
     msgs = list(base_msgs)
     msgs.append({"role": "user", "content": body.message})
-    avg_gap = _avg_cycle(s, pid)
 
-    system = f"""You are Myno, a calm information-gathering PCOS companion.
-Your job in this chatbox is to understand the patient's situation well enough to infer daily tracking markers at the end of the conversation.
+    avg_gap = _avg_cycle(s, pid)
+    log_rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
+    insight_brief = _insight_brief(_insight_summary([_log_dict(r) for r in log_rows]))
+
+    system = f"""You are Myno, a warm, practical PCOS companion. You are talking WITH this person, and you can see their own tracked data — use it to give grounded, specific, actionable guidance.
+
+THEIR TRACKED INSIGHTS (computed from their logs): {insight_brief}
+Their goals: {p.goals or []}. Avg tracked cycle: {avg_gap} days. Known phrasings -> {desc_lines}. Current read of them: {json.dumps(p.adapt_state or {})}.
 
 EACH TURN:
-- Briefly acknowledge what they said in their own words.
-- Ask ONE new concrete follow-up question that gathers more patient-specific information: timing, duration, severity, cycle pattern, symptoms, triggers, recent changes, or what happened today.
-- Prefer questions that help fill missing daily markers: period today, pain, mood, energy, sugar/cravings, bloating, hair growth/loss, and any personal marker they mention.
-- Reuse the patient's vocabulary. Known phrasings -> {desc_lines}.
-- Adapt to them. Current read: {json.dumps(p.adapt_state or {})}. Goals: {p.goals or []}. Avg tracked cycle: {avg_gap} days.
-
-QUESTION STYLE:
-- Do NOT ask "have you checked this with a doctor", "have you seen a clinician", or similar referral-style questions.
-- Do NOT redirect the conversation to medical appointment logistics.
-- If safety or diagnosis caveats are needed, keep them brief and still ask for more concrete information.
-
-REPEAT AVOIDANCE:
-- Recent questions already asked:
-{recent_question_lines}
-- Do NOT ask a question that is semantically the same as one of those recent questions.
-- If the patient already answered a topic with "no", "none", "not really", "I don't know", or similar, treat that as answered and move to a different daily marker.
-- If several markers remain, rotate to a new slot in this priority: period/timing, pain, mood, energy, cravings/sugar, bloating, hair/skin, personal marker.
+- Briefly acknowledge what they said, in their own words.
+- Lead with help: when it's relevant, connect what they raise to a concrete trend or correlation in THEIR insights above, and give ONE practical, non-diagnostic suggestion they can act on.
+- If their data doesn't cover what they asked, say so plainly and give general, well-grounded PCOS guidance instead of guessing about their numbers.
+- Ask at most ONE short follow-up question, and only when it genuinely helps — prioritise advising over interrogating.
+- Reuse the patient's vocabulary and adapt your tone to them (gentler if distressed, briefer if terse).
 
 HARD CONSTRAINTS:
-- NEVER ask about, request, or volunteer anything in this blocked list: {blocked_labels or 'none'}.
-- NEVER diagnose or say whether they have PCOS.
+- NEVER ask about, reference, or volunteer anything in this blocked list: {blocked_labels or 'none'}.
+- NEVER diagnose or say whether they have PCOS; a clinician decides — offer to help them prepare.
 - No specific drug doses.
-- Keep the reply under ~55 words.
+- Keep the reply under ~80 words.
 
 Return ONLY JSON, no prose, no code fences:
 {{"reply": str,
@@ -866,45 +870,6 @@ Return ONLY JSON, no prose, no code fences:
     s.commit()
     s.close()
     return {"reply": reply, "learned": new_desc, "adapt": adapt}
-
-def _chatbox_extract_sys(blocked: list[str]) -> str:
-    block_line = ", ".join(blocked) if blocked else "none"
-    return (
-        "You are Myno, converting the completed chatbox conversation into daily tracking markers. "
-        "Infer values from the WHOLE conversation. Do not ask follow-up questions in this response.\n"
-        "All numeric marker values MUST be integers from 0 to 10 inclusive.\n"
-        "- pain: 0 means no pain, 5 moderate pain, 10 extreme pain.\n"
-        "- mood: 0 means very low/distressed mood, 5 mixed or neutral mood, 10 very good/steady mood.\n"
-        "- energy: 0 means depleted, 5 moderate energy, 10 very high energy.\n"
-        "- sugar: 0 means no notable sugar intake/cravings, 5 moderate, 10 extreme/high.\n"
-        "- For any personalized category with a scale, ALWAYS use "
-        "{\"scale\":{\"value\":int,\"max\":10}} where value is 0-10. "
-        "Use 10 as the most intense/highest amount/strongest presence for that category.\n"
-        "- Use null for standard numeric fields that cannot be inferred. Use false for boolean fields not mentioned.\n"
-        "- Keep personalized categories in the patient's own words, max 6 categories, stable lower_snake_case keys.\n"
-        f"- NEVER create, infer, or ask about anything in this blocked list: {block_line}.\n"
-        "Return ONLY JSON, no prose, no code fences: "
-        "{\"period\":true|false|null,\"pain\":0-10|null,\"mood\":0-10|null,\"energy\":0-10|null,"
-        "\"sugar\":0-10|null,\"hairGrowth\":bool,\"hairLoss\":bool,\"bloating\":bool,\"cravings\":bool,"
-        "\"categories\":[{\"key\":str,\"label\":str,\"value\":str,\"scale\":{\"value\":int,\"max\":10}}],"
-        "\"say\":str}."
-    )
-
-@app.post("/chatbox/extract")
-async def chatbox_extract(body: ChatboxExtractIn):
-    ctx = (body.context or "").strip()
-    cats = json.dumps(body.categories or [])
-    user = (
-        (f"Conversation so far: {ctx}\n" if ctx else "")
-        + f"Current personalized categories: {cats}\n\n"
-        + f'Completed conversation to score: "{body.text}"'
-    )
-    raw = await claude(_chatbox_extract_sys(body.blocked or []), [{"role": "user", "content": user}], max_tokens=650)
-    try:
-        a, b = raw.index("{"), raw.rindex("}")
-        return json.loads(raw[a:b + 1])
-    except Exception:
-        return {}
 
 # ----- voice → structured daily-log fields + a spoken reply (server-side model;
 # no key in the browser). Myno talks back: acknowledges, and asks ONE clarifying

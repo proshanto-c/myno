@@ -348,18 +348,22 @@ function genSyntheticLogs() {
 }
 const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
 function computeInsights(logs) {
-  const periods = logs.filter((l) => l.period).map((l) => l.date); const gaps = [];
-  for (let i = 1; i < periods.length; i++) gaps.push(Math.round((new Date(periods[i]) - new Date(periods[i - 1])) / 86400000));
+  // periods can span several days; derive cycle STARTS (a period day whose prior
+  // day wasn't one) so cycle length is correct even with multi-day bleeding.
+  const periodDates = logs.filter((l) => l.period).map((l) => l.date).sort();
+  const starts = periodDates.filter((d, i) => i === 0 || (new Date(d) - new Date(periodDates[i - 1])) / 86400000 > 1.5);
+  const gaps = [];
+  for (let i = 1; i < starts.length; i++) gaps.push(Math.round((new Date(starts[i]) - new Date(starts[i - 1])) / 86400000));
   const avgGap = gaps.length ? Math.round(mean(gaps)) : null;
   const hiNext = [], loNext = []; for (let i = 1; i < logs.length; i++) (logs[i - 1].sugar >= 7 ? hiNext : loNext).push(logs[i].pain);
   const painHi = mean(hiNext), painLo = mean(loNext);
   const bloatPain = mean(logs.filter((l) => l.bloating).map((l) => l.pain)); const noBloatPain = mean(logs.filter((l) => !l.bloating).map((l) => l.pain));
-  const last = logs[logs.length - 1]; let lastP = null; for (let i = logs.length - 1; i >= 0; i--) if (logs[i].period) { lastP = logs[i].date; break; }
-  const dayN = lastP ? Math.round((new Date(last.date) - new Date(lastP)) / 86400000) : null;
+  const last = logs[logs.length - 1]; const lastStart = starts.length ? starts[starts.length - 1] : null;
+  const dayN = (last && lastStart) ? Math.round((new Date(last.date) - new Date(lastStart)) / 86400000) : null;
   let highPainGap = 0; for (let i = logs.length - 1; i >= 0; i--) { if (logs[i].pain >= 7) break; highPainGap++; }
   return { avgGap, minGap: gaps.length ? Math.min(...gaps) : null, maxGap: gaps.length ? Math.max(...gaps) : null, gaps,
     painHi, painLo, bloatPain, noBloatPain, hairGrowthRate: mean(logs.map((l) => l.hairGrowth ? 1 : 0)), hairLossRate: mean(logs.map((l) => l.hairLoss ? 1 : 0)),
-    avgPain: mean(logs.map((l) => l.pain)), avgMood: mean(logs.map((l) => l.mood)), periodsLogged: periods.length, dayN, highPainGap, loggedDays: logs.length };
+    avgPain: mean(logs.map((l) => l.pain)), avgMood: mean(logs.map((l) => l.mood)), periodsLogged: starts.length, dayN, highPainGap, loggedDays: logs.length };
 }
 const W = { irregularCycle: 1.7, longCycle: 0.9, mfgHigh: 1.6, selfHirsutism: 0.6, acne: 0.5, alopecia: 0.5, acanthosis: 0.8, highBMI: 0.7, familyHistory: 0.5, weightGain: 0.4, earlyMenarche: 0.3 };
 const sigmoid = (x) => 1 / (1 + Math.exp(-x));
@@ -499,7 +503,7 @@ export default function App() {
       <div style={{ width: "100%", maxWidth: 560 }}><Onboarding profile={profile} setProfile={setProfile} /></div>
     </div>);
 
-  const contentMax = { home: 1140, insights: 1140, advocacy: 900, clinician: 940, prepare: 880, chat: 1100, record: 1180, settings: 640 }[tab] || 1080;
+  const contentMax = { home: 1140, insights: 1140, advocacy: 900, clinician: 940, prepare: 880, chat: 760, record: 1180, settings: 640 }[tab] || 1080;
   // --- desktop / web shell (top navigation bar + wide content — the website view) ---
   if (wide) return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: bodyf, color: C.ink, backgroundImage: GRAD }}>
@@ -600,10 +604,17 @@ function Onboarding({ profile, setProfile }) {
 }
 
 // ---- HOME (dashboard) ------------------------------------------------------
-function HomeScreen({ profile, logs, setLogs, ins, setTab, wide }) {
+function HomeScreen({ profile, logs, setLogs, ins, setTab, wide, settings }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = logs.find((l) => l.date === todayStr);
-  const setPeriod = (v) => { const e = { date: todayStr, period: v, pain: today?.pain ?? 0, sugar: today?.sugar ?? 5, mood: today?.mood ?? 5, energy: today?.energy ?? 5, hairGrowth: today?.hairGrowth || false, hairLoss: today?.hairLoss || false, bloating: today?.bloating || false, cravings: today?.cravings || false, note: today?.note || "" }; setLogs([...logs.filter((l) => l.date !== todayStr), e].sort((a, b) => a.date.localeCompare(b.date))); };
+  const setPeriod = (v) => {
+    // preserve today's full entry (categories, sleep, etc.); only set period, and persist to the DB
+    const base = today || { date: todayStr, pain: 0, sugar: 2, mood: 2, energy: 2, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [] };
+    const entry = { ...base, date: todayStr, period: v };
+    setLogs([...logs.filter((l) => l.date !== todayStr), entry].sort((a, b) => a.date.localeCompare(b.date)));
+    const pid = settings?.patientId;
+    if (pid) { const b = (settings.backendUrl || "/api").replace(/\/$/, ""); fetch(`${b}/patients/${pid}/logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }).catch(() => {}); }
+  };
   const now = new Date(); const phase = ins.dayN == null ? "—" : ins.dayN <= 5 ? "Menstrual" : ins.dayN <= 13 ? "Follicular" : ins.dayN <= 16 ? "Ovulatory" : "Luteal";
   const chips = []; if (today) { if (today.pain >= 6) chips.push("High pain"); else if (today.pain > 0) chips.push("Mild pain"); if (today.hairGrowth || today.hairLoss) chips.push("Hair health"); if (today.bloating) chips.push("Bloating"); if (today.cravings) chips.push("Cravings"); if (today.mood <= 3) chips.push("Low mood"); }
 
@@ -859,19 +870,33 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   // SIDE — the personalized tracker Myno builds from the conversation. New and
   // changed categories rise in and flash a teal "updated" notification.
   const cats = e.categories || [];
-  // Literature insights, shown in BOTH panels when the toggle is on.
+  // Literature → form: research-backed trackers the user can add; each is saved
+  // as a category on the entry, so it flows into the tracker, trends and JSON.
   const EVL = { Strong: [C.tealFixed, C.onTealFixed], Emerging: [C.rose, C.roseOn], Early: [C.container, C.inkVar] };
-  const litSection = (max) => (
-    <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.high}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}><Microscope size={15} color={C.teal} /><span style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: C.inkVar }}>From the literature</span>{(lit === null || lit.length === 0) && <Loader2 size={12} className="spin" color={C.outline} style={{ marginLeft: "auto" }} />}</div>
-      {(lit === null || lit.length === 0) ? <p style={{ fontSize: 12, color: C.outline }}>Scanning recent PCOS research…</p> : (
-        <div style={{ display: "grid", gap: 10 }}>{lit.slice(0, max).map((s, i) => { const [bg, fg] = EVL[s.evidence] || [C.container, C.inkVar]; return (
-          <div key={i}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}><span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13.5 }}>{s.tracker}</span><span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 9, padding: "2px 7px", borderRadius: 9999, background: bg, color: fg, whiteSpace: "nowrap" }}>{s.evidence}</span></div>
-            <p style={{ fontSize: 12, color: C.inkVar, lineHeight: 1.45, margin: "3px 0 2px" }}>{s.explanation}</p>
-            <a href={s.read_more} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11.5, fontWeight: 600, color: C.teal, textDecoration: "none" }}>Read the research →</a>
-          </div>); })}</div>)}
-    </div>);
+  const litKey = (s) => "lit_" + String(s.tracker || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const catVal = (key) => { const c = (e.categories || []).find((x) => x.key === key); return c && c.scale ? c.scale.value : undefined; };
+  const setLitCat = (s, v) => {
+    const key = litKey(s); const cats = (eRef.current.categories || []).slice();
+    const cat = { key, label: s.tracker, value: `${v}/10`, scale: { value: v, max: 10 } };
+    const idx = cats.findIndex((c) => c.key === key); if (idx >= 0) cats[idx] = cat; else cats.push(cat);
+    const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
+  };
+
+  // Remove a single tracker category (literature-based or Myno-built).
+  const removeCat = (key) => {
+    const cats = (eRef.current.categories || []).filter((c) => c.key !== key);
+    const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
+  };
+  // Toggling Literature off also clears the literature-based categories it added.
+  const toggleLit = () => {
+    const nv = !litOn; setLitOn(nv);
+    if (!nv) {
+      const cats = (eRef.current.categories || []).filter((c) => !String(c.key).startsWith("lit_"));
+      if (cats.length !== (eRef.current.categories || []).length) {
+        const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
+      }
+    }
+  };
 
   const dayBlock = (
     <div>
@@ -888,7 +913,10 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: C.inkVar }}>{c.label}
                   {on && <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 10, letterSpacing: "0.06em", color: C.onTealFixed, background: "#fff", borderRadius: 9999, padding: "3px 8px", animation: "pulse 1s ease infinite" }}>UPDATED</span>}</span>
-                {c.value && <span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.teal, textAlign: "right" }}>{String(c.value)}</span>}
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  {c.value && <span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.teal, textAlign: "right" }}>{String(c.value)}</span>}
+                  <button onClick={() => removeCat(c.key)} title="Remove this tracker" style={{ background: "none", border: "none", cursor: "pointer", color: C.outline, display: "grid", placeItems: "center", padding: 2 }}><X size={15} /></button>
+                </span>
               </div>
               {sc && <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
                 <div style={{ flex: 1 }}><Slider value={sc.value} max={sc.max} onChange={(v) => setCatScale(c.key, v)} /></div>
@@ -897,7 +925,6 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
             </div>); })}
         </div>
       )}
-      {litOn && litSection(6)}
     </div>
   );
 
@@ -942,7 +969,6 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
           <button onClick={() => speaker.speak(advice.say)} title="Hear it" style={{ background: "rgba(0,0,0,0.06)", border: "none", borderRadius: 9999, width: 26, height: 26, display: "grid", placeItems: "center", cursor: "pointer", color: C.teal, flexShrink: 0 }}><Volume2 size={13} /></button>
         </div>
       ) : (!advising && <p style={{ fontSize: 12, color: C.inkVar, marginTop: 12 }}>Keep talking — patterns from your history &amp; today show up here.</p>)}
-      {litOn && litSection(3)}
     </Card>);
 
   // The "End conversation" sheet — fill the standard schema fields by hand.
@@ -958,6 +984,19 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
           <Label color={C.inkVar}>{g.group}</Label>
           <div style={{ marginTop: 4 }}>{g.fields.map(field)}</div>
         </div>))}
+        {litOn && (<div style={{ marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Microscope size={14} color={C.teal} /><Label color={C.inkVar}>From the literature · research-backed</Label></div>
+          {(lit === null || lit.length === 0) ? <p style={{ fontSize: 12, color: C.outline, marginTop: 6 }}>Scanning recent PCOS research…</p> : (
+            <div style={{ marginTop: 4 }}>{lit.slice(0, 8).map((s, i) => { const key = litKey(s); const v = catVal(key); const [bg, fg] = EVL[s.evidence] || [C.container, C.inkVar]; return (
+              <div key={i} style={{ padding: "10px 0", borderTop: i ? `1px solid ${C.high}` : "none" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: bodyf, fontSize: 14, color: C.ink }}>{s.tracker}<span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 9, padding: "2px 6px", borderRadius: 9999, background: bg, color: fg }}>{s.evidence}</span></span>
+                  <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: v == null ? C.outline : C.teal }}>{v == null ? "—" : `${v}/10`}</span>
+                </div>
+                <p style={{ fontSize: 11.5, color: C.outline, lineHeight: 1.45, margin: "3px 0 6px" }}>{s.explanation} <a href={s.read_more} target="_blank" rel="noopener noreferrer" style={{ color: C.teal, fontWeight: 600 }}>research →</a></p>
+                <Slider value={v ?? 0} max={10} onChange={(val) => setLitCat(s, val)} />
+              </div>); })}</div>)}
+        </div>)}
         <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
           <Pill variant="soft" onClick={() => setModal(false)} style={{ flex: 1 }}>Keep talking</Pill>
           <Pill onClick={() => { persist(e); saveToDb(e); setSaved(true); setModal(false); if (setTab) setTab("home"); }} style={{ flex: 1 }}><Check size={16} /> {saved ? "Saved" : "Done"}</Pill>
@@ -973,7 +1012,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
         <PersonalityPicker value={settings.personality} onChange={(p) => setSettings((s) => ({ ...s, personality: p }))} />
         <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
-        <Pill variant={litOn ? "filled" : "outline"} onClick={() => setLitOn((v) => !v)} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><Microscope size={15} /> Literature</Pill>
+        <Pill variant={litOn ? "filled" : "outline"} onClick={toggleLit} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><Microscope size={15} /> Literature</Pill>
       </div>
     </div>
     <p style={{ color: C.inkVar, marginBottom: 18 }}>Just talk — Myno listens, talks back, and builds your personal tracker as you go.</p>
@@ -1181,8 +1220,8 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     ) : (<>
       {chipsRow}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
-        <div style={{ display: "grid", gap: 18 }}>{analysisCard}{trendsCard}{explorerCard}</div>
-        <div style={{ display: "grid", gap: 18 }}>{statsLoading && loadingCard}{cycleCard}{correlationsCard}{trendCard}{highlights}</div>
+        <div style={{ display: "grid", gap: 18 }}>{analysisCard}{cycleCard}{explorerCard}</div>
+        <div style={{ display: "grid", gap: 18 }}>{statsLoading && loadingCard}{trendsCard}{correlationsCard}{trendCard}{highlights}</div>
       </div>
       <div style={{ marginTop: 20 }}>{disclaimer}</div>
     </>)}
@@ -1197,8 +1236,8 @@ function InsightsScreen({ ins, logs, settings, wide }) {
       {chipsRow}
       <div style={{ marginBottom: 18 }}>{analysisCard}</div>
       {statsLoading && <div style={{ marginBottom: 18 }}>{loadingCard}</div>}
-      <div style={{ marginBottom: 18 }}>{trendsCard}</div>
       {cycleCard && <div style={{ marginBottom: 18 }}>{cycleCard}</div>}
+      <div style={{ marginBottom: 18 }}>{trendsCard}</div>
       {correlationsCard && <div style={{ marginBottom: 18 }}>{correlationsCard}</div>}
       <div style={{ marginBottom: 18 }}>{explorerCard}</div>
       {trendCard && <div style={{ marginBottom: 18 }}>{trendCard}</div>}
@@ -1275,61 +1314,26 @@ function CorrCard({ icon: Ico, bg, on, habit, symptom, pct, note }) {
   </Card>);
 }
 
-// ---- CHAT: text-first daily check-in. Myno gathers patient-specific detail
-// (the backend pulls the patient's descriptors, history, adaptation state and
-// tracked cycle from the DB), then infers the day's tracking markers, which the
-// patient reviews in the side panel and saves to today's log.
-function ChatScreen({ profile, settings, setLogs, logs, wide }) {
-  const today = new Date().toISOString().slice(0, 10);
+// ---- CHAT: an advisory conversation. The backend grounds Myno's guidance in
+// the patient's own tracked insights (trends + correlations from their logs)
+// plus their personal vocabulary and adaptation state, so the chat can advise
+// rather than just gather information.
+function ChatScreen({ profile, settings }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
   const pid = settings.patientId;
-  const opening = `Hi${profile.name ? " " + profile.name : ""} — let's do today's check-in. Did your period start or continue today, and how have you been feeling so far?`;
-
-  const baseEntry = () => ({ date: today, period: null, pain: 0, mood: 5, energy: 5, sugar: 5, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [] });
-  const fromLog = (l) => l ? { period: l.period ?? null, pain: l.pain ?? 0, mood: l.mood ?? 5, energy: l.energy ?? 5, sugar: l.sugar ?? 5, hairGrowth: !!l.hairGrowth, hairLoss: !!l.hairLoss, bloating: !!l.bloating, cravings: !!l.cravings, note: l.note || "", categories: Array.isArray(l.categories) ? l.categories : [] } : {};
+  const opening = `Hi${profile.name ? " " + profile.name : ""} — I'm here to talk things through. I can see your tracked patterns, so tell me what's on your mind and I'll give you grounded, practical guidance.`;
+  const starters = ["How are my cycles looking?", "What should I focus on this week?", "Why might my pain be flaring?"];
 
   const [turns, setTurns] = useState([{ role: "assistant", text: opening }]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [learned, setLearned] = useState([]);
-  const [entry, setEntry] = useState(() => ({ ...baseEntry(), ...fromLog(logs.find((l) => l.date === today)) }));
-  const [ended, setEnded] = useState(false);
-  const [reviewPending, setReviewPending] = useState(false);
-  const [status, setStatus] = useState("Waiting");
   const scroller = useRef();
   useEffect(() => { scroller.current?.scrollTo(0, scroller.current.scrollHeight); }, [turns, busy]);
 
-  const SLIDERS = [
-    { key: "pain", label: "Pain", words: scaleLabels.pain },
-    { key: "mood", label: "Mood", words: scaleLabels.mood },
-    { key: "energy", label: "Energy", words: scaleLabels.energy },
-    { key: "sugar", label: "Sugar / cravings", words: scaleLabels.sugar },
-  ].filter((m) => !fieldBlocked(settings, m.key));
-  const BOOLS = [
-    { key: "hairGrowth", label: "Hair growth" },
-    { key: "hairLoss", label: "Hair loss" },
-    { key: "bloating", label: "Bloating" },
-    { key: "cravings", label: "Cravings" },
-  ].filter((m) => !fieldBlocked(settings, m.key));
-
-  const cleanCategories = (cats) => (Array.isArray(cats) ? cats : [])
-    .filter((c) => c && c.key && c.label).slice(0, 6)
-    .map((c) => { const scale = normalizedScale(c.scale); return { key: String(c.key).slice(0, 48), label: String(c.label).slice(0, 80), value: c.value ? String(c.value).slice(0, 160) : "", ...(scale ? { scale } : {}) }; });
-
-  const applyFields = (e, f) => {
-    const next = { ...e };
-    const set = (k, v, scale) => { if (v === null || v === undefined || fieldBlocked(settings, k)) return; next[k] = scale ? clampScale(v, k === "pain" ? 0 : 5) : v; };
-    set("period", f.period);
-    set("pain", f.pain, true); set("mood", f.mood, true); set("energy", f.energy, true); set("sugar", f.sugar, true);
-    set("hairGrowth", f.hairGrowth || e.hairGrowth); set("hairLoss", f.hairLoss || e.hairLoss);
-    set("bloating", f.bloating || e.bloating); set("cravings", f.cravings || e.cravings);
-    if (Array.isArray(f.categories)) next.categories = cleanCategories(f.categories);
-    return next;
-  };
-
   const send = async (t) => {
-    const q = (t || text).trim(); if (!q || busy || ended) return;
+    const q = (t || text).trim(); if (!q || busy) return;
     if (!pid) { setError("No patient is set up yet — open the app from Home so Myno can connect to the backend."); return; }
     setError(""); const prior = turns.slice(-20); const next = [...turns, { role: "user", text: q }];
     setTurns(next); setText(""); setBusy(true);
@@ -1345,139 +1349,23 @@ function ChatScreen({ profile, settings, setLogs, logs, wide }) {
     } finally { setBusy(false); }
   };
 
-  const saveLog = async (e) => {
-    const body = { ...e, date: today };
-    if (pid) {
-      const res = await fetch(`${base}/patients/${pid}/logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (!res.ok) throw new Error("Could not save today's log.");
-    }
-    setLogs([...logs.filter((l) => l.date !== today), body].sort((a, b) => a.date.localeCompare(b.date)));
-  };
-
-  const endChat = async () => {
-    if (busy) return;
-    if (!turns.some((t) => t.role === "user" && t.text.trim())) { setError("Answer at least one question first, then Myno can infer your markers."); return; }
-    setError(""); setBusy(true); setStatus("Inferring");
-    try {
-      const transcript = turns.map((t) => `${t.role === "user" ? "Patient" : "Myno"}: ${t.text}`).join("\n");
-      const res = await fetch(`${base}/chatbox/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: transcript, context: entry.note || "", blocked: blockedLabels(settings), categories: entry.categories || [] }) });
-      let f = {}; try { f = await res.json(); } catch (e) {}
-      if (!res.ok) throw new Error(f.detail || "Marker inference failed.");
-      setEntry((e) => applyFields(e, f));
-      setEnded(true); setReviewPending(true); setStatus("Review & save");
-      const say = f.say ? `${f.say} ` : "";
-      setTurns((t0) => [...t0, { role: "assistant", text: `${say}I've inferred today's markers from our chat. Review the panel, adjust anything that feels off, then save your log.` }]);
-    } catch (e) {
-      setError(e?.message || "I couldn't infer the markers."); setStatus("Failed");
-    } finally { setBusy(false); }
-  };
-
-  const confirmLog = async () => {
-    if (busy) return;
-    setBusy(true); setStatus("Saving");
-    try { await saveLog(entry); setReviewPending(false); setStatus("Saved"); setTurns((t0) => [...t0, { role: "assistant", text: "Saved today's log with your confirmed markers." }]); }
-    catch (e) { setError(e?.message || "Save failed."); setStatus("Save failed"); }
-    finally { setBusy(false); }
-  };
-
-  const markerEdit = (patch) => { setEntry((e) => ({ ...e, ...patch })); if (ended) setReviewPending(true); };
-
-  const panel = (
-    <div style={{ display: "grid", gap: 14 }}>
-      <Card style={{ padding: 18 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-          <Label>Daily markers</Label>
-          <span style={{ fontFamily: bodyf, fontSize: 12, color: C.inkVar }}>{status}</span>
-        </div>
-        <p style={{ fontSize: 12, color: C.inkVar, margin: "0 0 14px" }}>Inferred from your chat. Adjust anything, then save to today's log.</p>
-
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontFamily: bodyf, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Period today</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {[["Yes", true], ["No", false]].map(([l, v]) => (
-              <button key={l} onClick={() => markerEdit({ period: v })} style={{ flex: 1, fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "10px 0", borderRadius: 12, cursor: "pointer", border: `1.5px solid ${entry.period === v ? C.teal : C.outlineVar}`, background: entry.period === v ? C.tealFixed : C.surface, color: entry.period === v ? C.tealDark : C.inkVar }}>{l}</button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gap: 14 }}>
-          {SLIDERS.map((m) => (
-            <div key={m.key}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-                <span style={{ fontWeight: 600, color: C.ink }}>{m.label}</span>
-                <span style={{ color: C.teal, fontWeight: 600 }}>{scaleDisplay(entry[m.key], 10, m.words)}</span>
-              </div>
-              <Slider value={clampScale(entry[m.key])} max={10} onChange={(v) => markerEdit({ [m.key]: v })} />
-            </div>
-          ))}
-        </div>
-
-        {BOOLS.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <div style={{ fontFamily: bodyf, fontSize: 13, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Other signals</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {BOOLS.map((m) => { const on = !!entry[m.key]; return (
-                <button key={m.key} onClick={() => markerEdit({ [m.key]: !on })} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "8px 14px", borderRadius: 9999, cursor: "pointer", border: `1.5px solid ${on ? C.rose : C.outlineVar}`, background: on ? C.rose : C.surface, color: on ? C.roseOn : C.inkVar }}>{m.label}</button>); })}
-            </div>
-          </div>
-        )}
-
-        <Pill onClick={confirmLog} disabled={busy} style={{ width: "100%", marginTop: 16 }}>
-          {busy && status === "Saving" ? <Loader2 size={16} className="spin" /> : <Check size={16} />} {status === "Saved" && !reviewPending ? "Saved — update log" : "Save today's log"}
-        </Pill>
-      </Card>
-
-      <Card style={{ padding: 18 }}>
-        <Label>Personal markers</Label>
-        <p style={{ fontSize: 12, color: C.inkVar, margin: "4px 0 12px" }}>In your own words, from what you mention in the chat.</p>
-        {(entry.categories || []).length === 0 ? (
-          <p style={{ fontSize: 13, color: C.inkVar, margin: 0 }}>These appear when you mention symptoms, patterns, or body signals.</p>
-        ) : (
-          <div style={{ display: "grid", gap: 14 }}>
-            {entry.categories.map((c, i) => { const scale = normalizedScale(c.scale); return (
-              <div key={c.key || i}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: scale ? 6 : 0 }}>
-                  <span style={{ fontWeight: 600, color: C.ink }}>{c.label || c.key}</span>
-                  <span style={{ color: scale ? C.teal : C.inkVar, fontWeight: 600 }}>{scale ? `${scale.value}/10` : (c.value || "noted")}</span>
-                </div>
-                {scale && <Slider value={clampScale(scale.value)} max={10} onChange={(v) => markerEdit({ categories: entry.categories.map((x) => x.key === c.key ? { ...x, scale: { value: clampScale(v), max: 10 } } : x) })} />}
-                {scale && c.value && <div style={{ fontSize: 12, color: C.inkVar, marginTop: 4 }}>{c.value}</div>}
-              </div>
-            ); })}
-          </div>
-        )}
-      </Card>
-    </div>
-  );
-
-  const chat = (
+  return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 520 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "6px 0 14px", gap: 12 }}>
-        <H size={26}>Daily check-in</H>
-        <Pill variant="outline" onClick={endChat} disabled={busy || ended} style={{ padding: "10px 16px", fontSize: 14 }}>{ended ? <><Check size={15} /> Chat ended</> : "End chat & infer markers"}</Pill>
-      </div>
-      <div ref={scroller} style={{ flex: 1, overflowY: "auto", display: "grid", gap: 12, paddingBottom: 10, maxHeight: 420 }}>
+      <H size={26} style={{ margin: "6px 0 14px" }}>Talk to Myno</H>
+      <div ref={scroller} style={{ flex: 1, overflowY: "auto", display: "grid", gap: 12, paddingBottom: 10, maxHeight: 460 }}>
         {turns.map((m, i) => (<div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
           {m.role === "assistant" && <LeafMark size={36} />}
           <div style={{ maxWidth: "80%", padding: "13px 16px", borderRadius: 20, fontSize: 15, lineHeight: 1.45, boxShadow: m.role === "user" ? "none" : SH_SM,
             background: m.role === "user" ? C.teal : m.err ? C.rose : C.surface, color: m.role === "user" ? "#fff" : m.err ? C.error : C.ink, borderTopRightRadius: m.role === "user" ? 4 : 20, borderTopLeftRadius: m.role === "user" ? 20 : 4 }}>{m.text}</div></div>))}
-        {busy && !ended && <div style={{ display: "flex", gap: 8, alignItems: "center", color: C.inkVar, fontSize: 13 }}><LeafMark size={36} /><Loader2 size={14} className="spin" /> thinking…</div>}
+        {busy && <div style={{ display: "flex", gap: 8, alignItems: "center", color: C.inkVar, fontSize: 13 }}><LeafMark size={36} /><Loader2 size={14} className="spin" /> thinking…</div>}
       </div>
+      {turns.length <= 1 && (<div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "4px 0 12px" }}>{starters.map((c) => (<button key={c} onClick={() => send(c)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "9px 14px", borderRadius: 9999, background: C.surface, border: `1.5px solid ${C.outlineVar}`, color: C.ink, cursor: "pointer" }}>{c}</button>))}</div>)}
       {learned.length > 0 && (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", margin: "10px 0", fontSize: 12, color: C.inkVar }}><Sparkles size={13} color={C.roseOn} /> Learning your words:{learned.map((d, i) => (<span key={i} style={{ padding: "3px 9px", borderRadius: 12, background: C.rose, color: C.roseOn }}>{d.concept}: "{d.phrase}"</span>))}</div>)}
-      {!ended && (
-        <div style={{ display: "flex", gap: 10, alignItems: "center", background: C.surface, borderRadius: 9999, padding: 6, boxShadow: SH, marginTop: 10 }}>
-          <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Answer Myno…" disabled={busy} style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 16, padding: "8px 14px", background: "transparent" }} />
-          <button onClick={() => send()} disabled={busy || !text.trim()} style={{ width: 44, height: 44, borderRadius: "50%", border: "none", background: C.teal, color: "#fff", display: "grid", placeItems: "center", cursor: busy || !text.trim() ? "not-allowed" : "pointer", opacity: busy || !text.trim() ? 0.5 : 1 }}><ArrowRight size={20} /></button>
-        </div>
-      )}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", background: C.surface, borderRadius: 9999, padding: 6, boxShadow: SH, marginTop: 10 }}>
+        <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Ask Myno anything…" disabled={busy} style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 16, padding: "8px 14px", background: "transparent" }} />
+        <button onClick={() => send()} disabled={busy || !text.trim()} style={{ width: 44, height: 44, borderRadius: "50%", border: "none", background: C.teal, color: "#fff", display: "grid", placeItems: "center", cursor: busy || !text.trim() ? "not-allowed" : "pointer", opacity: busy || !text.trim() ? 0.5 : 1 }}><ArrowRight size={20} /></button>
+      </div>
       {error && <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, padding: "10px 14px", borderRadius: 12, background: C.rose, color: C.error, fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}</div>}
-    </div>
-  );
-
-  return (
-    <div style={{ display: wide ? "grid" : "block", gridTemplateColumns: wide ? "minmax(0,1fr) 340px" : undefined, gap: 22, alignItems: "start" }}>
-      {chat}
-      <div style={{ marginTop: wide ? 0 : 22, position: wide ? "sticky" : "static", top: 88 }}>{panel}</div>
     </div>
   );
 }
