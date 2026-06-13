@@ -138,7 +138,7 @@ async function chatTurn({ settings, message, history, system }) {
 // ---- voice → daily-log fields. Server-side via the backend (no key in the
 // browser; avoids the CORS "Failed to fetch"); direct-Claude only as a demo
 // fallback when a key is set and the backend can't be reached. -----------------
-const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — reply briefly and directly: note what you heard in a few words and move on, warm but matter-of-fact (skip heavy empathy, reassurance, exclamations); INFER ratings/severities yourself and never ask for numbers or 1-to-10 ratings; ask a short clarifying question only when genuinely needed (never about numbers), else just acknowledge (spoken, under ~25 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":int} (max 10 for severity, 5 for amount); KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard tracking fields ONLY when clearly implied. ONLY JSON: {"period":true|false|null,"flow":"none|spotting|light|medium|heavy"|null,"birthControl":str|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sleep":0-4|null,"brainFog":0-4|null,"sexDrive":0-4|null,"sugar":0-4|null,"foodDrive":0-4|null,"dietExercise":str|null,"painMap":str|null,"morningWeight":number|null,"hairGrowth":bool,"hairLoss":bool,"acne":bool,"skinPatches":bool,"hyperpigmentation":bool,"bloating":bool,"cravings":bool,"diagnoses":str|null,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. null/false for fields not mentioned; omit scale where it doesn't fit.`;
+const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — reply briefly and directly: note what you heard in a few words and move on, warm but matter-of-fact (skip heavy empathy, reassurance, exclamations); INFER ratings/severities yourself and never ask for numbers or 1-to-10 ratings; ask a short clarifying question only when genuinely needed (never about numbers), else just acknowledge (spoken, under ~25 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":10} where value is 0-10; KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard tracking fields ONLY when clearly implied. ONLY JSON: {"period":true|false|null,"flow":"none|spotting|light|medium|heavy"|null,"birthControl":str|null,"pain":0-10|null,"mood":0-10|null,"energy":0-10|null,"sleep":0-10|null,"brainFog":0-10|null,"sexDrive":0-10|null,"sugar":0-10|null,"foodDrive":0-10|null,"dietExercise":str|null,"painMap":str|null,"morningWeight":number|null,"hairGrowth":bool,"hairLoss":bool,"acne":bool,"skinPatches":bool,"hyperpigmentation":bool,"bloating":bool,"cravings":bool,"diagnoses":str|null,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. null/false for fields not mentioned; omit scale where it doesn't fit.`;
 // Selectable conversation personalities (only the spoken-reply tone changes).
 const PERSONALITIES = [["direct", "Direct", "Brief and to the point"], ["warm", "Warm", "Gentle and caring"], ["coach", "Coach", "Encouraging, action-first"], ["clinical", "Clinical", "Calm and factual"], ["friend", "Friend", "Casual and relatable"]];
 const PSTYLE = {
@@ -149,6 +149,45 @@ const PSTYLE = {
   friend: "Be casual and conversational like a supportive friend; relaxed and relatable.",
 };
 const pstyle = (p) => PSTYLE[p] || PSTYLE.direct;
+const SCALE_MAX = 10;
+const scaleLabels = {
+  pain: ["none", "moderate", "extreme"],
+  mood: ["very low", "mixed", "very good"],
+  energy: ["depleted", "moderate", "very high"],
+  sleep: ["awful", "moderate", "great"],
+  brainFog: ["none", "moderate", "severe"],
+  sexDrive: ["none", "moderate", "very high"],
+  sugar: ["none", "moderate", "extreme"],
+  foodDrive: ["none", "moderate", "intense"],
+};
+const clampScale = (value, fallback = 0, max = SCALE_MAX) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(max, Math.round(n)));
+};
+const scaleDisplay = (value, max = SCALE_MAX, words = null) => {
+  const v = clampScale(value, 0, max);
+  if (Array.isArray(words) && words.length === max + 1 && words[v]) return `${v}/${max} ${words[v]}`;
+  if (Array.isArray(words) && words.length >= 3) {
+    const i = v <= Math.floor(max / 3) ? 0 : v >= Math.ceil((max * 2) / 3) ? 2 : 1;
+    return `${v}/${max} ${words[i]}`;
+  }
+  return `${v}/${max}`;
+};
+const normalizedScale = (scale) => {
+  if (!scale || typeof scale.value !== "number") return null;
+  const oldMax = Number(scale.max) > 0 ? Number(scale.max) : SCALE_MAX;
+  const value = oldMax === SCALE_MAX ? scale.value : Math.round((scale.value / oldMax) * SCALE_MAX);
+  return { ...scale, value: clampScale(value), max: SCALE_MAX };
+};
+const normalizedCategory = (cat) => {
+  const scale = normalizedScale(cat.scale);
+  if (!scale) {
+    const { scale: _scale, ...rest } = cat;
+    return rest;
+  }
+  return { ...cat, scale };
+};
 
 // The saved daily log is JSON shaped by this schema. Speech fills what it can;
 // the rest is filled in the "End conversation" sheet. Users can also add their
@@ -160,18 +199,19 @@ const LOG_SCHEMA = [
     { key: "birthControl", label: "Birth control", type: "text", placeholder: "pill, IUD, none…" },
   ] },
   { group: "Wellbeing", fields: [
-    { key: "mood", label: "Mood", type: "scale", words: ["very low", "low", "okay", "good", "great"] },
-    { key: "energy", label: "Energy", type: "scale", words: ["drained", "low", "okay", "good", "high"] },
-    { key: "sleep", label: "Sleep", type: "scale", words: ["awful", "poor", "okay", "good", "great"] },
-    { key: "brainFog", label: "Brain fog", type: "scale", words: ["none", "mild", "some", "heavy", "severe"] },
-    { key: "sexDrive", label: "Sex drive", type: "scale", words: ["none", "low", "okay", "high", "very high"] },
+    { key: "mood", label: "Mood", type: "scale", max: SCALE_MAX, words: scaleLabels.mood },
+    { key: "energy", label: "Energy", type: "scale", max: SCALE_MAX, words: scaleLabels.energy },
+    { key: "sleep", label: "Sleep", type: "scale", max: SCALE_MAX, words: scaleLabels.sleep },
+    { key: "brainFog", label: "Brain fog", type: "scale", max: SCALE_MAX, words: scaleLabels.brainFog },
+    { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive },
   ] },
   { group: "Body", fields: [
-    { key: "pain", label: "Pain", type: "scale", max: 10 },
+    { key: "pain", label: "Pain", type: "scale", max: SCALE_MAX, words: scaleLabels.pain },
     { key: "painMap", label: "Where it hurts", type: "text", placeholder: "lower back, pelvis…" },
     { key: "morningWeight", label: "Morning weight (kg)", type: "number", placeholder: "kg" },
     { key: "cravings", label: "Cravings", type: "bool" },
-    { key: "foodDrive", label: "Food drive", type: "scale", words: ["none", "low", "okay", "high", "intense"] },
+    { key: "sugar", label: "Sugar / cravings", type: "scale", max: SCALE_MAX, words: scaleLabels.sugar },
+    { key: "foodDrive", label: "Food drive", type: "scale", max: SCALE_MAX, words: scaleLabels.foodDrive },
     { key: "dietExercise", label: "Diet & exercise", type: "text", placeholder: "from Health app or notes" },
   ] },
   { group: "Skin & hair", fields: [
@@ -185,7 +225,7 @@ const LOG_SCHEMA = [
     { key: "diagnoses", label: "Existing diagnoses", type: "text", placeholder: "PCOS, thyroid… (optional)" },
   ] },
 ];
-const SCHEMA_DEFAULTS = { flow: null, birthControl: "", sleep: 2, brainFog: 0, sexDrive: 2, painMap: "", morningWeight: null, foodDrive: 2, dietExercise: "", acne: false, skinPatches: false, hyperpigmentation: false, diagnoses: "" };
+const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, sugar: 5, flow: null, birthControl: "", sleep: 5, brainFog: 0, sexDrive: 5, painMap: "", morningWeight: null, foodDrive: 5, dietExercise: "", acne: false, skinPatches: false, hyperpigmentation: false, diagnoses: "" };
 async function extractFields({ settings, text, context = "", blocked = [], categories = [], personality = "direct" }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
   try {
@@ -298,11 +338,11 @@ function genSyntheticLogs() {
   const logs = [], today = new Date(); const cyc = () => 38 + Math.floor(Math.random() * 8); let since = 3, cur = cyc();
   for (let i = 89; i >= 0; i--) {
     const d = new Date(today); d.setDate(d.getDate() - i); const date = d.toISOString().slice(0, 10);
-    const sugar = Math.floor(Math.random() * 5); const prev = logs.length ? logs[logs.length - 1].sugar : 0; const isP = since === 0;
+    const sugar = Math.floor(Math.random() * 11); const prev = logs.length ? logs[logs.length - 1].sugar : 0; const isP = since === 0;
     let pain = 1 + Math.round(Math.random()); if (isP || since === 1) pain += 4; pain += Math.round(prev * 0.9); pain = Math.max(0, Math.min(10, pain));
-    const pre = since > cur - 3; const mood = Math.max(0, Math.min(4, 3 - (pre ? 2 : 0) - (pain > 6 ? 1 : 0) + Math.round(Math.random() - 0.5)));
-    const energy = Math.max(0, Math.min(4, 3 - (pain > 6 ? 1 : 0) + Math.round(Math.random() - 0.5)));
-    logs.push({ date, period: isP, pain, sugar, mood, energy, hairGrowth: Math.random() < 0.28, hairLoss: Math.random() < 0.14, bloating: pain > 5 || Math.random() < 0.2, cravings: prev > 2 || Math.random() < 0.2, note: "" });
+    const pre = since > cur - 3; const mood = Math.max(0, Math.min(10, 7 - (pre ? 4 : 0) - (pain > 6 ? 2 : 0) + Math.round((Math.random() - 0.5) * 2)));
+    const energy = Math.max(0, Math.min(10, 7 - (pain > 6 ? 2 : 0) + Math.round((Math.random() - 0.5) * 2)));
+    logs.push({ date, period: isP, pain, sugar, mood, energy, hairGrowth: Math.random() < 0.28, hairLoss: Math.random() < 0.14, bloating: pain > 5 || Math.random() < 0.2, cravings: prev > 6 || Math.random() < 0.2, note: "" });
     since++; if (since >= cur) { since = 0; cur = cyc(); }
   }
   return logs;
@@ -312,7 +352,7 @@ function computeInsights(logs) {
   const periods = logs.filter((l) => l.period).map((l) => l.date); const gaps = [];
   for (let i = 1; i < periods.length; i++) gaps.push(Math.round((new Date(periods[i]) - new Date(periods[i - 1])) / 86400000));
   const avgGap = gaps.length ? Math.round(mean(gaps)) : null;
-  const hiNext = [], loNext = []; for (let i = 1; i < logs.length; i++) (logs[i - 1].sugar >= 3 ? hiNext : loNext).push(logs[i].pain);
+  const hiNext = [], loNext = []; for (let i = 1; i < logs.length; i++) (logs[i - 1].sugar >= 7 ? hiNext : loNext).push(logs[i].pain);
   const painHi = mean(hiNext), painLo = mean(loNext);
   const bloatPain = mean(logs.filter((l) => l.bloating).map((l) => l.pain)); const noBloatPain = mean(logs.filter((l) => !l.bloating).map((l) => l.pain));
   const last = logs[logs.length - 1]; let lastP = null; for (let i = logs.length - 1; i >= 0; i--) if (logs[i].period) { lastP = logs[i].date; break; }
@@ -549,9 +589,9 @@ function Onboarding({ profile, setProfile }) {
 function HomeScreen({ profile, logs, setLogs, ins, setTab, wide }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = logs.find((l) => l.date === todayStr);
-  const setPeriod = (v) => { const e = { date: todayStr, period: v, pain: today?.pain ?? 0, sugar: today?.sugar ?? 2, mood: today?.mood ?? 2, energy: today?.energy ?? 2, hairGrowth: today?.hairGrowth || false, hairLoss: today?.hairLoss || false, bloating: today?.bloating || false, cravings: today?.cravings || false, note: today?.note || "" }; setLogs([...logs.filter((l) => l.date !== todayStr), e].sort((a, b) => a.date.localeCompare(b.date))); };
+  const setPeriod = (v) => { const e = { date: todayStr, period: v, pain: today?.pain ?? 0, sugar: today?.sugar ?? 5, mood: today?.mood ?? 5, energy: today?.energy ?? 5, hairGrowth: today?.hairGrowth || false, hairLoss: today?.hairLoss || false, bloating: today?.bloating || false, cravings: today?.cravings || false, note: today?.note || "" }; setLogs([...logs.filter((l) => l.date !== todayStr), e].sort((a, b) => a.date.localeCompare(b.date))); };
   const now = new Date(); const phase = ins.dayN == null ? "—" : ins.dayN <= 5 ? "Menstrual" : ins.dayN <= 13 ? "Follicular" : ins.dayN <= 16 ? "Ovulatory" : "Luteal";
-  const chips = []; if (today) { if (today.pain >= 6) chips.push("High pain"); else if (today.pain > 0) chips.push("Mild pain"); if (today.hairGrowth || today.hairLoss) chips.push("Hair health"); if (today.bloating) chips.push("Bloating"); if (today.cravings) chips.push("Cravings"); if (today.mood <= 1) chips.push("Low mood"); }
+  const chips = []; if (today) { if (today.pain >= 6) chips.push("High pain"); else if (today.pain > 0) chips.push("Mild pain"); if (today.hairGrowth || today.hairLoss) chips.push("Hair health"); if (today.bloating) chips.push("Bloating"); if (today.cravings) chips.push("Cravings"); if (today.mood <= 3) chips.push("Low mood"); }
 
   const periodCard = (
     <Card style={{ borderRadius: 20, padding: 24, boxShadow: SH }}>
@@ -658,7 +698,7 @@ function PersonalityPicker({ value, onChange }) {
 function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const existing = logs.find((l) => l.date === todayStr);
-  const [e, setE] = useState(existing ? { ...SCHEMA_DEFAULTS, ...existing } : { date: todayStr, period: null, pain: 0, sugar: 2, mood: 2, energy: 2, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [], ...SCHEMA_DEFAULTS });
+  const [e, setE] = useState(existing ? { ...SCHEMA_DEFAULTS, ...existing } : { date: todayStr, period: null, pain: 0, sugar: 5, mood: 5, energy: 5, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [], ...SCHEMA_DEFAULTS });
   const eRef = useRef(e); useEffect(() => { eRef.current = e; }, [e]);
   const convoRef = useRef(false);  // hands-free intent: auto-resume the mic between turns
   const [saved, setSaved] = useState(false);
@@ -696,7 +736,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   const set = (k, v) => { const n = { ...eRef.current, [k]: v }; setE(n); eRef.current = n; persist(n); setSaved(true); };
   // The user can override an inferred category slider; their value is kept.
   const setCatScale = (key, v) => {
-    const cats = (eRef.current.categories || []).map((c) => c.key === key ? { ...c, scale: { ...(c.scale || { max: 10 }), value: v } } : c);
+    const cats = (eRef.current.categories || []).map((c) => c.key === key ? { ...c, scale: { ...(normalizedScale(c.scale) || {}), value: clampScale(v), max: SCALE_MAX } } : c);
     const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
   };
   // Render one schema field as an input for the "End conversation" sheet.
@@ -705,10 +745,10 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     const wrap = { padding: "10px 12px", borderRadius: 12, background: on ? C.tealFixed : "transparent", transition: "background-color .3s ease" };
     const labelEl = (<span style={{ fontFamily: bodyf, fontSize: 14, color: C.ink, display: "inline-flex", alignItems: "center", gap: 6 }}>{f.label}{on && <span style={{ fontFamily: bodyf, fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", color: C.teal, background: "#fff", borderRadius: 9999, padding: "2px 7px" }}>HEARD</span>}</span>);
     if (f.type === "scale") {
-      const max = f.max || 4; const disp = (f.words && max <= 4 && v != null) ? f.words[v] : `${v ?? 0}${max > 4 ? `/${max}` : ""}`;
+      const max = f.max || SCALE_MAX; const disp = scaleDisplay(v ?? 0, max, f.words);
       return (<div key={f.key} style={wrap}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>{labelEl}<span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.teal }}>{disp}</span></div>
-        <Slider value={v ?? 0} max={max} onChange={(val) => set(f.key, val)} /></div>);
+        <Slider value={clampScale(v, 0, max)} max={max} onChange={(val) => set(f.key, clampScale(val, 0, max))} /></div>);
     }
     const control = f.type === "bool" ? (<div style={{ display: "flex", gap: 6 }}>{[["No", false], ["Yes", true]].map(([lbl, val]) => <Chip key={lbl} active={v === val} onClick={() => set(f.key, v === val ? null : val)}>{lbl}</Chip>)}</div>)
       : f.type === "select" ? (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>{f.options.map((o) => <Chip key={o} active={v === o} onClick={() => set(f.key, v === o ? null : o)}>{o}</Chip>)}</div>)
@@ -733,11 +773,12 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     let merged = base; let say = ""; let focus = null;
     try {
       const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), categories: eRef.current.categories || [], personality: settings.personality });
+      const scaleValue = (key) => f[key] == null ? base[key] : clampScale(f[key], base[key] ?? 0);
       const next = { ...base,
         period: f.period ?? base.period, flow: f.flow || base.flow, birthControl: f.birthControl || base.birthControl,
-        pain: f.pain ?? base.pain, mood: f.mood ?? base.mood, energy: f.energy ?? base.energy,
-        sleep: f.sleep ?? base.sleep, brainFog: f.brainFog ?? base.brainFog, sexDrive: f.sexDrive ?? base.sexDrive,
-        sugar: f.sugar ?? base.sugar, foodDrive: f.foodDrive ?? base.foodDrive,
+        pain: scaleValue("pain"), mood: scaleValue("mood"), energy: scaleValue("energy"),
+        sleep: scaleValue("sleep"), brainFog: scaleValue("brainFog"), sexDrive: scaleValue("sexDrive"),
+        sugar: scaleValue("sugar"), foodDrive: scaleValue("foodDrive"),
         dietExercise: f.dietExercise || base.dietExercise, painMap: f.painMap || base.painMap, morningWeight: f.morningWeight ?? base.morningWeight,
         hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, acne: f.acne || base.acne,
         skinPatches: f.skinPatches || base.skinPatches, hyperpigmentation: f.hyperpigmentation || base.hyperpigmentation,
@@ -747,7 +788,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
       if (heard.length) setSpoken((p) => { const n = { ...p }; heard.forEach((k) => (n[k] = true)); return n; });
       if (Array.isArray(f.categories)) {
         const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, JSON.stringify([c.value, c.scale?.value])]));
-        const clean = f.categories.filter((c) => c && c.key && c.label).slice(0, 6);
+        const clean = f.categories.filter((c) => c && c.key && c.label).slice(0, 6).map(normalizedCategory);
         const changed = clean.filter((c) => prevMap[c.key] !== JSON.stringify([c.value, c.scale?.value])).map((c) => c.key);
         lightUp(changed);
         next.categories = clean;
@@ -808,7 +849,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
         <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.5 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;As you talk, Myno builds a tracker here — in your own words.</Card>
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
-          {cats.map((c) => { const on = !!flash[c.key]; const sc = c.scale && typeof c.scale.value === "number" && c.scale.max > 0 ? c.scale : null; return (
+          {cats.map((c) => { const on = !!flash[c.key]; const sc = normalizedScale(c.scale); return (
             <div key={c.key} style={{ position: "relative", background: on ? C.tealFixed : C.surface, boxShadow: on ? `0 0 0 3px ${C.teal}` : SH_SM, borderRadius: 16, padding: "13px 16px", transition: "box-shadow .35s ease, background-color .35s ease", animation: on ? "rise .3s ease" : "none" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: C.inkVar }}>{c.label}
@@ -833,7 +874,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   // of logging accumulate; today reflects live slider edits and speech).
   const STD_KEYS = new Set(["pain", "mood", "energy", "sugar"]);
   const seenCats = {};  // keyed by category key → last label wins (no key dupes)
-  logs.slice(-30).concat([e]).forEach((l) => (l?.categories || []).forEach((c) => { if (c && c.scale && typeof c.scale.value === "number" && c.key && !STD_KEYS.has(c.key)) seenCats[c.key] = c.label || c.key; }));
+  logs.slice(-30).concat([e]).forEach((l) => (l?.categories || []).forEach((c) => { if (c && normalizedScale(c.scale) && c.key && !STD_KEYS.has(c.key)) seenCats[c.key] = c.label || c.key; }));
   const usedLabels = new Set(["pain", "mood", "energy", "sugar"]);  // also dedupe by display label
   const catEntries = [];
   for (const [k, l] of Object.entries(seenCats)) { const n = String(l).trim().toLowerCase(); if (usedLabels.has(n)) continue; usedLabels.add(n); catEntries.push([k, l, true]); }
@@ -844,7 +885,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", false];
   const mSel = mEntry[0]; const mIsCat = mEntry[2];
   const series = mIsCat
-    ? (() => { let last = 0; return logs.slice(-30).map((l) => { const c = (l.categories || []).find((x) => x.key === mSel); if (c && c.scale && typeof c.scale.value === "number") last = c.scale.value; return last; }); })()
+    ? (() => { let last = 0; return logs.slice(-30).map((l) => { const c = (l.categories || []).find((x) => x.key === mSel); const scale = normalizedScale(c?.scale); if (scale) last = scale.value; return last; }); })()
     : logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
   const insightsPanel = (
     <Card style={{ padding: 16, position: wide ? "sticky" : "static", top: 88, boxShadow: metricBlink ? `0 0 0 3px ${C.teal}` : SH_SM, transition: "box-shadow .3s ease" }}>
@@ -909,9 +950,10 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   </div>);
 }
 function ScaleRow({ label, value, onChange, words, flash }) {
+  const v = clampScale(value);
   return (<div style={{ borderRadius: 12, padding: 8, margin: -8, transition: "background-color .35s ease", background: flash ? C.tealFixed : "transparent" }}>
-    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><span style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{label}</span><span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: flash ? C.tealDark : C.teal }}>{words[value]}</span></div>
-    <Slider value={value} max={4} onChange={onChange} /></div>);
+    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><span style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{label}</span><span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: flash ? C.tealDark : C.teal }}>{scaleDisplay(v, SCALE_MAX, words)}</span></div>
+    <Slider value={v} max={SCALE_MAX} onChange={(next) => onChange(clampScale(next))} /></div>);
 }
 function MicBtn({ listening, onClick, size = 46 }) {
   return (<button onClick={onClick} style={{ width: size, height: size, borderRadius: "50%", border: "none", cursor: "pointer", display: "grid", placeItems: "center", flexShrink: 0, background: listening ? C.roseOn : C.teal, color: "#fff", boxShadow: listening ? `0 0 0 5px ${C.rose}` : "none", animation: listening ? "pulse 1.4s infinite" : "none" }}>{listening ? <MicOff size={size * 0.42} /> : <Mic size={size * 0.42} />}</button>);

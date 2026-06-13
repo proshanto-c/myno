@@ -270,6 +270,48 @@ class ExtractIn(BaseModel):
     categories: list[dict] = []
     personality: str = "direct"
 
+_SCALE_10_FIELDS = {"pain", "mood", "energy", "sleep", "brainFog", "sexDrive", "sugar", "foodDrive"}
+
+def _clamp_10(value):
+    try:
+        return max(0, min(10, round(float(value))))
+    except Exception:
+        return None
+
+def _normalize_category_scale(scale):
+    if not isinstance(scale, dict) or scale.get("value") is None:
+        return None
+    try:
+        old_max = float(scale.get("max") or 10)
+    except Exception:
+        old_max = 10
+    value = _clamp_10((float(scale["value"]) / old_max) * 10 if old_max > 0 and old_max != 10 else scale["value"])
+    if value is None:
+        return None
+    return {**scale, "value": value, "max": 10}
+
+def _normalize_extract_payload(payload):
+    if not isinstance(payload, dict):
+        return {}
+    out = dict(payload)
+    for key in _SCALE_10_FIELDS:
+        if key in out and out[key] is not None:
+            out[key] = _clamp_10(out[key])
+    if isinstance(out.get("categories"), list):
+        cats = []
+        for cat in out["categories"][:6]:
+            if not isinstance(cat, dict):
+                continue
+            clean = dict(cat)
+            scale = _normalize_category_scale(clean.get("scale"))
+            if scale:
+                clean["scale"] = scale
+            else:
+                clean.pop("scale", None)
+            cats.append(clean)
+        out["categories"] = cats
+    return out
+
 def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
     block_line = ", ".join(blocked) if blocked else "none"
     return (
@@ -281,17 +323,17 @@ def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
         "(e.g. {\"key\":\"brain_fog\",\"label\":\"Brain fog\",\"value\":\"heavy this morning\"}). Reuse the same key when updating an existing one; add a new category when they raise something new; drop nothing unless clearly resolved. "
         "'value' is a short human phrase in their language. Build on the categories provided; keep keys stable (lower_snake_case).\n"
         "- When a category is naturally a rating, severity, intensity, amount, or frequency, ALSO include "
-        "\"scale\":{\"value\":int,\"max\":int}: infer the current value and a sensible max (10 for pain/severity/intensity, 5 for amount/frequency). "
+        "\"scale\":{\"value\":int,\"max\":10}: infer the current value as an integer from 0 to 10. "
         "Omit 'scale' for purely qualitative categories. IMPORTANT: a category may already carry a user-set scale value — KEEP that value unless they clearly state a new one in speech.\n"
         f"- NEVER create a category for, ask about, or volunteer anything in this blocked list: {block_line}.\n"
         "- Also fill any standard tracking fields ONLY when clearly implied by what they said; otherwise use null/false. Never force a value.\n"
         "Return ONLY JSON, no prose, no code fences: "
         '{"period":true|false|null,"flow":"none"|"spotting"|"light"|"medium"|"heavy"|null,"birthControl":str|null,'
-        '"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sleep":0-4|null,"brainFog":0-4|null,"sexDrive":0-4|null,'
-        '"sugar":0-4|null,"foodDrive":0-4|null,"dietExercise":str|null,"painMap":str|null,"morningWeight":number|null,'
+        '"pain":0-10|null,"mood":0-10|null,"energy":0-10|null,"sleep":0-10|null,"brainFog":0-10|null,"sexDrive":0-10|null,'
+        '"sugar":0-10|null,"foodDrive":0-10|null,"dietExercise":str|null,"painMap":str|null,"morningWeight":number|null,'
         '"hairGrowth":bool,"hairLoss":bool,"acne":bool,"skinPatches":bool,"hyperpigmentation":bool,"bloating":bool,"cravings":bool,'
         '"diagnoses":str|null,'
-        '"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. '
+        '"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. '
         "Use null/false for fields not mentioned; omit 'scale' where it doesn't fit."
     )
 
@@ -307,7 +349,7 @@ async def extract(body: ExtractIn):
     raw = await claude(_extract_sys(body.blocked or [], body.personality), [{"role": "user", "content": user}], max_tokens=500)
     try:
         a, b = raw.index("{"), raw.rindex("}")
-        return json.loads(raw[a:b + 1])
+        return _normalize_extract_payload(json.loads(raw[a:b + 1]))
     except Exception:
         return {}
 
