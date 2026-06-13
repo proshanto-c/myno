@@ -139,7 +139,7 @@ async function chatTurn({ settings, message, history, system }) {
 // fallback when a key is set and the backend can't be reached. -----------------
 const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — reply briefly and directly: note what you heard in a few words and move on, warm but matter-of-fact (skip heavy empathy, reassurance, exclamations); INFER ratings/severities yourself and never ask for numbers or 1-to-10 ratings; ask a short clarifying question only when genuinely needed (never about numbers), else just acknowledge (spoken, under ~25 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":int} (max 10 for severity, 5 for amount); KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard analytics fields when clearly implied. ONLY JSON: {"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. null/false for standard fields not mentioned; omit scale where it doesn't fit.`;
 // Selectable conversation personalities (only the spoken-reply tone changes).
-const PERSONALITIES = [["direct", "Direct"], ["warm", "Warm"], ["coach", "Coach"], ["clinical", "Clinical"], ["friend", "Friend"]];
+const PERSONALITIES = [["direct", "Direct", "Brief and to the point"], ["warm", "Warm", "Gentle and caring"], ["coach", "Coach", "Encouraging, action-first"], ["clinical", "Clinical", "Calm and factual"], ["friend", "Friend", "Casual and relatable"]];
 const PSTYLE = {
   direct: "Be brief and matter-of-fact; skip heavy empathy, reassurance and exclamations.",
   warm: "Be gentle and empathetic; acknowledge how they feel in a caring way, then move on.",
@@ -590,6 +590,23 @@ function CycleCalendar({ logs }) {
 }
 
 // ---- RECORD (quiz / convo) -------------------------------------------------
+function PersonalityPicker({ value, onChange }) {
+  const [open, setOpen] = useState(false); const ref = useRef(null);
+  useEffect(() => { const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  const cur = PERSONALITIES.find(([k]) => k === (value || "direct")) || PERSONALITIES[0];
+  return (<div ref={ref} style={{ position: "relative", flexShrink: 0 }}>
+    <button onClick={() => setOpen((o) => !o)} title="Myno's personality" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "0 14px", height: 48, borderRadius: 9999, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8, background: C.surface, color: C.teal, border: `1.5px solid ${C.teal}` }}>
+      <Sparkles size={15} /> {cur[1]} <ChevronRight size={15} style={{ transform: `rotate(${open ? -90 : 90}deg)`, transition: "transform .2s ease" }} />
+    </button>
+    {open && (<div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 40, background: C.surface, borderRadius: 16, boxShadow: SH, padding: 6, width: 220 }}>
+      {PERSONALITIES.map(([k, lbl, desc]) => { const on = k === (value || "direct"); return (
+        <button key={k} onClick={() => { onChange(k); setOpen(false); }} style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 10, textAlign: "left", padding: "10px 12px", borderRadius: 12, border: "none", cursor: "pointer", background: on ? C.tealFixed : "transparent" }}>
+          <span><div style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 14, color: on ? C.onTealFixed : C.ink }}>{lbl}</div><div style={{ fontFamily: bodyf, fontSize: 12, color: on ? C.tealDark : C.inkVar }}>{desc}</div></span>
+          {on && <Check size={16} color={C.teal} style={{ flexShrink: 0 }} />}
+        </button>); })}
+    </div>)}
+  </div>);
+}
 function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const existing = logs.find((l) => l.date === todayStr);
@@ -773,9 +790,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 4, flexWrap: "wrap" }}>
       <H size={26}>Record your day</H>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-        <select value={settings.personality || "direct"} onChange={(ev) => setSettings((s) => ({ ...s, personality: ev.target.value }))} title="Myno's personality" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "11px 12px", borderRadius: 9999, border: `1.5px solid ${C.outlineVar}`, background: C.surface, color: C.ink, cursor: "pointer", outline: "none" }}>
-          {PERSONALITIES.map(([k, lbl]) => <option key={k} value={k}>{lbl}</option>)}
-        </select>
+        <PersonalityPicker value={settings.personality} onChange={(p) => setSettings((s) => ({ ...s, personality: p }))} />
         <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
       </div>
     </div>
