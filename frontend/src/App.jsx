@@ -655,7 +655,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   const [reply, setReply] = useState(""); const speaker = useSpeaker(settings);
   const [flash, setFlash] = useState({}); const timers = useRef({});
   const [insOn, setInsOn] = useState(false); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
-  const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false);  // "End conversation" reveals & lets you fill the standard fields
+  const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false); const [spoken, setSpoken] = useState({});  // schema fields Myno heard from speech
   const insRef = useRef(false); useEffect(() => { insRef.current = insOn; }, [insOn]);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
 
@@ -690,11 +690,12 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   };
   // Render one schema field as an input for the "End conversation" sheet.
   const field = (f) => {
-    const v = e[f.key];
-    const labelEl = <span style={{ fontFamily: bodyf, fontSize: 14, color: C.ink }}>{f.label}</span>;
+    const v = e[f.key]; const on = !!spoken[f.key];
+    const wrap = { padding: "10px 12px", borderRadius: 12, background: on ? C.tealFixed : "transparent", transition: "background-color .3s ease" };
+    const labelEl = (<span style={{ fontFamily: bodyf, fontSize: 14, color: C.ink, display: "inline-flex", alignItems: "center", gap: 6 }}>{f.label}{on && <span style={{ fontFamily: bodyf, fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", color: C.teal, background: "#fff", borderRadius: 9999, padding: "2px 7px" }}>HEARD</span>}</span>);
     if (f.type === "scale") {
       const max = f.max || 4; const disp = (f.words && max <= 4 && v != null) ? f.words[v] : `${v ?? 0}${max > 4 ? `/${max}` : ""}`;
-      return (<div key={f.key} style={{ padding: "10px 0" }}>
+      return (<div key={f.key} style={wrap}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>{labelEl}<span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.teal }}>{disp}</span></div>
         <Slider value={v ?? 0} max={max} onChange={(val) => set(f.key, val)} /></div>);
     }
@@ -702,7 +703,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
       : f.type === "select" ? (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>{f.options.map((o) => <Chip key={o} active={v === o} onClick={() => set(f.key, v === o ? null : o)}>{o}</Chip>)}</div>)
       : f.type === "number" ? (<input type="number" value={v ?? ""} onChange={(ev) => set(f.key, ev.target.value === "" ? null : Number(ev.target.value))} placeholder={f.placeholder || ""} style={{ ...input, width: 120, padding: "9px 11px", fontSize: 14 }} />)
       : (<input value={v || ""} onChange={(ev) => set(f.key, ev.target.value)} placeholder={f.placeholder || ""} style={{ ...input, width: 210, padding: "9px 11px", fontSize: 14 }} />);
-    return (<div key={f.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "10px 0" }}>{labelEl}<div style={{ flexShrink: 0 }}>{control}</div></div>);
+    return (<div key={f.key} style={{ ...wrap, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>{labelEl}<div style={{ flexShrink: 0 }}>{control}</div></div>);
   };
 
   // Light up whichever fields just changed, then fade the highlight out.
@@ -730,6 +731,9 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
         hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, acne: f.acne || base.acne,
         skinPatches: f.skinPatches || base.skinPatches, hyperpigmentation: f.hyperpigmentation || base.hyperpigmentation,
         bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings, diagnoses: f.diagnoses || base.diagnoses };
+      // remember which schema fields actually came from speech (to highlight them)
+      const heard = ["period", "flow", "birthControl", "pain", "mood", "energy", "sleep", "brainFog", "sexDrive", "sugar", "foodDrive", "dietExercise", "painMap", "morningWeight", "hairGrowth", "hairLoss", "acne", "skinPatches", "hyperpigmentation", "bloating", "cravings", "diagnoses"].filter((k) => { const x = f[k]; return x !== null && x !== undefined && x !== false && x !== ""; });
+      if (heard.length) setSpoken((p) => { const n = { ...p }; heard.forEach((k) => (n[k] = true)); return n; });
       if (Array.isArray(f.categories)) {
         const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, JSON.stringify([c.value, c.scale?.value])]));
         const clean = f.categories.filter((c) => c && c.key && c.label).slice(0, 6);
@@ -783,9 +787,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   // SIDE — the personalized tracker Myno builds from the conversation. New and
   // changed categories rise in and flash a teal "updated" notification.
   const cats = e.categories || [];
-  const dayBlock = !ended ? (
-    <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.55 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;Your day builds as you talk. Press <b>End conversation</b> to review and add details.</Card>
-  ) : (
+  const dayBlock = (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <Label color={C.inkVar}>Your day so far</Label>
