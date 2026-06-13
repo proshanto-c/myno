@@ -604,6 +604,38 @@ function Onboarding({ profile, setProfile }) {
 }
 
 // ---- HOME (dashboard) ------------------------------------------------------
+// soft donut showing where you are in your cycle (pastel phase arcs + a marker)
+function arcPath(cx, cy, rO, rI, a0, a1) {
+  const pt = (r, a) => [cx + r * Math.sin(a), cy - r * Math.cos(a)];
+  const large = (a1 - a0) > Math.PI ? 1 : 0;
+  const [x0, y0] = pt(rO, a0), [x1, y1] = pt(rO, a1), [x2, y2] = pt(rI, a1), [x3, y3] = pt(rI, a0);
+  return `M${x0.toFixed(2)},${y0.toFixed(2)} A${rO},${rO} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} L${x2.toFixed(2)},${y2.toFixed(2)} A${rI},${rI} 0 ${large} 0 ${x3.toFixed(2)},${y3.toFixed(2)} Z`;
+}
+const PHASE_COLORS = [["Menstrual", C.roseDeep], ["Follicular", C.tealFixedDim], ["Ovulatory", "#e7c98e"], ["Luteal", C.tealC]];
+function CyclePhaseRing({ dayN, cycleLen }) {
+  const cyc = cycleLen && cycleLen > 0 ? Math.round(cycleLen) : 28;
+  const day = dayN == null ? null : Math.max(0, Math.min(cyc, dayN));
+  const ovuMid = Math.max(8, cyc - 14);
+  const segs = [
+    { name: "Menstrual", a: 0, b: Math.min(5, cyc), color: C.roseDeep },
+    { name: "Follicular", a: Math.min(5, cyc), b: Math.max(6, ovuMid - 2), color: C.tealFixedDim },
+    { name: "Ovulatory", a: Math.max(6, ovuMid - 2), b: Math.min(cyc, ovuMid + 2), color: "#e7c98e" },
+    { name: "Luteal", a: Math.min(cyc, ovuMid + 2), b: cyc, color: C.tealC },
+  ].filter((s) => s.b > s.a);
+  const S = 196, cx = S / 2, cy = S / 2, rO = 86, rI = 62, gap = 0.03;
+  const ang = (d) => (d / cyc) * 2 * Math.PI;
+  const phase = day == null ? null : (segs.find((s) => day >= s.a && day < s.b) || segs[segs.length - 1]);
+  const mAng = day == null ? 0 : ang(day); const mr = (rO + rI) / 2;
+  const mx = cx + mr * Math.sin(mAng), my = cy - mr * Math.cos(mAng);
+  return (<svg viewBox={`0 0 ${S} ${S}`} width="100%" style={{ maxWidth: 216, display: "block" }}>
+    {segs.map((s, i) => { const active = phase && phase.name === s.name; return (
+      <path key={i} d={arcPath(cx, cy, rO, rI, ang(s.a) + gap, ang(s.b) - gap)} fill={s.color} fillOpacity={active ? 0.85 : 0.3} style={{ transition: "fill-opacity .5s ease" }} />); })}
+    {day != null && <circle cx={mx} cy={my} r={7} fill="#fff" stroke={C.teal} strokeWidth={3} />}
+    <text x={cx} y={cy - 5} textAnchor="middle" style={{ fontFamily: head, fontWeight: 700, fontSize: 30, fill: C.ink }}>{day == null ? "—" : `Day ${day}`}</text>
+    <text x={cx} y={cy + 16} textAnchor="middle" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, fill: C.inkVar }}>{phase ? phase.name : "Start tracking"}</text>
+  </svg>);
+}
+
 function HomeScreen({ profile, logs, setLogs, ins, setTab, wide, settings }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = logs.find((l) => l.date === todayStr);
@@ -636,16 +668,13 @@ function HomeScreen({ profile, logs, setLogs, ins, setTab, wide, settings }) {
       <Card style={{ marginTop: 12, padding: 16, background: C.low, boxShadow: "none" }}><CycleCalendar logs={logs} /></Card>
     </div>);
   const phaseTiles = (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-      <div style={{ background: C.tealFixed, borderRadius: 18, padding: 18, minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-        <Droplet size={22} color={C.tealDark} />
-        <div><div style={{ fontFamily: head, fontWeight: 700, fontSize: 26, color: C.onTealFixed }}>{ins.dayN != null ? `Day ${ins.dayN}` : "—"}</div><div style={{ fontSize: 13, color: C.tealDark }}>{phase} phase</div></div>
+    <Card style={{ padding: 20, boxShadow: SH_SM }}>
+      <div style={{ display: "flex", justifyContent: "center" }}><CyclePhaseRing dayN={ins.dayN} cycleLen={ins.avgGap} /></div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 8 }}>
+        {PHASE_COLORS.map(([n, col]) => (<span key={n} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: col, opacity: 0.65 }} /> {n}</span>))}
       </div>
-      <div style={{ background: C.highest, borderRadius: 18, padding: 18, minHeight: 120, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-        <Activity size={22} color={C.inkVar} />
-        <div><div style={{ fontFamily: head, fontWeight: 700, fontSize: 26, color: C.ink }}>{ins.avgGap > 35 ? "Irregular" : "Stable"}</div><div style={{ fontSize: 13, color: C.inkVar }}>Cycle pattern</div></div>
-      </div>
-    </div>);
+      <div style={{ textAlign: "center", fontSize: 12.5, color: C.inkVar, marginTop: 10 }}>{ins.avgGap ? `~${ins.avgGap}-day cycle · ${ins.avgGap > 35 ? "irregular" : "stable"}` : "Log a few periods to map your cycle"}</div>
+    </Card>);
   const recordCTA = (
     <button onClick={() => setTab("record")} style={{ width: "100%", background: C.teal, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
       <span style={{ fontFamily: head, fontWeight: 700, fontSize: 22 }}>Record your day</span>
