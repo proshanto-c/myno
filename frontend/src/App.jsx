@@ -137,7 +137,7 @@ async function chatTurn({ settings, message, history, system }) {
 // ---- voice → daily-log fields. Server-side via the backend (no key in the
 // browser; avoids the CORS "Failed to fetch"); direct-Claude only as a demo
 // fallback when a key is set and the backend can't be reached. -----------------
-const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — respond warmly in their words and reflect back what you heard; INFER ratings/severities yourself and do NOT ask for numbers, scores or 1-to-10 ratings; ask a brief clarifying question only when genuinely unclear (never about numbers), else just acknowledge (spoken, under ~30 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":int} (max 10 for severity, 5 for amount); KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard analytics fields when clearly implied. ONLY JSON: {"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. null/false for standard fields not mentioned; omit scale where it doesn't fit.`;
+const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — reply briefly and directly: note what you heard in a few words and move on, warm but matter-of-fact (skip heavy empathy, reassurance, exclamations); INFER ratings/severities yourself and never ask for numbers or 1-to-10 ratings; ask a short clarifying question only when genuinely needed (never about numbers), else just acknowledge (spoken, under ~25 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":int} (max 10 for severity, 5 for amount); KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard analytics fields when clearly implied. ONLY JSON: {"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. null/false for standard fields not mentioned; omit scale where it doesn't fit.`;
 async function extractFields({ settings, text, context = "", blocked = [], categories = [] }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
   try {
@@ -186,7 +186,7 @@ class VoiceController {
   // after `silenceMs` of real silence, so it never cuts you off too early.
   _web() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    this.active = true; this.finalText = "";
+    this.active = true; this.finalText = ""; this._started = false;
     const commit = () => {
       clearTimeout(this.silTimer);
       const t = (this.finalText || "").trim();
@@ -195,18 +195,21 @@ class VoiceController {
       this.onFinal?.(t);
       if (!this.continuous) { this.active = false; try { this.rec?.stop(); } catch (e) {} }
     };
+    // Only commit a turn after real silence FOLLOWING actual speech — armed by
+    // final segments, not every interim flicker, so turns are consistent.
     const arm = () => { clearTimeout(this.silTimer); this.silTimer = setTimeout(commit, this.silenceMs); };
     const build = () => {
       const rec = new SR();
       rec.lang = "en-US"; rec.interimResults = true; rec.continuous = true;
-      rec.onstart = () => this.onState?.(true);
+      rec.onstart = () => { if (!this._started) { this._started = true; this.onState?.(true); } };  // fire once; survive internal restarts
       rec.onerror = (ev) => { if (ev.error === "not-allowed" || ev.error === "service-not-allowed") { this.active = false; clearTimeout(this.silTimer); this.onState?.(false); this.onError?.("Microphone blocked — type instead."); } };
-      rec.onend = () => { if (this.active) { try { build(); } catch (e) { setTimeout(() => { if (this.active) build(); }, 300); } } else { this.onState?.(false); } };
+      rec.onend = () => { if (this.active) { try { build(); } catch (e) { setTimeout(() => { if (this.active) build(); }, 300); } } else { this._started = false; this.onState?.(false); } };
       rec.onresult = (ev) => {
-        let interim = "";
-        for (let i = ev.resultIndex; i < ev.results.length; i++) { const r = ev.results[i]; if (r.isFinal) this.finalText += r[0].transcript + " "; else interim += r[0].transcript; }
+        let interim = "", gotFinal = false;
+        for (let i = ev.resultIndex; i < ev.results.length; i++) { const r = ev.results[i]; if (r.isFinal) { this.finalText += r[0].transcript + " "; gotFinal = true; } else interim += r[0].transcript; }
         this.onPartial?.((this.finalText + interim).trim());
-        arm();                              // any speech resets the silence countdown
+        if (gotFinal) arm();                // start the silence countdown only once a phrase is finalized
+        else clearTimeout(this.silTimer);   // still mid-utterance → don't count silence yet
       };
       this.rec = rec; try { rec.start(); } catch (e) {}
     };
@@ -659,7 +662,7 @@ function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
     if (say) { setReply(say); speaker.speak(say, resume); } else resume();
     if (insRef.current) runAdvise();  // refresh live insights in the background
   };
-  const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t), continuous: false, silenceMs: 4000 });
+  const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t), continuous: false, silenceMs: 1500 });
   const micTap = () => { if (voice.listening) { convoRef.current = false; voice.stop(); } else { convoRef.current = true; voice.start(); } };
   const status = busy ? "noting it down…" : voice.listening ? "listening…" : "tap to speak";
 
@@ -718,12 +721,16 @@ function RecordScreen({ logs, setLogs, settings, setTab, wide, ins }) {
   // Trend metrics = the standard analytics fields PLUS any personalized
   // categories that carry a slider value (they earn their own line as the days
   // of logging accumulate; today reflects live slider edits and speech).
-  const seenCats = {};
-  logs.slice(-30).concat([e]).forEach((l) => (l?.categories || []).forEach((c) => { if (c && c.scale && typeof c.scale.value === "number" && c.key) seenCats[c.key] = c.label || c.key; }));
+  const STD_KEYS = new Set(["pain", "mood", "energy", "sugar"]);
+  const seenCats = {};  // keyed by category key → last label wins (no key dupes)
+  logs.slice(-30).concat([e]).forEach((l) => (l?.categories || []).forEach((c) => { if (c && c.scale && typeof c.scale.value === "number" && c.key && !STD_KEYS.has(c.key)) seenCats[c.key] = c.label || c.key; }));
+  const usedLabels = new Set(["pain", "mood", "energy", "sugar"]);  // also dedupe by display label
+  const catEntries = [];
+  for (const [k, l] of Object.entries(seenCats)) { const n = String(l).trim().toLowerCase(); if (usedLabels.has(n)) continue; usedLabels.add(n); catEntries.push([k, l, true]); }
   const METRICS = [["pain", "Pain"], ["mood", "Mood"], ["energy", "Energy"], ["sugar", "Sugar"]]
     .filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet")))
     .map(([k, l]) => [k, l, false])
-    .concat(Object.entries(seenCats).slice(0, 4).map(([k, l]) => [k, l, true]));
+    .concat(catEntries.slice(0, 4));
   const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", false];
   const mSel = mEntry[0]; const mIsCat = mEntry[2];
   const series = mIsCat
