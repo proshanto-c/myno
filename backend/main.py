@@ -284,12 +284,15 @@ def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
         "\"scale\":{\"value\":int,\"max\":int}: infer the current value and a sensible max (10 for pain/severity/intensity, 5 for amount/frequency). "
         "Omit 'scale' for purely qualitative categories. IMPORTANT: a category may already carry a user-set scale value — KEEP that value unless they clearly state a new one in speech.\n"
         f"- NEVER create a category for, ask about, or volunteer anything in this blocked list: {block_line}.\n"
-        "- Also fill the standard fields for analytics when clearly implied.\n"
+        "- Also fill any standard tracking fields ONLY when clearly implied by what they said; otherwise use null/false. Never force a value.\n"
         "Return ONLY JSON, no prose, no code fences: "
-        '{"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,'
-        '"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool,'
+        '{"period":true|false|null,"flow":"none"|"spotting"|"light"|"medium"|"heavy"|null,"birthControl":str|null,'
+        '"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sleep":0-4|null,"brainFog":0-4|null,"sexDrive":0-4|null,'
+        '"sugar":0-4|null,"foodDrive":0-4|null,"dietExercise":str|null,"painMap":str|null,"morningWeight":number|null,'
+        '"hairGrowth":bool,"hairLoss":bool,"acne":bool,"skinPatches":bool,"hyperpigmentation":bool,"bloating":bool,"cravings":bool,'
+        '"diagnoses":str|null,'
         '"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. '
-        "Use null/false for standard fields not mentioned; omit 'scale' where it doesn't fit."
+        "Use null/false for fields not mentioned; omit 'scale' where it doesn't fit."
     )
 
 @app.post("/extract")

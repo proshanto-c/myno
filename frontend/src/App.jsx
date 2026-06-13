@@ -137,7 +137,7 @@ async function chatTurn({ settings, message, history, system }) {
 // ---- voice → daily-log fields. Server-side via the backend (no key in the
 // browser; avoids the CORS "Failed to fetch"); direct-Claude only as a demo
 // fallback when a key is set and the backend can't be reached. -----------------
-const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — reply briefly and directly: note what you heard in a few words and move on, warm but matter-of-fact (skip heavy empathy, reassurance, exclamations); INFER ratings/severities yourself and never ask for numbers or 1-to-10 ratings; ask a short clarifying question only when genuinely needed (never about numbers), else just acknowledge (spoken, under ~25 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":int} (max 10 for severity, 5 for amount); KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard analytics fields when clearly implied. ONLY JSON: {"period":true|false|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sugar":0-4|null,"hairGrowth":bool,"hairLoss":bool,"bloating":bool,"cravings":bool,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. null/false for standard fields not mentioned; omit scale where it doesn't fit.`;
+const EXTRACT_SYS = `You are Myno, a warm voice companion helping someone log their PCOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — reply briefly and directly: note what you heard in a few words and move on, warm but matter-of-fact (skip heavy empathy, reassurance, exclamations); INFER ratings/severities yourself and never ask for numbers or 1-to-10 ratings; ask a short clarifying question only when genuinely needed (never about numbers), else just acknowledge (spoken, under ~25 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":int} (max 10 for severity, 5 for amount); KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard tracking fields ONLY when clearly implied. ONLY JSON: {"period":true|false|null,"flow":"none|spotting|light|medium|heavy"|null,"birthControl":str|null,"pain":0-10|null,"mood":0-4|null,"energy":0-4|null,"sleep":0-4|null,"brainFog":0-4|null,"sexDrive":0-4|null,"sugar":0-4|null,"foodDrive":0-4|null,"dietExercise":str|null,"painMap":str|null,"morningWeight":number|null,"hairGrowth":bool,"hairLoss":bool,"acne":bool,"skinPatches":bool,"hyperpigmentation":bool,"bloating":bool,"cravings":bool,"diagnoses":str|null,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":int}}],"say":str}. null/false for fields not mentioned; omit scale where it doesn't fit.`;
 // Selectable conversation personalities (only the spoken-reply tone changes).
 const PERSONALITIES = [["direct", "Direct", "Brief and to the point"], ["warm", "Warm", "Gentle and caring"], ["coach", "Coach", "Encouraging, action-first"], ["clinical", "Clinical", "Calm and factual"], ["friend", "Friend", "Casual and relatable"]];
 const PSTYLE = {
@@ -148,6 +148,43 @@ const PSTYLE = {
   friend: "Be casual and conversational like a supportive friend; relaxed and relatable.",
 };
 const pstyle = (p) => PSTYLE[p] || PSTYLE.direct;
+
+// The saved daily log is JSON shaped by this schema. Speech fills what it can;
+// the rest is filled in the "End conversation" sheet. Users can also add their
+// own free-form categories on top (entry.categories).
+const LOG_SCHEMA = [
+  { group: "Period tracker", fields: [
+    { key: "period", label: "Started your period?", type: "bool" },
+    { key: "flow", label: "Flow", type: "select", options: ["none", "spotting", "light", "medium", "heavy"] },
+    { key: "birthControl", label: "Birth control", type: "text", placeholder: "pill, IUD, none…" },
+  ] },
+  { group: "Wellbeing", fields: [
+    { key: "mood", label: "Mood", type: "scale", words: ["very low", "low", "okay", "good", "great"] },
+    { key: "energy", label: "Energy", type: "scale", words: ["drained", "low", "okay", "good", "high"] },
+    { key: "sleep", label: "Sleep", type: "scale", words: ["awful", "poor", "okay", "good", "great"] },
+    { key: "brainFog", label: "Brain fog", type: "scale", words: ["none", "mild", "some", "heavy", "severe"] },
+    { key: "sexDrive", label: "Sex drive", type: "scale", words: ["none", "low", "okay", "high", "very high"] },
+  ] },
+  { group: "Body", fields: [
+    { key: "pain", label: "Pain", type: "scale", max: 10 },
+    { key: "painMap", label: "Where it hurts", type: "text", placeholder: "lower back, pelvis…" },
+    { key: "morningWeight", label: "Morning weight (kg)", type: "number", placeholder: "kg" },
+    { key: "cravings", label: "Cravings", type: "bool" },
+    { key: "foodDrive", label: "Food drive", type: "scale", words: ["none", "low", "okay", "high", "intense"] },
+    { key: "dietExercise", label: "Diet & exercise", type: "text", placeholder: "from Health app or notes" },
+  ] },
+  { group: "Skin & hair", fields: [
+    { key: "acne", label: "Acne (new breakouts)", type: "bool" },
+    { key: "hairGrowth", label: "Hair growth", type: "bool" },
+    { key: "hairLoss", label: "Hair loss", type: "bool" },
+    { key: "skinPatches", label: "Skin patches", type: "bool" },
+    { key: "hyperpigmentation", label: "Hyperpigmentation", type: "bool" },
+  ] },
+  { group: "About you", fields: [
+    { key: "diagnoses", label: "Existing diagnoses", type: "text", placeholder: "PCOS, thyroid… (optional)" },
+  ] },
+];
+const SCHEMA_DEFAULTS = { flow: null, birthControl: "", sleep: 2, brainFog: 0, sexDrive: 2, painMap: "", morningWeight: null, foodDrive: 2, dietExercise: "", acne: false, skinPatches: false, hyperpigmentation: false, diagnoses: "" };
 async function extractFields({ settings, text, context = "", blocked = [], categories = [], personality = "direct" }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
   try {
@@ -610,7 +647,7 @@ function PersonalityPicker({ value, onChange }) {
 function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const existing = logs.find((l) => l.date === todayStr);
-  const [e, setE] = useState(existing || { date: todayStr, period: existing?.period ?? null, pain: 0, sugar: 2, mood: 2, energy: 2, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [] });
+  const [e, setE] = useState(existing ? { ...SCHEMA_DEFAULTS, ...existing } : { date: todayStr, period: null, pain: 0, sugar: 2, mood: 2, energy: 2, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [], ...SCHEMA_DEFAULTS });
   const eRef = useRef(e); useEffect(() => { eRef.current = e; }, [e]);
   const convoRef = useRef(false);  // hands-free intent: auto-resume the mic between turns
   const [saved, setSaved] = useState(false);
@@ -618,6 +655,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   const [reply, setReply] = useState(""); const speaker = useSpeaker(settings);
   const [flash, setFlash] = useState({}); const timers = useRef({});
   const [insOn, setInsOn] = useState(false); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
+  const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false);  // "End conversation" reveals & lets you fill the standard fields
   const insRef = useRef(false); useEffect(() => { insRef.current = insOn; }, [insOn]);
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
 
@@ -650,6 +688,23 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     const cats = (eRef.current.categories || []).map((c) => c.key === key ? { ...c, scale: { ...(c.scale || { max: 10 }), value: v } } : c);
     const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
   };
+  // Render one schema field as an input for the "End conversation" sheet.
+  const field = (f) => {
+    const v = e[f.key];
+    const labelEl = <span style={{ fontFamily: bodyf, fontSize: 14, color: C.ink }}>{f.label}</span>;
+    if (f.type === "scale") {
+      const max = f.max || 4; const disp = (f.words && max <= 4 && v != null) ? f.words[v] : `${v ?? 0}${max > 4 ? `/${max}` : ""}`;
+      return (<div key={f.key} style={{ padding: "10px 0" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>{labelEl}<span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.teal }}>{disp}</span></div>
+        <Slider value={v ?? 0} max={max} onChange={(val) => set(f.key, val)} /></div>);
+    }
+    const control = f.type === "bool" ? (<div style={{ display: "flex", gap: 6 }}>{[["No", false], ["Yes", true]].map(([lbl, val]) => <Chip key={lbl} active={v === val} onClick={() => set(f.key, v === val ? null : val)}>{lbl}</Chip>)}</div>)
+      : f.type === "select" ? (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>{f.options.map((o) => <Chip key={o} active={v === o} onClick={() => set(f.key, v === o ? null : o)}>{o}</Chip>)}</div>)
+      : f.type === "number" ? (<input type="number" value={v ?? ""} onChange={(ev) => set(f.key, ev.target.value === "" ? null : Number(ev.target.value))} placeholder={f.placeholder || ""} style={{ ...input, width: 120, padding: "9px 11px", fontSize: 14 }} />)
+      : (<input value={v || ""} onChange={(ev) => set(f.key, ev.target.value)} placeholder={f.placeholder || ""} style={{ ...input, width: 210, padding: "9px 11px", fontSize: 14 }} />);
+    return (<div key={f.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "10px 0" }}>{labelEl}<div style={{ flexShrink: 0 }}>{control}</div></div>);
+  };
+
   // Light up whichever fields just changed, then fade the highlight out.
   const lightUp = (keys) => {
     if (!keys.length) return;
@@ -666,7 +721,15 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     let merged = base; let say = ""; let focus = null;
     try {
       const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), categories: eRef.current.categories || [], personality: settings.personality });
-      const next = { ...base, period: f.period ?? base.period, pain: f.pain ?? base.pain, mood: f.mood ?? base.mood, energy: f.energy ?? base.energy, sugar: f.sugar ?? base.sugar, hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings };
+      const next = { ...base,
+        period: f.period ?? base.period, flow: f.flow || base.flow, birthControl: f.birthControl || base.birthControl,
+        pain: f.pain ?? base.pain, mood: f.mood ?? base.mood, energy: f.energy ?? base.energy,
+        sleep: f.sleep ?? base.sleep, brainFog: f.brainFog ?? base.brainFog, sexDrive: f.sexDrive ?? base.sexDrive,
+        sugar: f.sugar ?? base.sugar, foodDrive: f.foodDrive ?? base.foodDrive,
+        dietExercise: f.dietExercise || base.dietExercise, painMap: f.painMap || base.painMap, morningWeight: f.morningWeight ?? base.morningWeight,
+        hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, acne: f.acne || base.acne,
+        skinPatches: f.skinPatches || base.skinPatches, hyperpigmentation: f.hyperpigmentation || base.hyperpigmentation,
+        bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings, diagnoses: f.diagnoses || base.diagnoses };
       if (Array.isArray(f.categories)) {
         const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, JSON.stringify([c.value, c.scale?.value])]));
         const clean = f.categories.filter((c) => c && c.key && c.label).slice(0, 6);
@@ -691,6 +754,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   };
   const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t), continuous: false, silenceMs: 1500 });
   const micTap = () => { if (voice.listening) { convoRef.current = false; voice.stop(); } else { convoRef.current = true; voice.start(); } };
+  const endConvo = () => { convoRef.current = false; voice.stop(); setEnded(true); setModal(true); };
   const status = busy ? "noting it down…" : voice.listening ? "listening…" : "tap to speak";
 
   // PRIMARY — the conversation
@@ -711,6 +775,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
       <div style={{ display: "flex", gap: 8, alignItems: "center", background: "rgba(255,255,255,0.14)", borderRadius: 9999, padding: 5, marginTop: 12 }}>
         <input value={text} onChange={(ev) => setText(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter" && text.trim()) { ingest(text.trim()); setText(""); } }} placeholder="…or type it" style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 15, padding: "8px 12px", background: "transparent", color: "#fff" }} />
       </div>
+      <button onClick={endConvo} style={{ marginTop: 10, width: "100%", fontFamily: bodyf, fontWeight: 700, fontSize: 14, padding: "12px", borderRadius: 9999, background: "#fff", color: C.teal, border: "none", cursor: "pointer" }}>End conversation</button>
       {voice.note && <p style={{ fontSize: 12, color: "#fff", marginTop: 10, opacity: 0.9 }}>{voice.note}</p>}
       {err && <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", marginTop: 12, padding: "10px 14px", borderRadius: 12, background: "rgba(255,255,255,0.16)", color: "#fff", fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0 }} /> {err}</div>}
     </div>);
@@ -718,10 +783,14 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
   // SIDE — the personalized tracker Myno builds from the conversation. New and
   // changed categories rise in and flash a teal "updated" notification.
   const cats = e.categories || [];
-  const dayBlock = (
+  const dayBlock = !ended ? (
+    <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.55 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;Your day builds as you talk. Press <b>End conversation</b> to review and add details.</Card>
+  ) : (
     <div>
-      <Label color={C.inkVar}>Your day so far</Label>
-      <div style={{ height: 12 }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <Label color={C.inkVar}>Your day so far</Label>
+        <button onClick={() => setModal(true)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.teal, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}><SquarePen size={14} /> Details</button>
+      </div>
       {cats.length === 0 ? (
         <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.5 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;As you talk, Myno builds a tracker here — in your own words.</Card>
       ) : (
@@ -740,8 +809,9 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
             </div>); })}
         </div>
       )}
-      <Pill onClick={() => { persist(e); setSaved(true); if (setTab) setTab("home"); }} style={{ width: "100%", marginTop: 16 }}>{saved ? <><Check size={18} /> Saved — done</> : <><Plus size={18} /> Save today</>}</Pill>
-    </div>);
+      <Pill onClick={() => { persist(e); setSaved(true); if (setTab) setTab("home"); }} style={{ width: "100%", marginTop: 16 }}>{saved ? <><Check size={18} /> Saved</> : <><Plus size={18} /> Save Conversation</>}</Pill>
+    </div>
+  );
 
   // OPT-IN — live trends, correlations & advice from history + this conversation
   const toggleIns = () => { const nv = !insOn; setInsOn(nv); if (nv) runAdvise(); };
@@ -786,7 +856,29 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
       ) : (!advising && <p style={{ fontSize: 12, color: C.inkVar, marginTop: 12 }}>Keep talking — patterns from your history &amp; today show up here.</p>)}
     </Card>);
 
+  // The "End conversation" sheet — fill the standard schema fields by hand.
+  const fieldsModal = modal ? (
+    <div onClick={() => setModal(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100, display: "grid", placeItems: "center", padding: 16 }}>
+      <div onClick={(ev) => ev.stopPropagation()} style={{ background: C.surface, borderRadius: 24, boxShadow: SH, width: "100%", maxWidth: 520, maxHeight: "86vh", overflowY: "auto", padding: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <H size={22}>Fill in your day</H>
+          <button onClick={() => setModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><X size={22} /></button>
+        </div>
+        <p style={{ color: C.inkVar, fontSize: 14, marginBottom: 14 }}>Optional — add anything you didn't say out loud. You can keep talking after.</p>
+        {LOG_SCHEMA.map((g) => (<div key={g.group} style={{ marginBottom: 14 }}>
+          <Label color={C.inkVar}>{g.group}</Label>
+          <div style={{ marginTop: 4 }}>{g.fields.map(field)}</div>
+        </div>))}
+        <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+          <Pill variant="soft" onClick={() => setModal(false)} style={{ flex: 1 }}>Keep talking</Pill>
+          <Pill onClick={() => { persist(e); setSaved(true); setModal(false); }} style={{ flex: 1 }}><Check size={16} /> Done</Pill>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (<div>
+    {fieldsModal}
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 4, flexWrap: "wrap" }}>
       <H size={26}>Record your day</H>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
