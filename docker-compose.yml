@@ -1,0 +1,78 @@
+# Myno — full stack. Everything runs in Docker.
+#   db        Postgres (patients, logs, descriptors, blacklist, conversations)
+#   backend   FastAPI orchestrator (Claude, personalization, blacklist, DB, TTS proxy)
+#   asr       NeMo cache-aware streaming ASR  (GPU)
+#   tts       NeMo FastPitch + HiFi-GAN TTS   (GPU)
+#   frontend  React app behind nginx (proxies /api -> backend, /asr -> asr)
+#
+# Prereqs on the A100 host: Docker, the NVIDIA Container Toolkit, and an NGC
+# login (`docker login nvcr.io`) so the NeMo base image can be pulled.
+#
+#   ANTHROPIC_API_KEY=sk-ant-...  docker compose up --build
+#
+# Then open http://<host>/  (put TLS in front for microphone access — see the
+# deployment guide). The ASR + TTS images are large and download the models on
+# first boot, so the first `up` takes a while.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: myno
+      POSTGRES_PASSWORD: myno
+      POSTGRES_DB: myno
+    volumes:
+      - myno_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myno"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://myno:myno@db:5432/myno
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in your environment}
+      TTS_URL: http://tts:8001
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  asr:
+    build: ./asr
+    ports:
+      - "8000:8000"
+    shm_size: "2gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  tts:
+    build: ./tts
+    ports:
+      - "8001:8001"
+    shm_size: "2gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  myno_db:
