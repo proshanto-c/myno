@@ -334,6 +334,23 @@ CHATBOX_HTML = r"""<!doctype html>
       color: #fff;
     }
 
+    .confirm-log {
+      width: 100%;
+      min-height: 42px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--ok);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .confirm-log:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
     main {
       min-height: 0;
       overflow-y: auto;
@@ -740,6 +757,7 @@ CHATBOX_HTML = r"""<!doctype html>
             <div id="standardMarkers" class="marker-list"></div>
             <div id="booleanMarkers"></div>
             <div id="missingPrompts" class="missing-list"></div>
+            <button id="confirmLog" class="confirm-log" type="button" hidden>Confirm sliders and save log</button>
           </section>
 
           <section class="marker-panel">
@@ -814,6 +832,7 @@ CHATBOX_HTML = r"""<!doctype html>
     const sendEl = document.getElementById("send");
     const composerHintEl = document.getElementById("composerHint");
     const endConversationEl = document.getElementById("endConversation");
+    const confirmLogEl = document.getElementById("confirmLog");
     const patientIdEl = document.getElementById("patientId");
     const loadPatientEl = document.getElementById("loadPatient");
     const newPatientEl = document.getElementById("newPatient");
@@ -826,6 +845,7 @@ CHATBOX_HTML = r"""<!doctype html>
     let blockedLabels = [];
     let flash = {};
     let conversationEnded = false;
+    let reviewPending = false;
     let conversationTurns = [];
     const flashTimers = {};
 
@@ -847,10 +867,18 @@ CHATBOX_HTML = r"""<!doctype html>
       sendEl.disabled = next || conversationEnded;
       inputEl.disabled = next || conversationEnded;
       endConversationEl.disabled = next || conversationEnded;
+      confirmLogEl.disabled = next || !reviewPending;
       if (!conversationEnded) {
         inputEl.placeholder = next ? waitingPlaceholder : answerPlaceholder;
         composerHintEl.textContent = next ? waitingHint : activeHint;
       }
+    }
+
+    function setReviewPending(next) {
+      reviewPending = next;
+      confirmLogEl.hidden = !next;
+      confirmLogEl.disabled = busy || !next;
+      if (next) setMarkerStatus("Review before saving");
     }
 
     function setConversationEnded(next) {
@@ -863,6 +891,7 @@ CHATBOX_HTML = r"""<!doctype html>
       inputEl.disabled = busy || next;
       endConversationEl.disabled = busy || next;
       if (!next) {
+        setReviewPending(false);
         setMarkerStatus("Waiting");
         clearNode(missingPromptsEl);
       }
@@ -892,7 +921,17 @@ CHATBOX_HTML = r"""<!doctype html>
       if (fields.sugar == null && !isFieldBlocked("sugar")) add("Sugar / cravings", "Adjust the sugar/cravings slider to your best 0-10 estimate.");
       if (fields.bloating !== true) add("Bloating", "Turn this on if bloating or abdominal fullness happened today.");
       if (fields.hairGrowth !== true && fields.hairLoss !== true && !isFieldBlocked("hairGrowth")) add("Hair / skin", "Turn on the matching marker if hair growth, hair loss, acne, or skin changes should be tracked.");
-      return missing.slice(0, 5);
+
+      const inferredCategoryKeys = new Set(
+        (Array.isArray(fields.categories) ? fields.categories : [])
+          .map((cat) => String(cat?.key || ""))
+          .filter(Boolean)
+      );
+      (entry.categories || [])
+        .filter((cat) => cat && cat.key && normalizeScale(cat.scale) && !inferredCategoryKeys.has(String(cat.key)))
+        .forEach((cat) => add(cat.label || cat.key, "Adjust this personal marker slider if it was relevant today."));
+
+      return missing;
     }
 
     function renderMissingPrompts(missing) {
@@ -1083,11 +1122,17 @@ CHATBOX_HTML = r"""<!doctype html>
       renderMarkers();
     }
 
-    async function persistEntry(next = entry) {
+    async function persistEntry(next = entry, options = {}) {
       entry = normalizeEntryScores({ ...next, date: today });
       rememberEntry(entry);
       renderMarkers();
-      if (!patientId) return;
+      const savingConfirmed = options.saveRemote === true;
+      if (conversationEnded && !savingConfirmed && !reviewPending) setReviewPending(true);
+      const saveRemote = savingConfirmed || (!conversationEnded && !reviewPending && options.saveRemote !== false);
+      if (!patientId || !saveRemote) {
+        setMarkerStatus(reviewPending ? "Review before saving" : "Saved locally");
+        return;
+      }
       setMarkerStatus("Saving");
       const res = await fetch(api(`/patients/${encodeURIComponent(patientId)}/logs`), {
         method: "POST",
@@ -1261,7 +1306,8 @@ CHATBOX_HTML = r"""<!doctype html>
                 };
                 entry = next;
                 rememberEntry(entry);
-                setMarkerStatus("Saved locally");
+                if (conversationEnded) setReviewPending(true);
+                else setMarkerStatus("Saved locally");
               },
               cat.value || ""
             );
@@ -1383,7 +1429,7 @@ CHATBOX_HTML = r"""<!doctype html>
         });
       }
 
-      await persistEntry(next);
+      await persistEntry(next, { saveRemote: false });
       lightUp(changed);
       return { fields, changed };
     }
@@ -1485,13 +1531,14 @@ CHATBOX_HTML = r"""<!doctype html>
         const transcript = currentTranscript();
         const { fields } = await extractAndPersist(id, transcript);
         setConversationEnded(true);
+        setReviewPending(true);
         renderMissingPrompts(missingFromFields(fields || {}));
 
         const missing = missingFromFields(fields || {});
         const modelLead = fields?.say ? `${fields.say} ` : "";
         const prompt = missing.length
-          ? `${modelLead}I inferred what I could and saved the standard log. Chat is now ended; please use the marker panel to adjust the missing sliders or controls yourself: ${missing.map((item) => item.label.toLowerCase()).join(", ")}.`
-          : `${modelLead}I inferred today's marker scores and saved the standard log. Chat is now ended; please review the sliders and adjust anything that feels off.`;
+          ? `${modelLead}I inferred what I could. Chat is now ended; please adjust these missing sliders or controls before saving: ${missing.map((item) => item.label.toLowerCase()).join(", ")}. Then click Confirm sliders and save log.`
+          : `${modelLead}I inferred today's marker scores. Chat is now ended; please review the sliders, adjust anything that feels off, then click Confirm sliders and save log.`;
         appendMessage("assistant", prompt, "Conversation ended");
         setStatus(`Patient ${id} ready`, "ready");
       } catch (err) {
@@ -1502,6 +1549,27 @@ CHATBOX_HTML = r"""<!doctype html>
         setBusy(false);
         if (conversationEnded) endConversationEl.disabled = true;
         if (!conversationEnded) inputEl.focus();
+      }
+    }
+
+    async function confirmLog() {
+      if (busy || !reviewPending) return;
+      await ensurePatient();
+      setBusy(true);
+      setStatus("Saving daily log", "");
+      try {
+        await persistEntry(entry, { saveRemote: true });
+        setReviewPending(false);
+        clearNode(missingPromptsEl);
+        appendMessage("assistant", "Saved today's log with your confirmed slider settings.", "Log saved");
+        setStatus(`Patient ${patientId} ready`, "ready");
+      } catch (err) {
+        appendMessage("assistant", err.message || "I could not save the confirmed log.", "Save failed");
+        setStatus("Save failed", "error");
+        setMarkerStatus("Save failed");
+      } finally {
+        setBusy(false);
+        if (conversationEnded) endConversationEl.disabled = true;
       }
     }
 
@@ -1548,6 +1616,14 @@ CHATBOX_HTML = r"""<!doctype html>
       endConversation().catch((err) => {
         appendMessage("assistant", err.message || "I could not end the conversation cleanly.", "Inference failed");
         setStatus("Inference error", "error");
+      });
+    });
+
+    confirmLogEl.addEventListener("click", () => {
+      confirmLog().catch((err) => {
+        appendMessage("assistant", err.message || "I could not save the confirmed log.", "Save failed");
+        setStatus("Save failed", "error");
+        setMarkerStatus("Save failed");
       });
     });
 
