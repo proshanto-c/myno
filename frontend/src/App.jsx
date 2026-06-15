@@ -868,7 +868,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     if (say) { setReply(say); speaker.speak(say, resume); } else resume();
     if (insRef.current) runAdvise();  // refresh live insights in the background
   };
-  const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t), continuous: false, silenceMs: 1500 });
+  const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t), continuous: false, silenceMs: 1100 });
   const micTap = () => { if (voice.listening) { convoRef.current = false; voice.stop(); } else { convoRef.current = true; voice.start(); } };
   const endConvo = () => { convoRef.current = false; voice.stop(); setEnded(true); setModal(true); };
   const status = busy ? "noting it down…" : voice.listening ? "listening…" : "tap to speak";
