@@ -44,6 +44,7 @@ const checks = [
   ["the shared mark is drawn on each", (html.match(/M53\.33,76\.42/g) || []).length === 2],
   ["PMOS is named on both cards", (html.match(/PMOS/g) || []).length >= 2],
   ["it speaks to someone who only suspects it", has("wondering if you are")],
+  ["Dalīl is placed as the engine behind the app", has("research engine") && has("Tawaazun")],
 ];
 
 console.log(`DOM ${html.length} chars`);

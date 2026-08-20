@@ -60,7 +60,7 @@ export default function Landing() {
           <Door href="/dalil/" ring="#3e3159" border="#e6e0ee" tint="#eeeaf3"
             wordmark="دليل" latin="Dalīl"
             who="If you research PMOS"
-            what="The PMOS literature behind every claim the app makes: harvested from PubMed, appraised against a rubric, and signed off by a reviewer before anyone sees it." />
+            what="The research engine behind Tawaazun. PMOS literature harvested from PubMed, appraised against a rubric, and signed off by a named reviewer before any of it reaches a patient." />
         </div>
 
       </main>
