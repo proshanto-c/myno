@@ -78,6 +78,7 @@ class Run(Base):
     webenv = Column(String, default="")
     query_key = Column(String, default="")
     total = Column(Integer, default=0)
+    cap = Column(Integer, nullable=True)             # a first look at a seed, rather than all of it
     cursor = Column(Integer, default=0)
     fetched = Column(Integer, default=0)
     added = Column(Integer, default=0)
@@ -122,6 +123,7 @@ class Source(Base):
     fulltext = Column(Text, nullable=True)           # OA subset only
     passages = Column(JSON, nullable=True)           # [{offset, section_type, len}]
 
+    flags = Column(JSON, default=list)               # id_mismatch, and anything else found on the way in
     record_hash = Column(String, default="")
     first_seen = Column(DateTime, default=now)
     last_fetched = Column(DateTime, default=now)
@@ -248,6 +250,10 @@ class Published(Base):
 # another NULL pmid, which a plain unique constraint would allow but a unique
 # index over the whole column would make confusing to reason about.
 MIGRATIONS = [
+    # Added after the first deployment; `create_all` only builds tables it has
+    # never seen, so a column that arrives later needs a statement of its own.
+    "ALTER TABLE dalil_sources ADD COLUMN IF NOT EXISTS flags JSON",
+    "ALTER TABLE dalil_runs    ADD COLUMN IF NOT EXISTS cap INTEGER",
     "CREATE UNIQUE INDEX IF NOT EXISTS dalil_sources_pmid_uq  ON dalil_sources (pmid)  WHERE pmid  IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS dalil_sources_pmcid_uq ON dalil_sources (pmcid) WHERE pmcid IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS dalil_sources_doi_uq   ON dalil_sources (lower(doi)) WHERE doi IS NOT NULL",

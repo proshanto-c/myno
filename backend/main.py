@@ -668,6 +668,18 @@ def record_schema():
     whatever comes back rather than keeping its own copy of the questions."""
     return {"schema": record.SCHEMA, "categories": [{"key": k, "label": l} for k, l in record.CATEGORIES]}
 
+@app.get("/insights/correlations")
+def insight_correlations():
+    """The pairs Insights looks for, with the ids Dalīl files studies under.
+
+    Published here rather than shared as a file: the evidence module runs in its
+    own container, and a second copy of this list is a second thing to keep true.
+    """
+    return {"correlations": [{"id": c["id"], "label": c["label"], "a": c["a"], "b": c["b"],
+                              "expect": c["expect"], "category": c["category"]}
+                             for c in insights.CORRELATIONS]}
+
+
 @app.get("/sources")
 def sources():
     """Where the numbers come from. The app shows this so a threshold is never

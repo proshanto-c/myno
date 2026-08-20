@@ -70,19 +70,28 @@ def category_of(key, default="body"):
 # "expect" is the sign of r that CONFIRMS the label: "Less sleep -> more brain
 # fog" is confirmed by a negative r, since it pairs sleep against fog. Without
 # it a reader sees "r -0.69" under a claim and cannot tell which way it went.
+#
+# "id" is a foreign key. Dalīl binds a published study to one of these pairs by
+# its id, so an id here is constant for ever: renaming one silently detaches
+# every citation filed under it.
 CORRELATIONS = [
-    {"label": "Period days → higher pain", "expect": "+",       "pairing": "flag",   "a": "period", "b": "pain",      "category": "cycle"},
-    {"label": "Period days → lower energy", "expect": "-",      "pairing": "flag",   "a": "period", "b": "energy",    "category": "cycle"},
-    {"label": "Less sleep → more brain fog", "expect": "-",     "pairing": "same",   "a": "sleep",  "b": "brainFog",  "category": "wellbeing"},
-    {"label": "Less sleep → lower energy", "expect": "+",       "pairing": "same",   "a": "sleep",  "b": "energy",    "category": "wellbeing"},
-    {"label": "Higher pain → lower mood", "expect": "-",        "pairing": "same",   "a": "pain",   "b": "mood",      "category": "wellbeing"},
-    {"label": "Higher sugar → next-day pain", "expect": "+",    "pairing": "lagged", "a": "sugar",  "b": "pain",      "category": "body"},
-    {"label": "Higher food drive → higher sugar", "expect": "+","pairing": "same",   "a": "foodDrive", "b": "sugar",  "category": "body"},
-    {"label": "Higher sugar → next-day cravings", "expect": "+","pairing": "toflag", "a": "sugar",  "b": "cravings",  "category": "lifestyle"},
-    {"label": "Higher pain → lower sex drive", "expect": "-",   "pairing": "same",   "a": "pain",   "b": "sexDrive",  "category": "lifestyle"},
-    {"label": "Lower energy → lower sex drive", "expect": "+",  "pairing": "same",   "a": "energy", "b": "sexDrive",  "category": "lifestyle"},
-    {"label": "Higher sugar → next-day acne", "expect": "+",    "pairing": "toflag", "a": "sugar",  "b": "acne",      "category": "skin"},
+    {"id": "period_pain",      "label": "Period days → higher pain", "expect": "+",       "pairing": "flag",   "a": "period", "b": "pain",      "category": "cycle"},
+    {"id": "period_energy",    "label": "Period days → lower energy", "expect": "-",      "pairing": "flag",   "a": "period", "b": "energy",    "category": "cycle"},
+    {"id": "sleep_brainfog",   "label": "Less sleep → more brain fog", "expect": "-",     "pairing": "same",   "a": "sleep",  "b": "brainFog",  "category": "wellbeing"},
+    {"id": "sleep_energy",     "label": "Less sleep → lower energy", "expect": "+",       "pairing": "same",   "a": "sleep",  "b": "energy",    "category": "wellbeing"},
+    {"id": "pain_mood",        "label": "Higher pain → lower mood", "expect": "-",        "pairing": "same",   "a": "pain",   "b": "mood",      "category": "wellbeing"},
+    {"id": "sugar_pain",       "label": "Higher sugar → next-day pain", "expect": "+",    "pairing": "lagged", "a": "sugar",  "b": "pain",      "category": "body"},
+    {"id": "fooddrive_sugar",  "label": "Higher food drive → higher sugar", "expect": "+","pairing": "same",   "a": "foodDrive", "b": "sugar",  "category": "body"},
+    {"id": "sugar_cravings",   "label": "Higher sugar → next-day cravings", "expect": "+","pairing": "toflag", "a": "sugar",  "b": "cravings",  "category": "lifestyle"},
+    {"id": "pain_sexdrive",    "label": "Higher pain → lower sex drive", "expect": "-",   "pairing": "same",   "a": "pain",   "b": "sexDrive",  "category": "lifestyle"},
+    {"id": "energy_sexdrive",  "label": "Lower energy → lower sex drive", "expect": "+",  "pairing": "same",   "a": "energy", "b": "sexDrive",  "category": "lifestyle"},
+    {"id": "sugar_acne",       "label": "Higher sugar → next-day acne", "expect": "+",    "pairing": "toflag", "a": "sugar",  "b": "acne",      "category": "skin"},
 ]
+
+# The pair is unique across the list, so it is a key in its own right: a claim
+# about (sleep, brainFog) finds its correlation without anybody choosing one.
+CORRELATION_IDS = [c["id"] for c in CORRELATIONS]
+CORRELATION_BY_PAIR = {(c["a"], c["b"]): c["id"] for c in CORRELATIONS}
 
 TRENDED = [("pain", "Pain", "body"), ("sugar", "Sugar", "body"),
            ("mood", "Mood", "wellbeing"), ("energy", "Energy", "wellbeing"),
@@ -216,7 +225,7 @@ def summarise(logs, patient=None, rules=None, cycle_verdict=None, today=None):
     for c in CORRELATIONS:
         p = pearson(_pairs(logs, c["pairing"], c["a"], c["b"]), R)
         if p and abs(p["r"]) >= R["minAbsR"]:
-            correlations.append({"label": c["label"], "r": p["r"], "n": p["n"],
+            correlations.append({"id": c["id"], "label": c["label"], "r": p["r"], "n": p["n"],
                                  "category": c.get("category", category_of(c["b"])),
                                  "strength": strength(p["r"]),
                                  # does the data run the way the label claims?
