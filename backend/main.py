@@ -66,7 +66,6 @@ class Patient(Base):
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     logs = relationship("DailyLog", back_populates="patient", cascade="all,delete")
     descriptors = relationship("Descriptor", back_populates="patient", cascade="all,delete")
-    turns = relationship("Turn", back_populates="patient", cascade="all,delete")
 
 class DailyLog(Base):
     __tablename__ = "daily_logs"
@@ -95,15 +94,6 @@ class Descriptor(Base):
     phrase = Column(String)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     patient = relationship("Patient", back_populates="descriptors")
-
-class Turn(Base):
-    __tablename__ = "turns"
-    id = Column(Integer, primary_key=True)
-    patient_id = Column(Integer, ForeignKey("patients.id"))
-    role = Column(String)        # "user" | "assistant"
-    content = Column(String)
-    created_at = Column(DateTime, default=dt.datetime.utcnow)
-    patient = relationship("Patient", back_populates="turns")
 
 Base.metadata.create_all(engine)
 # lightweight migration: add the JSON column to pre-existing tables
@@ -687,7 +677,7 @@ def get_descriptors(pid: int):
     rows = s.query(Descriptor).filter_by(patient_id=pid).order_by(Descriptor.created_at.desc()).all()
     out = [{"concept": r.concept, "phrase": r.phrase} for r in rows]; s.close(); return out
 
-# ---------------------------------------------------------------- chat
+# ------------------------------------------------------- the Claude call
 # A reply is a pure function of (model, system, messages, max_tokens), and the
 # payload already carries everything patient-specific, so identical asks — the
 # same person reopening Insights, a poll that fires twice, a re-rendered tab —
@@ -745,179 +735,6 @@ async def claude(system: str, messages: list, max_tokens=900) -> str:
         return await task
     finally:
         _inflight.pop(key, None)
-
-class ChatIn(BaseModel):
-    message: str
-
-@app.post("/patients/{pid}/chat")
-async def chat(pid: int, body: ChatIn):
-    s = Session(); p = s.get(Patient, pid)
-    if not p: s.close(); raise HTTPException(404)
-    blacklist = p.blacklist or []
-    blocked_labels = [FEATURES[f]["label"] for f in blacklist if f in FEATURES]
-    descriptors = s.query(Descriptor).filter_by(patient_id=pid).order_by(Descriptor.created_at.desc()).limit(20).all()
-    desc_lines = "; ".join(f"{d.concept}: \"{d.phrase}\"" for d in descriptors) or "none yet"
-    history = s.query(Turn).filter_by(patient_id=pid).order_by(Turn.created_at).limit(20).all()
-    msgs = [{"role": t.role, "content": t.content} for t in history]
-    msgs.append({"role": "user", "content": body.message})
-
-    avg_gap = _avg_cycle(s, pid)
-    system = f"""You are Tawazzun, a warm voice companion for someone navigating possible or diagnosed PMOS.
-You know general PMOS knowledge: the Rotterdam criteria (2 of 3 — irregular ovulation; clinical/biochemical hyperandrogenism; polycystic morphology on ultrasound), that mimics (thyroid, prolactin, CAH, Cushing's) must be excluded, and that PMOS links to insulin resistance, type 2 diabetes, cardiovascular and mood risks.
-
-YOUR JOB EACH TURN:
-- Acknowledge what they said in THEIR words, then ask ONE relevant next question to understand their situation.
-- Reuse the patient's own vocabulary. Known phrasings -> {desc_lines}.
-- ADAPT to them. Current read of this patient: {json.dumps(p.adapt_state or {})}. If they seem distressed, be gentler and shorter. If terse, keep it brief. If they want detail, give it.
-- Goals: {p.goals or []}. Avg tracked cycle: {avg_gap} days.
-
-HARD CONSTRAINTS:
-- NEVER ask about, request, or volunteer anything in this blocked list: {blocked_labels or 'none'}. If they raise a blocked topic themselves, respond briefly and respectfully without probing, and move on.
-- NEVER diagnose or say whether they have PMOS; a clinician decides. Offer to help them prepare.
-- No specific drug doses. Spoken aloud, so keep the 'reply' under ~45 words.
-
-Return ONLY JSON, no prose, no code fences:
-{{"reply": str,
-  "descriptors": [{{"concept": str, "phrase": str}}],   // new personal phrasings the patient used (e.g. how they describe mood/pain). [] if none.
-  "adapt": {{"tone": "gentle"|"neutral"|"upbeat", "length": "short"|"medium", "distress": 0-3}}
-}}"""
-
-    raw = await claude(system, msgs)
-    reply, new_desc, adapt = body.message and "", [], {}
-    try:
-        a, b = raw.index("{"), raw.rindex("}")
-        obj = json.loads(raw[a:b + 1])
-        reply = obj.get("reply", ""); new_desc = obj.get("descriptors", []) or []; adapt = obj.get("adapt", {}) or {}
-    except Exception:
-        reply = raw
-
-    # persist turn + learned personalization + adaptation
-    s.add(Turn(patient_id=pid, role="user", content=body.message))
-    s.add(Turn(patient_id=pid, role="assistant", content=reply))
-    for d in new_desc[:5]:
-        if d.get("concept") and d.get("phrase"):
-            s.add(Descriptor(patient_id=pid, concept=d["concept"][:40], phrase=d["phrase"][:200]))
-    if adapt:
-        p.adapt_state = {**(p.adapt_state or {}), **adapt}
-    s.commit(); s.close()
-    return {"reply": reply, "learned": new_desc, "adapt": adapt}
-
-# ----- chat: a warm, practical PMOS companion that talks WITH the patient and
-# grounds its guidance in the patient's own tracked insights (trends and
-# correlations computed from their daily logs) plus their personal vocabulary,
-# history and adaptation state from the DB. This powers the Chat tab.
-class ChatboxTurnIn(BaseModel):
-    role: str
-    text: str
-
-class ChatboxChatIn(BaseModel):
-    message: str
-    turns: list[ChatboxTurnIn] = []
-
-def _insight_brief(ins: dict) -> str:
-    """A compact, prompt-friendly digest of the derived summary for the chat model."""
-    if not ins or not ins.get("loggedDays"):
-        return "no tracked history yet"
-    parts = [f"{ins['loggedDays']} days logged"]
-    cyc = ins.get("cycle")
-    if cyc:
-        parts.append(f"cycle: {cyc['label'].lower()} (mean {cyc['meanDays']}d, range {cyc['min']}-{cyc['max']}d)")
-    elif ins.get("avgCycleDays"):
-        parts.append(f"avg cycle {round(ins['avgCycleDays'])}d")
-    for key, label in [("avgPain", "pain"), ("avgMood", "mood"), ("avgEnergy", "energy")]:
-        v = ins.get(key)
-        if v:
-            parts.append(f"avg {label} {round(v, 1)}/10")
-    for c in (ins.get("correlations") or [])[:3]:
-        parts.append(f"{c['label']} (strength {c['strength']}/100)")
-    for t in (ins.get("trends") or [])[:3]:
-        parts.append(f"{t['label']} trending {t['direction']}")
-    for c in (ins.get("categoryTrends") or [])[:2]:
-        parts.append(f"{c['label']} avg {round(c['avg'], 1)}/10")
-    return "; ".join(parts)
-
-@app.post("/chatbox/patients/{pid}/chat")
-async def chatbox_chat(pid: int, body: ChatboxChatIn):
-    s = Session()
-    p = s.get(Patient, pid)
-    if not p:
-        s.close()
-        raise HTTPException(404, "no such patient")
-
-    blacklist = p.blacklist or []
-    blocked_labels = [FEATURES[f]["label"] for f in blacklist if f in FEATURES]
-    descriptors = s.query(Descriptor).filter_by(patient_id=pid).order_by(Descriptor.created_at.desc()).limit(20).all()
-    desc_lines = "; ".join(f'{d.concept}: "{d.phrase}"' for d in descriptors) or "none yet"
-    db_history = (
-        s.query(Turn)
-        .filter_by(patient_id=pid)
-        .order_by(Turn.created_at.desc())
-        .limit(20)
-        .all()
-    )
-    db_history = list(reversed(db_history))
-    db_msgs = [{"role": t.role, "content": t.content} for t in db_history]
-    client_msgs = [
-        {
-            "role": "assistant" if t.role == "assistant" else "user",
-            "content": t.text.strip()[:1200],
-        }
-        for t in (body.turns or [])[-20:]
-        if t.role in {"assistant", "user"} and t.text.strip()
-    ]
-    base_msgs = client_msgs or db_msgs
-    msgs = list(base_msgs)
-    msgs.append({"role": "user", "content": body.message})
-
-    avg_gap = _avg_cycle(s, pid)
-    log_rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
-    insight_brief = _insight_brief(_summarise([_log_dict(r) for r in log_rows]))
-
-    system = f"""You are Tawazzun, a warm, practical PMOS companion. You are talking WITH this person, and you can see their own tracked data — use it to give grounded, specific, actionable guidance.
-
-THEIR TRACKED INSIGHTS (computed from their logs): {insight_brief}
-Their goals: {p.goals or []}. Avg tracked cycle: {avg_gap} days. Known phrasings -> {desc_lines}. Current read of them: {json.dumps(p.adapt_state or {})}.
-
-EACH TURN:
-- Briefly acknowledge what they said, in their own words.
-- Lead with help: when it's relevant, connect what they raise to a concrete trend or correlation in THEIR insights above, and give ONE practical, non-diagnostic suggestion they can act on.
-- If their data doesn't cover what they asked, say so plainly and give general, well-grounded PMOS guidance instead of guessing about their numbers.
-- Ask at most ONE short follow-up question, and only when it genuinely helps — prioritise advising over interrogating.
-- Reuse the patient's vocabulary and adapt your tone to them (gentler if distressed, briefer if terse).
-
-HARD CONSTRAINTS:
-- NEVER ask about, reference, or volunteer anything in this blocked list: {blocked_labels or 'none'}.
-- NEVER diagnose or say whether they have PMOS; a clinician decides — offer to help them prepare.
-- No specific drug doses.
-- Keep the reply under ~80 words.
-
-Return ONLY JSON, no prose, no code fences:
-{{"reply": str,
-  "descriptors": [{{"concept": str, "phrase": str}}],
-  "adapt": {{"tone": "gentle"|"neutral"|"upbeat", "length": "short"|"medium", "distress": 0-3}}
-}}"""
-
-    raw = await claude(system, msgs)
-    reply, new_desc, adapt = "", [], {}
-    try:
-        a, b = raw.index("{"), raw.rindex("}")
-        obj = json.loads(raw[a:b + 1])
-        reply = obj.get("reply", "")
-        new_desc = obj.get("descriptors", []) or []
-        adapt = obj.get("adapt", {}) or {}
-    except Exception:
-        reply = raw
-
-    s.add(Turn(patient_id=pid, role="user", content=body.message))
-    s.add(Turn(patient_id=pid, role="assistant", content=reply))
-    for d in new_desc[:5]:
-        if d.get("concept") and d.get("phrase"):
-            s.add(Descriptor(patient_id=pid, concept=d["concept"][:40], phrase=d["phrase"][:200]))
-    if adapt:
-        p.adapt_state = {**(p.adapt_state or {}), **adapt}
-    s.commit()
-    s.close()
-    return {"reply": reply, "learned": new_desc, "adapt": adapt}
 
 # ----- voice → structured daily-log fields + a spoken reply (server-side model;
 # no key in the browser). Tawazzun talks back: acknowledges, and asks ONE clarifying

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
-  Home, SquarePen, BarChart3, MessageCircle, Settings as Cog, Plus,
+  Home, SquarePen, BarChart3, Settings as Cog, Plus,
   ChevronRight, Mic, MicOff, Volume2, VolumeX, Sparkles, Check, Lock, ArrowLeft, ArrowRight,
   Printer, Stethoscope, AlertTriangle, Info, Heart, Moon, Loader2, X, Target,
   Brain, HeartPulse, Microscope, Droplet, Activity, ChevronLeft, Pill as Pill2
@@ -108,33 +108,6 @@ function useSpeaker(settings) {
   }, [settings.voice, speaking, playNext]);
   useEffect(() => () => stop(), [stop]);
   return { speak, stop, speaking };
-}
-
-// ---- chat: backend orchestrator if configured, else Claude direct ----------
-async function chatTurn({ settings, message, history, system }) {
-  const base = settings.backendUrl;
-  // A backend is configured: it owns the model. If it's down or erroring,
-  // surface that instead of silently falling back — the caller shows the error.
-  if (base && settings.patientId) {
-    let res;
-    try {
-      res = await fetch(`${base.replace(/\/$/, "")}/patients/${settings.patientId}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) });
-    } catch (e) {
-      throw new Error("Can't reach the backend — make sure it's running.");
-    }
-    if (!res.ok) {
-      let detail = ""; try { detail = (await res.json())?.detail || ""; } catch (e) {}
-      throw new Error(`Backend error ${res.status}${detail ? ` — ${detail}` : ""}.`);
-    }
-    const j = await res.json();
-    if (!j.reply) throw new Error("The model returned an empty reply.");
-    return { reply: j.reply, learned: j.learned || [] };
-  }
-  // No backend configured → direct-to-Claude demo path (key from Settings).
-  const api = history.map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
-  api.push({ role: "user", content: message });
-  const reply = await callClaude({ apiKey: settings.apiKey, system, messages: api });
-  return { reply, learned: [] };
 }
 
 // ---- voice → daily-log fields. Server-side via the backend (no key in the
@@ -863,7 +836,6 @@ export default function App() {
     {tab === "home" && <HomeScreen {...ctx} />}
     {tab === "record" && <RecordScreen {...ctx} />}
     {tab === "insights" && <InsightsScreen {...ctx} />}
-    {tab === "chat" && <ChatScreen {...ctx} />}
     {tab === "settings" && <SettingsScreen {...ctx} />}
     {(tab === "advocacy" || tab === "prepare" || tab === "clinician") && <AdvocacyScreen {...ctx} />}
   </>);
@@ -882,7 +854,7 @@ export default function App() {
       <div style={{ width: "100%", maxWidth: 560 }}><Onboarding profile={profile} setProfile={setProfile} /></div>
     </div>);
 
-  const contentMax = { home: 1140, insights: 1140, advocacy: 900, clinician: 940, prepare: 880, chat: 760, record: 1180, settings: 640 }[tab] || 1080;
+  const contentMax = { home: 1140, insights: 1140, advocacy: 900, clinician: 940, prepare: 880, record: 1180, settings: 640 }[tab] || 1080;
   // --- desktop / web shell (top navigation bar + wide content — the website view) ---
   if (wide) return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: bodyf, color: C.ink, backgroundImage: GRAD }}>
@@ -901,7 +873,7 @@ export default function App() {
 
 // ---- desktop top navigation (website view) ---------------------------------
 function TopNav({ tab, setTab, profile }) {
-  const items = [["home", "Home"], ["record", "Record"], ["insights", "Insights"], ["chat", "Chat"], ["advocacy", "Advocacy"]];
+  const items = [["home", "Home"], ["record", "Record"], ["insights", "Insights"], ["advocacy", "Advocacy"]];
   return (
     <header style={{ position: "sticky", top: 0, zIndex: 20, background: "rgba(251,239,239,0.88)", backdropFilter: "blur(10px)", borderBottom: `1px solid ${C.high}` }}>
       <div style={{ maxWidth: 1140, margin: "0 auto", padding: "12px 40px", display: "flex", alignItems: "center", gap: 8 }}>
@@ -933,7 +905,7 @@ function Header({ profile, onSettings }) {
   </div>);
 }
 function BottomNav({ tab, setTab }) {
-  const items = [["home", "Home", Home], ["record", "Record", SquarePen], ["insights", "Insights", BarChart3], ["chat", "Chat", MessageCircle], ["settings", "Settings", Cog]];
+  const items = [["home", "Home", Home], ["record", "Record", SquarePen], ["insights", "Insights", BarChart3], ["settings", "Settings", Cog]];
   return (<div className="no-print" style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
     <div style={{ width: "100%", maxWidth: 460, background: "rgba(251,239,239,0.92)", backdropFilter: "blur(10px)", borderTop: `1px solid ${C.high}`, display: "flex", padding: "8px 6px 10px", pointerEvents: "auto" }}>
       {items.map(([id, label, Ico]) => { const on = tab === id; return (
@@ -1838,15 +1810,15 @@ function InsightsScreen({ ins, logs, settings, wide, assessment }) {
         band is the one the rules judged them against — teens get wider limits,
         so the shading follows the verdict, not a fixed 21-35. */}
     <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
-      {[["ribbon", "Ribbon"], ["lengths", "Lengths"]].map(([k, lbl]) => (
+      {[["ribbon", "Ribbon"], ["lengths", "Lengths"], ["spiral", "Spiral"]].map(([k, lbl]) => (
         <button key={k} onClick={() => setCycleView(k)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12,
           padding: "5px 12px", borderRadius: 9999, cursor: "pointer",
           background: cycleView === k ? C.plum : C.low, color: cycleView === k ? "#fff" : C.inkVar,
           border: `1.5px solid ${cycleView === k ? C.plum : "transparent"}` }}>{lbl}</button>))}
     </div>
     <div style={{ marginTop: 12 }}>
-      {cycleView === "ribbon"
-        ? <CycleRibbon cycles={cyclesFrom(logs)} lo={band[0]} hi={band[1]} />
+      {cycleView === "ribbon" ? <CycleRibbon cycles={cyclesFrom(logs)} lo={band[0]} hi={band[1]} />
+        : cycleView === "spiral" ? <CycleSpiral logs={logs} avg={ins.avgCycleDays} />
         : <CycleBars gaps={gaps} lo={band[0]} hi={band[1]} />}
     </div>
     <div style={{ fontSize: 11.5, color: C.outline, marginTop: 10, lineHeight: 1.5 }}>Typical adult cycles run 21–35 days. Consistently longer or highly variable cycles are a common PMOS sign — worth raising with a clinician.</div>
@@ -2109,6 +2081,72 @@ function CycleBars({ gaps, lo = 21, hi = 35 }) {
     <text x={w} y={h - 3} textAnchor="end" style={{ fontSize: 8, fill: C.outline }}>each cycle, over time →</text>
   </svg>);
 }
+// The year as one continuous spiral, one turn per cycle-length of days, with
+// bleeding drawn thick. Because a turn is exactly their average cycle, a period
+// that arrives on time lands on the same spoke every loop: regular cycles stack
+// into a straight radial line, and drift walks visibly around the spiral.
+function CycleSpiral({ logs, avg, maxTurns = 8 }) {
+  const T = Math.min(60, Math.max(18, Math.round(avg || 28)));   // days per turn
+  const today = new Date().toISOString().slice(0, 10);
+  const dated = (logs || []).filter((l) => l.date && l.date <= today).sort((a, b) => a.date.localeCompare(b.date));
+  if (dated.length < T * 1.5) return null;
+
+  const end = dayOf(dated[dated.length - 1].date);
+  const window = Math.min(dated.length, Math.round(T * maxTurns));
+  const first = new Date(end.getTime() - (window - 1) * DAY_MS);
+  const bleeding = new Set(dated.filter((l) => l.period).map((l) => l.date));
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  const S = 250, cx = S / 2, cy = S / 2, r0 = 24, rMax = 104;
+  const turns = window / T;
+  const band = (rMax - r0) / Math.max(1, turns);
+  const wBleed = Math.max(3, Math.min(7.5, band * 0.62));
+  const wRest = Math.max(1.4, wBleed * 0.42);
+  const at = (i) => {
+    const th = (i / T) * 2 * Math.PI - Math.PI / 2;
+    const r = r0 + (i / Math.max(1, window - 1)) * (rMax - r0);
+    return [cx + r * Math.cos(th), cy + r * Math.sin(th)];
+  };
+
+  const segs = [];
+  let starts = [];
+  for (let i = 0; i < window - 1; i++) {
+    const d = iso(new Date(first.getTime() + i * DAY_MS));
+    const on = bleeding.has(d);
+    const [x1, y1] = at(i), [x2, y2] = at(i + 1);
+    segs.push({ x1, y1, x2, y2, on, key: d });
+    const prev = iso(new Date(first.getTime() + (i - 1) * DAY_MS));
+    if (on && (i === 0 || !bleeding.has(prev))) starts.push({ i, date: d });
+  }
+  const [tx, ty] = at(window - 1);
+  // the spoke each period would land on if every cycle ran exactly to average
+  const spokeAngle = starts.length ? (starts[starts.length - 1].i / T) * 2 * Math.PI - Math.PI / 2 : null;
+
+  return (<div>
+    <svg viewBox={`0 0 ${S} ${S}`} width="100%" style={{ display: "block", maxWidth: 320, margin: "0 auto" }}>
+      {/* the "on time" line: one turn on from the last period, at the same
+          angle, is where the next one lands if this cycle runs to average */}
+      {spokeAngle != null && (<g>
+        <line x1={cx + r0 * 0.5 * Math.cos(spokeAngle)} y1={cy + r0 * 0.5 * Math.sin(spokeAngle)}
+          x2={cx + (rMax + 8) * Math.cos(spokeAngle)} y2={cy + (rMax + 8) * Math.sin(spokeAngle)}
+          stroke={C.lilacDim} strokeWidth={1} strokeDasharray="3 4" />
+        <text x={cx + (rMax + 14) * Math.cos(spokeAngle)} y={cy + (rMax + 14) * Math.sin(spokeAngle) + 2}
+          textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 7.5, fill: C.outline }}>on time</text>
+      </g>)}
+      {segs.map((g) => (<line key={g.key} x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} strokeLinecap="round"
+        stroke={g.on ? C.roseOn : C.high} strokeWidth={g.on ? wBleed : wRest} />))}
+      {starts.map((st) => { const [x, y] = at(st.i); return (
+        <circle key={st.date} cx={x} cy={y} r={wBleed * 0.34} fill="#fff" fillOpacity={0.9} />); })}
+      <circle cx={tx} cy={ty} r={4.5} fill="#fff" stroke={C.plum} strokeWidth={2.5} />
+    </svg>
+    <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 12, color: C.inkVar, lineHeight: 1.5, marginTop: 6 }}>
+      {starts.length} periods over {Math.round(window / 30)} months · one turn = {T} days, your average.<br />
+      <span style={{ color: C.outline }}>Oldest at the centre, today on the outside. On a regular cycle
+        every period lands on the dashed line.</span>
+    </div>
+  </div>);
+}
+
 // scatter with ordinary-least-squares regression line
 function Scatter({ points, xMax, yMax, xLabel, yLabel }) {
   if (points.length < 4) return null;
@@ -2134,62 +2172,6 @@ function CorrCard({ icon: Ico, bg, on, habit, symptom, pct, note }) {
     <div style={{ flex: 1 }}><div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 15 }}>{habit}</div><div style={{ fontSize: 13, color: C.inkVar }}>{symptom}</div></div>
     <div style={{ textAlign: "right" }}><div style={{ fontFamily: head, fontWeight: 700, fontSize: 22, color: C.plum }}>{pct}%</div><div style={{ fontSize: 11, color: C.outline }}>{note}</div></div>
   </Card>);
-}
-
-// ---- CHAT: an advisory conversation. The backend grounds Tawazzun's guidance in
-// the patient's own tracked insights (trends + correlations from their logs)
-// plus their personal vocabulary and adaptation state, so the chat can advise
-// rather than just gather information.
-function ChatScreen({ profile, settings }) {
-  const base = (settings.backendUrl || "/api").replace(/\/$/, "");
-  const pid = settings.patientId;
-  const opening = `Hi${profile.name ? " " + profile.name : ""} — I'm here to talk things through. I can see your tracked patterns, so tell me what's on your mind and I'll give you grounded, practical guidance.`;
-  const starters = ["How are my cycles looking?", "What should I focus on this week?", "Why might my pain be flaring?"];
-
-  const [turns, setTurns] = useState([{ role: "assistant", text: opening }]);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [learned, setLearned] = useState([]);
-  const scroller = useRef();
-  useEffect(() => { scroller.current?.scrollTo(0, scroller.current.scrollHeight); }, [turns, busy]);
-
-  const send = async (t) => {
-    const q = (t || text).trim(); if (!q || busy) return;
-    if (!pid) { setError("No patient is set up yet — open the app from Home so توازن can connect to the backend."); return; }
-    setError(""); const prior = turns.slice(-20); const next = [...turns, { role: "user", text: q }];
-    setTurns(next); setText(""); setBusy(true);
-    try {
-      const res = await fetch(`${base}/chatbox/patients/${pid}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: q, turns: prior }) });
-      let data = {}; try { data = await res.json(); } catch (e) {}
-      if (!res.ok) throw new Error(data.detail || `Chat request failed (${res.status}).`);
-      setTurns([...next, { role: "assistant", text: data.reply || "" }]);
-      if (data.learned?.length) setLearned((p) => [...data.learned, ...p].slice(0, 6));
-    } catch (e) {
-      setError(e?.message || "Couldn't reach توازن.");
-      setTurns([...next, { role: "assistant", text: e?.message || "Something went wrong.", err: true }]);
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: 520 }}>
-      <H size={26} style={{ margin: "6px 0 14px" }}>Talk to <Brand /></H>
-      <div ref={scroller} style={{ flex: 1, overflowY: "auto", display: "grid", gap: 12, paddingBottom: 10, maxHeight: 460 }}>
-        {turns.map((m, i) => (<div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-          {m.role === "assistant" && <BrandMark size={36} />}
-          <div style={{ maxWidth: "80%", padding: "13px 16px", borderRadius: 20, fontSize: 15, lineHeight: 1.45, boxShadow: m.role === "user" ? "none" : SH_SM,
-            background: m.role === "user" ? C.plum : m.err ? C.rose : C.surface, color: m.role === "user" ? "#fff" : m.err ? C.error : C.ink, borderTopRightRadius: m.role === "user" ? 4 : 20, borderTopLeftRadius: m.role === "user" ? 20 : 4 }}>{m.text}</div></div>))}
-        {busy && <div style={{ display: "flex", gap: 8, alignItems: "center", color: C.inkVar, fontSize: 13 }}><BrandMark size={36} /><Loader2 size={14} className="spin" /> thinking…</div>}
-      </div>
-      {turns.length <= 1 && (<div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "4px 0 12px" }}>{starters.map((c) => (<button key={c} onClick={() => send(c)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "9px 14px", borderRadius: 9999, background: C.surface, border: `1.5px solid ${C.outlineVar}`, color: C.ink, cursor: "pointer" }}>{c}</button>))}</div>)}
-      {learned.length > 0 && (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", margin: "10px 0", fontSize: 12, color: C.inkVar }}><Sparkles size={13} color={C.roseOn} /> Learning your words:{learned.map((d, i) => (<span key={i} style={{ padding: "3px 9px", borderRadius: 12, background: C.rose, color: C.roseOn }}>{d.concept}: "{d.phrase}"</span>))}</div>)}
-      <div style={{ display: "flex", gap: 10, alignItems: "center", background: C.surface, borderRadius: 9999, padding: 6, boxShadow: SH, marginTop: 10 }}>
-        <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Ask توازن anything…" disabled={busy} style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 16, padding: "8px 14px", background: "transparent" }} />
-        <button onClick={() => send()} disabled={busy || !text.trim()} style={{ width: 44, height: 44, borderRadius: "50%", border: "none", background: C.plum, color: "#fff", display: "grid", placeItems: "center", cursor: busy || !text.trim() ? "not-allowed" : "pointer", opacity: busy || !text.trim() ? 0.5 : 1 }}><ArrowRight size={20} /></button>
-      </div>
-      {error && <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, padding: "10px 14px", borderRadius: 12, background: C.rose, color: C.error, fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}</div>}
-    </div>
-  );
 }
 
 // ---- PREPARE ---------------------------------------------------------------
