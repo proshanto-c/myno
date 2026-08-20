@@ -207,6 +207,7 @@ const normalizedCategory = (cat) => {
 // GET /record/schema, so the app, the voice extractor and the insight
 // categories can never drift apart. This copy is only what we draw while that
 // request is in flight, or if there is no backend to ask.
+const LEVELS = ["low", "usual", "high"];
 const FALLBACK_SCHEMA = [
   { key: "cycle", group: "Menstrual cycle", fields: [
     { key: "period", label: "Started your period?", type: "bool" },
@@ -250,7 +251,6 @@ const FALLBACK_SCHEMA = [
     { key: "hyperpigmentation", label: "Hyperpigmentation", type: "bool" },
   ] },
 ];
-const LEVELS = ["low", "usual", "high"];
 const SCHEMA_CACHE = "myno:record-schema:v2";
 
 // One fetch at boot, remembered between visits so a slow or missing backend
