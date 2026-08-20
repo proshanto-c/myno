@@ -789,6 +789,11 @@ def _normalize_extract_payload(payload):
     if not isinstance(payload, dict):
         return {}
     out = dict(payload)
+    # speech names a place; the drawing needs a point
+    if out.get("painAreas"):
+        points = record.pain_points(out.pop("painAreas"))
+        if points:
+            out["painPoints"] = points
     for key in _SCALE_10_FIELDS:
         if key in out and out[key] is not None:
             out[key] = _clamp_10(out[key])
@@ -822,6 +827,7 @@ def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
         "Omit 'scale' for purely qualitative categories. IMPORTANT: a category may already carry a user-set scale value — KEEP that value unless they clearly state a new one in speech.\n"
         f"- NEVER create a category for, ask about, or volunteer anything in this blocked list: {block_line}.\n"
         "- Also fill any standard tracking fields ONLY when clearly implied by what they said; otherwise use null/false. Never force a value.\n"
+        "- 'painAreas': ONLY where they said it hurts, using the exact names listed; [] if they did not say. Never guess a location from a pain rating alone.\n"
         "Return ONLY JSON, no prose, no code fences: "
         "{" + record.extract_shape() +
         ',"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. ' 

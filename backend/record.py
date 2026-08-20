@@ -105,6 +105,49 @@ SCHEMA = [
     ]},
 ]
 
+# Where pain gets reported, as places a person would name out loud, each mapped
+# to a point on the body drawing (fractions of its 100x205 box). Speech can't
+# give coordinates, so the model returns names from this list and the server
+# turns them into markers — the same markers a tap would leave.
+PAIN_REGIONS = [
+    ("head",          "head",           "front", 0.50, 0.07),
+    ("jaw",           "jaw",            "front", 0.50, 0.11),
+    ("neck",          "neck",           "front", 0.50, 0.14),
+    ("chest",         "chest",          "front", 0.50, 0.28),
+    ("breasts",       "breasts",        "front", 0.42, 0.30),
+    ("upper abdomen", "upper abdomen",  "front", 0.50, 0.41),
+    ("lower abdomen", "lower abdomen",  "front", 0.50, 0.50),
+    ("pelvis",        "pelvis",         "front", 0.50, 0.55),
+    ("left side",     "left side",      "front", 0.38, 0.44),
+    ("right side",    "right side",     "front", 0.62, 0.44),
+    ("thighs",        "thighs",         "front", 0.42, 0.65),
+    ("knees",         "knees",          "front", 0.43, 0.75),
+    ("calves",        "calves",         "front", 0.43, 0.85),
+    ("shoulders",     "shoulders",      "back",  0.36, 0.24),
+    ("upper back",    "upper back",     "back",  0.50, 0.29),
+    ("lower back",    "lower back",     "back",  0.50, 0.46),
+    ("hips",          "hips",           "back",  0.38, 0.54),
+    ("tailbone",      "tailbone",       "back",  0.50, 0.56),
+]
+PAIN_NAMES = [key for key, *_ in PAIN_REGIONS]
+
+
+def pain_points(names):
+    """Named areas from speech turned into markers on the drawing."""
+    by_name = {key: (view, x, y) for key, _, view, x, y in PAIN_REGIONS}
+    out = []
+    for raw in (names or []):
+        key = str(raw).strip().lower()
+        hit = by_name.get(key)
+        if hit is None:                       # "my lower tummy" -> lower abdomen
+            hit = next((v for k, v in by_name.items() if k in key or key in k), None)
+            key = next((k for k in by_name if k in str(raw).lower() or str(raw).lower() in k), key)
+        if hit and not any(p["label"] == key for p in out):
+            view, x, y = hit
+            out.append({"view": view, "x": x, "y": y, "label": key})
+    return out[:6]
+
+
 # ---- views onto the schema, so nothing downstream re-lists the fields --------
 CATEGORIES = [(g["key"], g["group"]) for g in SCHEMA]
 FIELDS = {g["key"]: [f["key"] for f in g["fields"]] for g in SCHEMA}
@@ -141,7 +184,7 @@ SCALE_FIELDS = {f["key"] for f in EXTRACTABLE if f["type"] in ("scale", "emoji")
 def extract_shape():
     """The JSON shape the voice extractor must return, generated from the schema
     so a new field is listened for the moment it is added above."""
-    parts = []
+    parts = ['"painAreas":[' + "|".join(PAIN_NAMES) + "] (names only, [] if none)"]
     for f in EXTRACTABLE:
         if f["type"] == "bool":
             spec = "true|false|null"

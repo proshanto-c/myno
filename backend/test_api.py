@@ -248,6 +248,34 @@ def test_insights_endpoint_returns_stats_even_if_the_model_fails():
         assert r.status_code == 502, r.text          # a Claude failure, surfaced
 
 @test
+def test_spoken_places_become_markers_on_the_drawing():
+    import record
+    pts = record.pain_points(["lower abdomen", "my lower back"])
+    assert [p["label"] for p in pts] == ["lower abdomen", "lower back"]
+    assert pts[0]["view"] == "front" and pts[1]["view"] == "back"
+    for p in pts:
+        assert 0 < p["x"] < 1 and 0 < p["y"] < 1
+    # unknown places are dropped, and the same place twice is one marker
+    assert record.pain_points(["the moon"]) == []
+    assert len(record.pain_points(["chest", "chest"])) == 1
+    assert record.pain_points(None) == []
+
+@test
+def test_the_extractor_is_told_which_places_it_may_name():
+    import record
+    shape = record.extract_shape()
+    assert '"painAreas"' in shape
+    for name in ("lower abdomen", "lower back", "chest"):
+        assert name in shape, name
+
+@test
+def test_pain_areas_are_converted_before_they_reach_the_client():
+    out = main._normalize_extract_payload({"painAreas": ["pelvis"], "pain": 12})
+    assert "painAreas" not in out
+    assert out["painPoints"][0]["label"] == "pelvis"
+    assert out["pain"] == 10          # clamped
+
+@test
 def test_extract_prompt_lists_every_schema_field():
     import record
     shape = record.extract_shape()

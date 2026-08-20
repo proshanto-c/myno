@@ -95,16 +95,6 @@ const KEY = "myno:serene:v1";
 async function loadState() { try { const r = await window.storage.get(KEY); return r?.value ? JSON.parse(r.value) : null; } catch (e) { return null; } }
 async function saveState(s) { try { await window.storage.set(KEY, JSON.stringify(s)); } catch (e) {} }
 
-// ---- Claude (key from settings; falls back to keyless sandbox) --------------
-async function callClaude({ system, messages, apiKey, maxTokens = 1000 }) {
-  const headers = { "Content-Type": "application/json" };
-  if (apiKey) { headers["x-api-key"] = apiKey; headers["anthropic-version"] = "2023-06-01"; headers["anthropic-dangerous-direct-browser-access"] = "true"; }
-  const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers,
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: maxTokens, system, messages }) });
-  const j = await res.json();
-  return (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
-}
-
 // ---- feature blacklist -----------------------------------------------------
 const FEATURES = {
   mood: { label: "Mood & mental health", fields: ["mood"] },
@@ -158,7 +148,10 @@ function useSpeaker(settings) {
 // ---- voice → daily-log fields. Server-side via the backend (no key in the
 // browser; avoids the CORS "Failed to fetch"); direct-Claude only as a demo
 // fallback when a key is set and the backend can't be reached. -----------------
-const EXTRACT_SYS = `You are Tawazzun, a warm voice companion helping someone log their PMOS day by talking. From the WHOLE conversation and what they just said: (1) "say" — reply briefly and directly: note what you heard in a few words and move on, warm but matter-of-fact (skip heavy empathy, reassurance, exclamations); INFER ratings/severities yourself and never ask for numbers or 1-to-10 ratings; ask a short clarifying question only when genuinely needed (never about numbers), else just acknowledge (spoken, under ~25 words, never diagnose); (2) "categories" — a small evolving set (max 6) of what THIS person actually talks about, in THEIR words, e.g. {"key":"brain_fog","label":"Brain fog","value":"heavy this morning"}; reuse stable lower_snake_case keys, add new ones they raise, build on the categories given. When a category is naturally a rating/severity/amount, ALSO include "scale":{"value":int,"max":10} where value is 0-10; KEEP a user-set scale value unless they clearly change it; omit scale for qualitative ones; (3) the standard tracking fields ONLY when clearly implied. ONLY JSON: {"period":true|false|null,"flow":"none|spotting|light|medium|heavy"|null,"birthControl":str|null,"pain":0-10|null,"mood":0-10|null,"energy":0-10|null,"sleep":0-10|null,"brainFog":0-10|null,"sexDrive":0-10|null,"sugar":0-10|null,"foodDrive":0-10|null,"dietExercise":str|null,"painMap":str|null,"morningWeight":number|null,"hairGrowth":bool,"hairLoss":bool,"acne":bool,"skinPatches":bool,"hyperpigmentation":bool,"bloating":bool,"cravings":bool,"diagnoses":str|null,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. null/false for fields not mentioned; omit scale where it doesn't fit.`;
+// Every prompt lives in the backend (record.py builds the field list, main.py
+// the instruction), so there is one wording to change and no API key in a
+// browser. If the backend can't be reached, the app says so instead of quietly
+// asking a different model a different question.
 // Selectable conversation personalities (only the spoken-reply tone changes).
 const PERSONALITIES = [["direct", "Direct", "Brief and to the point"], ["warm", "Warm", "Gentle and caring"], ["coach", "Coach", "Encouraging, action-first"], ["clinical", "Clinical", "Calm and factual"], ["friend", "Friend", "Casual and relatable"]];
 const PSTYLE = {
@@ -338,35 +331,19 @@ function BodyMap({ value, onChange }) {
 
 async function extractFields({ settings, text, context = "", blocked = [], categories = [], personality = "direct" }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
-  try {
-    const res = await fetch(`${base}/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, context, blocked, categories, personality }) });
-    if (res.ok) return await res.json();
-    throw new Error(`extract ${res.status}`);
-  } catch (e) {
-    if (settings.apiKey) {
-      const ctx = context ? `Conversation so far: ${context}\n` : "";
-      const out = await callClaude({ apiKey: settings.apiKey, maxTokens: 500, messages: [{ role: "user", content: `${EXTRACT_SYS}\nTone for "say": ${pstyle(personality)}\n\n${ctx}Current categories: ${JSON.stringify(categories)}\n\nThey just said: "${text}"` }] });
-      return JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
-    }
-    throw e;
-  }
+  const res = await fetch(`${base}/extract`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, context, blocked, categories, personality }) });
+  if (!res.ok) throw new Error(`extract ${res.status}`);
+  return await res.json();
 }
 
 // ---- live insights: blend tracked history with the running conversation -------
-const ADVISE_SYS = `You are Tawazzun, a warm, practical PMOS companion. Combine the person's tracked history (history_summary) with what they're telling you now to surface ONE clear insight — a trend or correlation grounded in THEIR data — plus brief, actionable, non-diagnostic advice. Never diagnose or give drug doses. ONLY JSON: {"headline":str (<=8 words), "correlations":[{"label":str,"strength":0-100}] (0-3), "say":str (<=45 words of warm advice)}.`;
 async function extractAdvise({ settings, note, categories = [], summary = {}, blocked = [], personality = "direct" }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
-  try {
-    const res = await fetch(`${base}/advise`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, categories, summary, blocked, personality }) });
-    if (res.ok) return await res.json();
-    throw new Error(`advise ${res.status}`);
-  } catch (e) {
-    if (settings.apiKey) {
-      const out = await callClaude({ apiKey: settings.apiKey, maxTokens: 500, messages: [{ role: "user", content: `${ADVISE_SYS}\n\n${JSON.stringify({ today_conversation: note, categories, history_summary: summary })}` }] });
-      return JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
-    }
-    throw e;
-  }
+  const res = await fetch(`${base}/advise`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note, categories, summary, blocked, personality }) });
+  if (!res.ok) throw new Error(`advise ${res.status}`);
+  return await res.json();
 }
 
 // ---- voice capture: NeMo streaming WS, else Web Speech ---------------------
@@ -796,7 +773,7 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [profile, setProfile] = useState(BLANK);
   const [logs, setLogs] = useState([]);
-  const [settings, setSettings] = useState({ apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct" });
+  const [settings, setSettings] = useState({ nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct" });
   const vw = useViewport();
   const wide = vw >= 1024;
   const schema = useRecordSchema(settings);
@@ -804,7 +781,7 @@ export default function App() {
   useEffect(() => { (async () => {
     const s = await loadState();
     const profile0 = s?.profile || BLANK;
-    const settings0 = { apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", ...(s?.settings || {}) };
+    const settings0 = { nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", ...(s?.settings || {}) };
     setProfile(profile0); setSettings(settings0);
     // DB-backed logs: provision a patient, seed realistic history, load it.
     const base = (settings0.backendUrl || "/api").replace(/\/$/, "");
@@ -1653,11 +1630,17 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       // Merge whatever the schema asks for, rather than a hand-kept list that
       // silently drops any field added to the backend since it was written.
       const next = { ...base };
-      const fields = schema.flatMap((g) => g.fields).filter((fd) => fd.type !== "bodymap");
+      const fields = schema.flatMap((g) => g.fields);
       for (const fd of fields) {
         const k = fd.key;
-        if (fd.type === "scale" || fd.type === "emoji") next[k] = scaleValue(k);
-        else if (fd.type === "bool") next[k] = f[k] ?? base[k];        // false is an answer
+        if (fd.type === "bodymap") {
+          // markers from speech join the ones already tapped, never replace them
+          const spoken = Array.isArray(f[k]) ? f[k] : [];
+          const had = Array.isArray(base[k]) ? base[k] : [];
+          const fresh = spoken.filter((sp) => !had.some((h) => h.view === sp.view &&
+            Math.abs(h.x - sp.x) < 0.02 && Math.abs(h.y - sp.y) < 0.02));
+          next[k] = fresh.length ? [...had, ...fresh] : had;
+        } else if (fd.type === "scale" || fd.type === "emoji") next[k] = scaleValue(k);
         else next[k] = f[k] ?? base[k];
       }
       // which of them actually came from speech, so those rows can flash
