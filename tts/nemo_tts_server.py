@@ -38,8 +38,9 @@ SAMPLE_RATE = 22050
 
 # Softer, more natural voice. VITS (end-to-end) sounds far less robotic than
 # FastPitch + HiFi-GAN, so we use it when available and fall back otherwise.
-SOFT_PACE = 0.92    # < 1.0 = slower / gentler (FastPitch fallback only)
 SOFT_GAIN = 0.9     # gentle loudness ease
+FP_PACE = 1.06      # FastPitch fallback: > 1.0 = faster
+VITS_LEN = 0.88     # VITS length_scale: < 1.0 = faster (natural, pitch preserved, no artifacts)
 
 
 def _soften(audio: np.ndarray) -> np.ndarray:
@@ -85,11 +86,15 @@ class TTSEngine:
             return np.zeros(1, dtype=np.float32)
         if self.kind == "vits":
             tokens = self.vits.parse(text)
-            audio = self.vits.convert_text_to_waveform(tokens=tokens)
+            try:  # native speed via length_scale (faster, no robotic artifacts)
+                lengths = torch.tensor([tokens.size(-1)], device=tokens.device)
+                audio = self.vits.net_g.infer(tokens, lengths, length_scale=VITS_LEN)[0]
+            except Exception:
+                audio = self.vits.convert_text_to_waveform(tokens=tokens)
         else:
             tokens = self.spec.parse(text)
             try:
-                spectrogram = self.spec.generate_spectrogram(tokens=tokens, pace=SOFT_PACE)
+                spectrogram = self.spec.generate_spectrogram(tokens=tokens, pace=FP_PACE)
             except TypeError:  # older signature without `pace`
                 spectrogram = self.spec.generate_spectrogram(tokens=tokens)
             audio = self.vocoder.convert_spectrogram_to_audio(spec=spectrogram)
