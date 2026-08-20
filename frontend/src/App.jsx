@@ -281,6 +281,36 @@ const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, sugar: 5, flow: null, bir
   sleep: 5, brainFog: 0, sexDrive: 5, painPoints: [], morningWeight: null, foodDrive: 5, cravings: null, cravingType: null,
   exercise: null, dietCarbs: null, dietFats: null, dietProtein: null, dietFibre: null, acne: false, hairGrowth: false, hairLoss: false, dryPatches: false, hyperpigmentation: false };
 
+// ---- cycles ----------------------------------------------------------------
+// Consecutive bleeding days are one period. Two runs are two cycles, and the
+// days from one start to the next are the cycle length — which is what the
+// guideline bands are measured against.
+const DAY_MS = 86400000;
+const dayOf = (iso) => new Date(`${iso}T00:00:00`);
+
+function periodRuns(logs) {
+  const dates = [...new Set((logs || []).filter((l) => l.period).map((l) => l.date))].sort();
+  const runs = [];
+  for (const d of dates) {
+    const run = runs[runs.length - 1], prev = run && run[run.length - 1];
+    if (prev && dayOf(d) - dayOf(prev) === DAY_MS) run.push(d);
+    else runs.push([d]);
+  }
+  return runs;
+}
+
+// Each run with the length of the cycle it opened. The most recent one is still
+// running, so it carries how far in it is rather than a finished length.
+function cyclesFrom(logs) {
+  const runs = periodRuns(logs);
+  return runs.map((run, i) => {
+    const next = runs[i + 1];
+    const days = next ? Math.round((dayOf(next[0]) - dayOf(run[0])) / DAY_MS)
+                      : Math.round((Date.now() - dayOf(run[0])) / DAY_MS) + 1;
+    return { start: run[0], bleed: run.length, days, open: !next };
+  });
+}
+
 // ---- the body map ----------------------------------------------------------
 // Tap the drawing to drop a marker where it hurts; tap a marker to take it off.
 // Points are stored normalised (0–1) with the view they belong to, so they
@@ -1152,16 +1182,7 @@ function CycleCalendar({ logs, onSet }) {
   // Every bleed, so a run can say how long after the previous one it began —
   // start-to-start is the cycle length, and it is what makes two bleeds read as
   // two cycles rather than one broken stretch.
-  const runs = (() => {
-    const dates = [...new Set(logs.filter((l) => l.period).map((l) => l.date))].sort();
-    const out = [];
-    for (const d of dates) {
-      const run = out[out.length - 1], prev = run && run[run.length - 1];
-      if (prev && new Date(d) - new Date(prev) === 86400000) run.push(d);
-      else out.push([d]);
-    }
-    return out;
-  })();
+  const runs = periodRuns(logs);
   const lastRun = runs.length ? runs[runs.length - 1] : null;
   const gapDays = runs.length > 1
     ? Math.round((new Date(runs[runs.length - 1][0]) - new Date(runs[runs.length - 2][0])) / 86400000)
@@ -1604,7 +1625,7 @@ function MicBtn({ listening, onClick, size = 46 }) {
 }
 
 // ---- INSIGHTS (twin) -------------------------------------------------------
-function InsightsScreen({ ins, logs, settings, wide }) {
+function InsightsScreen({ ins, logs, settings, wide, assessment }) {
   // metric list = standard fields + personalized categories that carry a slider
   const STD = [["pain", "Pain"], ["mood", "Mood"], ["energy", "Energy"], ["sleep", "Sleep"], ["brainFog", "Brain fog"], ["sugar", "Sugar"]]
     .filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet"))).map(([k, l]) => [k, l, false]);
@@ -1736,6 +1757,8 @@ function InsightsScreen({ ins, logs, settings, wide }) {
 
   // Cycle variability: mean ± SD and coefficient of variation
   const cy = stats?.cycle;
+  const cband = assessment?.cycles?.band;
+  const band = [cband?.shortDays || 21, cband?.longDays || 35];
   const cycleCard = cy && (<Card>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
       <Label color={C.inkVar}>Cycle regularity</Label>
@@ -1746,7 +1769,9 @@ function InsightsScreen({ ins, logs, settings, wide }) {
       <span style={{ fontSize: 14, color: C.inkVar }}>± {cy.sdDays} days (mean ± SD)</span>
     </div>
     <div style={{ fontSize: 13, color: C.inkVar, marginTop: 8 }}>Range {cy.min}–{cy.max} days across {cy.cycles} cycles · variability (CV) {cy.cv}%</div>
-    {gaps.length > 0 && <div style={{ marginTop: 12 }}><CycleBars gaps={gaps} /></div>}
+    {/* the band is the one the rules judged them against — teens get wider
+        limits, so the shading has to follow the verdict, not a fixed 21-35 */}
+    <div style={{ marginTop: 14 }}><CycleRibbon cycles={cyclesFrom(logs)} lo={band[0]} hi={band[1]} /></div>
     <div style={{ fontSize: 11.5, color: C.outline, marginTop: 10, lineHeight: 1.5 }}>Typical adult cycles run 21–35 days. Consistently longer or highly variable cycles are a common PMOS sign — worth raising with a clinician.</div>
   </Card>);
 
@@ -1935,25 +1960,59 @@ function Heatmap({ days, valueOf, max, color = C.plum }) {
       return <rect key={i} x={c * (cell + gap)} y={r * (cell + gap)} width={cell} height={cell} rx={3} fill={v == null ? C.high : color} fillOpacity={op} />; })}
   </svg>);
 }
-// cycle lengths over time as dots, with the normal 21–35 day band + reference lines
-function CycleBars({ gaps, lo = 21, hi = 35 }) {
-  if (!gaps.length) return null;
-  const w = 300, h = 124, padL = 22, padB = 16, padT = 14;
-  const maxV = Math.max(hi + 8, ...gaps);
-  const X = (i) => padL + (gaps.length === 1 ? (w - padL - 10) / 2 : (i / (gaps.length - 1)) * (w - padL - 12));
-  const Y = (v) => padT + (1 - v / maxV) * (h - padT - padB);
-  const pts = gaps.map((g, i) => [X(i), Y(g)]);
-  const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
-  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block", maxWidth: 400, margin: "0 auto" }}>
-    <rect x={padL} y={Y(hi)} width={w - padL} height={Y(lo) - Y(hi)} fill={C.lilac} fillOpacity={0.5} />
-    {[lo, hi].map((v) => (<g key={v}><line x1={padL} y1={Y(v)} x2={w} y2={Y(v)} stroke={C.lilacDim} strokeDasharray="3 3" /><text x={0} y={Y(v) + 3} style={{ fontSize: 8, fill: C.outline }}>{v}</text></g>))}
-    {gaps.length > 1 && <path d={line} fill="none" stroke={C.outlineVar} strokeWidth={1.5} />}
-    {pts.map((p, i) => { const ok = gaps[i] >= lo && gaps[i] <= hi; return (<g key={i}>
-      <circle cx={p[0]} cy={p[1]} r={4.5} fill={ok ? C.plum : C.roseOn} />
-      <text x={p[0]} y={p[1] - 8} textAnchor="middle" style={{ fontSize: 9, fontWeight: 700, fill: ok ? C.plum : C.roseOn }}>{gaps[i]}</text></g>); })}
-    <text x={w} y={h - 3} textAnchor="end" style={{ fontSize: 8, fill: C.outline }}>each cycle, over time →</text>
-  </svg>);
+// Every cycle as its own row, all starting at day 1: the bleed in deep rose,
+// the rest of the cycle in pale, the typical range shaded behind. Regular
+// cycles end in a straight edge — irregular ones don't, and no number has to
+// say so.
+function CycleRibbon({ cycles, lo = 21, hi = 35, show = 7 }) {
+  const rows = cycles.slice(-show);
+  if (rows.length < 2) return null;
+  const W = 300, padL = 42, padR = 26, rowH = 13, gap = 6, top = 14;
+  const track = W - padL - padR;
+  const maxDays = Math.max(hi + 6, ...rows.map((r) => r.days));
+  const x = (d) => padL + (d / maxDays) * track;
+  const H = top + rows.length * (rowH + gap) + 12;
+  const label = (iso) => dayOf(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const outside = rows.filter((r) => !r.open && (r.days < lo || r.days > hi)).length;
+  const closed = rows.filter((r) => !r.open).length;
+  return (<div>
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", maxWidth: 420, margin: "0 auto" }}>
+      <rect x={x(lo)} y={top - 6} width={x(hi) - x(lo)} height={H - top - 4} fill={C.lilac} fillOpacity={0.22} rx={3} />
+      {[lo, hi].map((v) => (<g key={v}>
+        <line x1={x(v)} y1={top - 6} x2={x(v)} y2={H - 10} stroke={C.lilacDim} strokeWidth={0.8} strokeDasharray="2 3" />
+        <text x={x(v)} y={top - 8} textAnchor="middle" style={{ fontSize: 7, fill: C.outline }}>{v}</text>
+      </g>))}
+      {rows.map((r, i) => {
+        const y = top + i * (rowH + gap);
+        const ok = r.open || (r.days >= lo && r.days <= hi);
+        return (<g key={r.start}>
+          <text x={padL - 6} y={y + rowH - 3} textAnchor="end" style={{ fontSize: 7.5, fill: C.inkVar }}>{label(r.start)}</text>
+          <rect x={padL} y={y} width={Math.max(2, x(r.days) - padL)} height={rowH} rx={rowH / 2}
+            fill={C.high} fillOpacity={r.open ? 0.5 : 1} />
+          <rect x={padL} y={y} width={Math.max(3, x(r.bleed) - padL)} height={rowH} rx={rowH / 2} fill={C.roseOn} />
+          <text x={x(r.days) + 4} y={y + rowH - 3} style={{ fontSize: 7.5, fontWeight: 700, fill: ok ? C.plum : C.roseOn }}>
+            {r.days}{r.open ? "+" : ""}</text>
+        </g>);
+      })}
+      <text x={padL} y={H - 2} style={{ fontSize: 6.5, fill: C.outline }}>day 1</text>
+      <text x={W - padR} y={H - 2} textAnchor="end" style={{ fontSize: 6.5, fill: C.outline }}>days since day 1 →</text>
+    </svg>
+    <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 8, flexWrap: "wrap",
+      fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <span style={{ width: 12, height: 8, borderRadius: 4, background: C.roseOn }} /> bleeding</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <span style={{ width: 12, height: 8, borderRadius: 4, background: C.high }} /> rest of the cycle</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <span style={{ width: 12, height: 8, borderRadius: 4, background: C.lilac }} /> typical {lo}–{hi} days</span>
+    </div>
+    {closed > 0 && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 12.5, marginTop: 8,
+      color: outside ? C.roseOn : C.plum }}>
+      {outside ? `${outside} of ${closed} landed outside ${lo}–${hi} days`
+               : `all ${closed} landed inside ${lo}–${hi} days`}</div>}
+  </div>);
 }
+
 // scatter with ordinary-least-squares regression line
 function Scatter({ points, xMax, yMax, xLabel, yLabel }) {
   if (points.length < 4) return null;
