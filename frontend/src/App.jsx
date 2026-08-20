@@ -223,9 +223,8 @@ const FALLBACK_SCHEMA = [
   { key: "cycle", group: "Menstrual cycle", fields: [
     { key: "period", label: "Started your period?", type: "bool" },
     { key: "flow", label: "Flow", type: "select", options: ["none", "spotting", "light", "medium", "heavy"] },
-    { key: "birthControl", label: "On birth control?", type: "bool" },
-    { key: "birthControlType", label: "Type", type: "select", options: ["natural", "mechanical", "hormonal"],
-      showIf: { field: "birthControl", equals: true } },
+    { key: "birthControlType", label: "Birth control", type: "select",
+      options: ["none", "natural", "mechanical", "hormonal"] },
   ] },
   { key: "wellbeing", group: "Wellbeing", fields: [
     { key: "mood", label: "Mood", type: "emoji", options: [
@@ -244,7 +243,7 @@ const FALLBACK_SCHEMA = [
     { key: "foodDrive", label: "Food drive", type: "scale", max: SCALE_MAX, words: scaleLabels.foodDrive },
   ] },
   { key: "lifestyle", group: "Lifestyle", fields: [
-    { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive },
+    { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive, trend: false },
     { key: "cravings", label: "Cravings", type: "bool" },
     { key: "cravingType", label: "Craving for", type: "select", options: ["salty", "sugary"],
       showIf: { field: "cravings", equals: true } },
@@ -269,7 +268,7 @@ const SCHEMA_CACHE = "myno:record-schema:v2";
 // tracker nobody can review, and the model no longer invents them.
 const trendMetrics = (schema, settings) => (schema || [])
   .flatMap((g) => g.fields)
-  .filter((f) => ["scale", "emoji", "number"].includes(f.type))
+  .filter((f) => ["scale", "emoji", "number"].includes(f.type) && f.trend !== false)
   .filter((f) => !fieldBlocked(settings, f.key))
   .map((f) => [f.key, f.label, f.max || SCALE_MAX]);
 

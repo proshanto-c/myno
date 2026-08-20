@@ -215,7 +215,7 @@ def test_hormonal_contraception_blocks_the_cycle_criterion():
     assert cr.assess(_inputs("hormonal"))["cycles"]["state"] == "unknown"
 
 def test_barrier_and_natural_methods_leave_cycles_readable():
-    for method in ("mechanical", "natural"):
+    for method in ("mechanical", "natural", "none"):
         x = _inputs(method)
         assert x["onContraception"] is False, method
         assert cr.assess(x)["cycles"]["state"] == "clear", method

@@ -21,6 +21,7 @@ Field types the client knows how to render:
 `heading` on a field starts a labelled sub-group above it (the diet macros).
 
 `showIf` is declarative — {"field": ..., "equals": ...} — so it survives JSON.
+`trend: False` keeps a numeric field out of the charts while still asking it.
 """
 SCALE_MAX = 10
 
@@ -60,12 +61,11 @@ SCHEMA = [
         {"key": "period", "label": "Started your period?", "type": "bool"},
         {"key": "flow", "label": "Flow", "type": "select",
          "options": ["none", "spotting", "light", "medium", "heavy"]},
-        {"key": "birthControl", "label": "On birth control?", "type": "bool"},
-        # Only hormonal methods make a bleed a withdrawal bleed, so the type is
-        # what decides whether the cycle criterion can be read at all.
-        {"key": "birthControlType", "label": "Type", "type": "select",
-         "options": ["natural", "mechanical", "hormonal"],
-         "showIf": {"field": "birthControl", "equals": True}},
+        # Only hormonal methods make a bleed a withdrawal bleed, so the method
+        # is what decides whether the cycle criterion can be read at all. The
+        # yes/no that used to sit in front of this asked the same thing twice.
+        {"key": "birthControlType", "label": "Birth control", "type": "select",
+         "options": ["none", "natural", "mechanical", "hormonal"]},
     ]},
     {"key": "wellbeing", "group": "Wellbeing", "fields": [
         {"key": "mood", "label": "Mood", "type": "emoji", "options": MOODS},
@@ -81,7 +81,10 @@ SCHEMA = [
         _scale("foodDrive", "Food drive"),
     ]},
     {"key": "lifestyle", "group": "Lifestyle", "fields": [
-        _scale("sexDrive", "Sex drive"),
+        # Asked for, and read by the correlations, but not offered as a chart:
+        # "trend": False keeps a field out of the plot pickers without taking it
+        # out of the form.
+        {**_scale("sexDrive", "Sex drive"), "trend": False},
         {"key": "cravings", "label": "Cravings", "type": "bool"},
         {"key": "cravingType", "label": "Craving for", "type": "select",
          "options": ["salty", "sugary"], "showIf": {"field": "cravings", "equals": True}},
