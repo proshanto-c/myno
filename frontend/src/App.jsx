@@ -1876,6 +1876,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   const [metric, setMetric] = useState("pain");
   const [view, setView] = useState("insights"); // sub-view within Insights: "insights" | "track"
   const [cycleView, setCycleView] = useState("ribbon");
+  const [chartsOpen, setChartsOpen] = useState(false);
   const [xKey, setXKey] = useState("sugar"); const [yKey, setYKey] = useState("pain"); const [lagDay, setLagDay] = useState(true);
   const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", SCALE_MAX];
   const mSel = mEntry[0], mLbl = mEntry[1], mMax = mEntry[2];
@@ -2146,9 +2147,17 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
     <div style={{ columnCount: 2, columnGap: 18 }}>
       {cards.filter(Boolean).map((card, i) => (
         <div key={i} style={{ breakInside: "avoid", marginBottom: 18 }}>{card}</div>))}</div>);
+  // Folded away by default: the sections above answer the question someone came
+  // with, and the charts are for when they want to go digging.
   const chartHeading = (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "26px 0 12px" }}>
-      <BarChart3 size={17} color={C.plum} /><Label>Charts</Label></div>);
+    <button onClick={() => setChartsOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 8,
+      margin: "26px 0 12px", background: "none", border: "none", padding: 0, width: "100%", cursor: "pointer",
+      textAlign: "left" }}>
+      <BarChart3 size={17} color={C.plum} /><Label>Charts</Label>
+      <span style={{ fontFamily: bodyf, fontSize: 11.5, color: C.outline }}>{chartCards.filter(Boolean).length}</span>
+      <ChevronRight size={16} color={C.outline} style={{ marginLeft: "auto",
+        transform: chartsOpen ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
+    </button>);
 
   if (wide) return (<div>
     <H size={28} style={{ marginBottom: 16 }}>Insights</H>{subNav}
@@ -2158,8 +2167,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
       {stack([summaryCard, statsLoading && loadingCard, highlights], 18)}
       {packed(readCards)}
       {chartHeading}
-      {stack([explorerCard], 18)}
-      {grid([trendsCard], "1fr")}
+      {chartsOpen && <div className="fade-up">{stack([explorerCard], 18)}{grid([trendsCard], "1fr")}</div>}
           </>)}
   </div>);
 
@@ -2170,7 +2178,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
           </>) : (<>
       {stack([summaryCard, statsLoading && loadingCard, highlights, ...readCards], 18)}
       {chartHeading}
-      {stack(chartCards, 18)}
+      {chartsOpen && <div className="fade-up">{stack(chartCards, 18)}</div>}
           </>)}
   </div>);
 }
