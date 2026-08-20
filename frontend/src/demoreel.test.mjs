@@ -7,7 +7,7 @@
  * minutes of pointer animation and narration are checked in no time at all,
  * without a real timer, a real element, a real click or a real utterance.
  */
-import { SARA, FIELDS, signUp, showcase, runReel, keystrokes, isEmpty,
+import { HAANIYAH, FIELDS, signUp, showcase, runReel, keystrokes, isEmpty,
          firstPhase, afterPhase, travelMs, sayMs, TYPE_MS, FIELD_GAP_MS, PRESS_MS, BEAT_MS,
          TRAVEL_MIN, TRAVEL_MAX, SAY_MIN_MS, SAY_MAX_MS } from "./demoreel.js";
 
@@ -61,19 +61,19 @@ function fakeBrowser({ missing = [], moveMs = 300, revealMs = 0, sayEvery = null
   return b;
 }
 
-const REELS = [["sign-up", signUp(SARA)], ["showcase", showcase()]];
+const REELS = [["sign-up", signUp(HAANIYAH)], ["showcase", showcase()]];
 const kinds = (list, kind) => list.filter((x) => x.do === kind);
 const targets = (list, kind) => kinds(list, kind).map((b) => b.target);
 const count = (list, kind, target) => targets(list, kind).filter((t) => t === target).length;
 
 // ---- who signs up ----------------------------------------------------------
-test("the reel is Sara, and Sara is plausible for the criteria that judge her", () => {
-  eq(SARA.name, "Sara");
-  eq(SARA.age >= 16 && SARA.age <= 45, true, `age ${SARA.age}: `);
+test("she signs up as herself, and her numbers are ones the criteria can judge", () => {
+  eq(HAANIYAH.name, "Haaniyah");
+  eq(HAANIYAH.age >= 16 && HAANIYAH.age <= 45, true, `age ${HAANIYAH.age}: `);
   // menarche has to be before her age, or yearsPostMenarche goes negative
-  eq(SARA.menarcheAge < SARA.age, true, "menarche after her age: ");
-  eq(SARA.age - SARA.menarcheAge >= 3, true, "inside the 1-3y band, which is not assessable: ");
-  eq(SARA.goals.length > 0, true, "no goal, so the first step cannot advance: ");
+  eq(HAANIYAH.menarcheAge < HAANIYAH.age, true, "menarche after her age: ");
+  eq(HAANIYAH.age - HAANIYAH.menarcheAge >= 3, true, "inside the 1-3y band, which is not assessable: ");
+  eq(HAANIYAH.goals.length > 0, true, "no goal, so the first step cannot advance: ");
 });
 
 test("a person is typed one character at a time, field by field", () => {
@@ -105,35 +105,36 @@ for (const [name, list] of REELS) {
   test(`${name}: every line it says is a line worth hearing`, () => {
     for (const b of [...kinds(list, "say"), ...kinds(list, "spot")]) {
       eq(typeof b.text === "string" && b.text.trim().length > 12, true, `thin line: ${JSON.stringify(b.text)}: `);
-      eq(/[.!?]$/.test(b.text.trim()), true, `unfinished sentence: ${JSON.stringify(b.text)}: `);
+      // a closing quote may follow the full stop — “normal.” ends a sentence too
+      eq(/[.!?]["'”’]?$/.test(b.text.trim()), true, `unfinished sentence: ${JSON.stringify(b.text)}: `);
     }
   });
 }
 
 // ---- the sign-up -----------------------------------------------------------
 test("it works the three steps in order and lets itself in at the end", () => {
-  eq(targets(signUp(SARA), "press"),
+  eq(targets(signUp(HAANIYAH), "press"),
      ["goal:whatswrong", "next",
       ...FIELDS.map((f) => `field:${f}`), "chip:familyHistory", "chip:acne", "next",
-      "dx:unsure", "next"]);
+      "dx:unsure", "cond:hirsutism", "fg:chin:3", "fg:upperLip:2", "next"]);
 });
 
 test("the sign-up never asks for a device", () => {
-  const said = [...kinds(signUp(SARA), "say")].map((b) => b.text).join(" ");
-  eq(targets(signUp(SARA), "press").some((t) => t.startsWith("app:")), false, "the wearables screen is back: ");
+  const said = [...kinds(signUp(HAANIYAH), "say")].map((b) => b.text).join(" ");
+  eq(targets(signUp(HAANIYAH), "press").some((t) => t.startsWith("app:")), false, "the wearables screen is back: ");
   eq(/fitbit|oura|apple health/i.test(said), false, `a device is still pitched: ${said}`);
 });
 
-test("it ends with the whole of Sara in the form", () => {
+test("it ends with the whole of her in the form", () => {
   const clock = fakeClock();
   const b = fakeBrowser();
-  runReel(signUp(SARA), b.io, { rand: () => 0.5, timer: clock.timer, clear: clock.clear });
+  runReel(signUp(HAANIYAH), b.io, { rand: () => 0.5, timer: clock.timer, clear: clock.clear });
   clock.run();
-  eq(b.form.name, SARA.name);
-  eq(b.form.age, String(SARA.age));
-  eq(b.form.menarcheAge, String(SARA.menarcheAge));
-  eq(b.form.heightCm, String(SARA.heightCm));
-  eq(b.form.weightKg, String(SARA.weightKg));
+  eq(b.form.name, HAANIYAH.name);
+  eq(b.form.age, String(HAANIYAH.age));
+  eq(b.form.menarcheAge, String(HAANIYAH.menarcheAge));
+  eq(b.form.heightCm, String(HAANIYAH.heightCm));
+  eq(b.form.weightKg, String(HAANIYAH.weightKg));
   eq(b.ended, true, "the pointer was never dismissed: ");
 });
 
@@ -141,17 +142,17 @@ test("it types once per character, not once per field", () => {
   const clock = fakeClock();
   let calls = 0;
   const b = fakeBrowser();
-  runReel(signUp(SARA), { ...b.io, key: () => { calls += 1; } },
+  runReel(signUp(HAANIYAH), { ...b.io, key: () => { calls += 1; } },
     { rand: () => 0, timer: clock.timer, clear: clock.clear });
   clock.run();
-  eq(calls, keystrokes(SARA).length);
+  eq(calls, keystrokes(HAANIYAH).length);
 });
 
 test("there is a pause between fields and a quicker beat within one", () => {
   const clock = fakeClock();
   const at = [];
   const b = fakeBrowser();
-  runReel(signUp({ ...SARA, name: "Al", age: 27, menarcheAge: "", heightCm: "", weightKg: "",
+  runReel(signUp({ ...HAANIYAH, name: "Al", age: 27, menarcheAge: "", heightCm: "", weightKg: "",
                    goals: [], chips: [], integrations: [] }),
     { ...b.io, key: (t) => at.push([t, clock.now()]) },
     { rand: () => 0, timer: clock.timer, clear: clock.clear });
@@ -163,10 +164,13 @@ test("there is a pause between fields and a quicker beat within one", () => {
 });
 
 // ---- the showcase ----------------------------------------------------------
-test("the showcase visits every tab", () => {
+test("the showcase visits the four screens that make the case", () => {
   const clicked = targets(showcase(), "press");
-  for (const tab of ["nav:home", "go:record", "nav:insights", "go:advocacy", "nav:settings"])
+  for (const tab of ["nav:home", "go:record", "nav:insights", "go:advocacy"])
     eq(clicked.includes(tab), true, `never went to ${tab}: `);
+  // Settings is where you switch things off, which is nobody's reason to want
+  // the app — the tour leaves it out.
+  eq(clicked.includes("nav:settings"), false, "the tour detoured through Settings: ");
 });
 
 test("the showcase drives and explains in the same pass", () => {
@@ -182,82 +186,122 @@ test("the showcase drives and explains in the same pass", () => {
 
 test("everything the showcase changes, it changes back", () => {
   const list = showcase();
+  // The sign-up's answers are hers and stay put. These are the tour's own
+  // taps, on somebody else's screen, and every one of them is undone.
   for (const t of ["cal:today", "cal:range", "block:mood", "adv:lab", "cond:hirsutism"])
     eq(count(list, "press", t) % 2, 0, `${t} was left toggled: `);
-  // a Ferriman-Gallwey score left behind would go on settling a criterion long
-  // after the demo — the same button twice is how the sheet clears one
-  for (const t of new Set(targets(list, "press").filter((t) => t.startsWith("fg:"))))
-    eq(count(list, "press", t) % 2, 0, `${t} was left scored: `);
 });
 
-test("the showcase shows what hirsutism settles, and where it shows up", () => {
-  const list = showcase();
-  const clicks = targets(list, "press");
-  eq(clicks.includes("cond:hirsutism"), true, "the sheet is never opened: ");
-  // two areas scored, and the same two tapped again to clear them
+test("the sign-up records the hirsutism a clinician already found, and scores it", () => {
+  const clicks = targets(signUp(HAANIYAH), "press");
+  eq(clicks.includes("cond:hirsutism"), true, "the condition is never entered: ");
   eq(new Set(clicks.filter((t) => t.startsWith("fg:"))).size >= 2, true, "too little of the sheet is scored: ");
-  // scoring it has to be followed by the screen where it changes the verdict
-  const scored = clicks.findIndex((t) => t.startsWith("fg:"));
-  eq(clicks.indexOf("go:advocacy", scored) > scored, true, "it scores the sheet and never shows the effect: ");
+  // ... and the tour later shows what that settled, on the screen that says so
+  eq(targets(showcase(), "spot").includes("adv:triad"), true, "the criteria are never shown: ");
 });
 
 test("the showcase never touches what it has no business touching", () => {
   // the microphone asks the browser for permission, printing opens a dialog,
   // and switching the voice off mid-sentence would silence the narrator
-  const off = ["rec:mic", "rec:end", "adv:print", "set:voice", "set:sounds", "set:guide", "log:done"];
+  // the microphone would ask a stranger's browser for permission, printing
+  // opens a dialog, and the settings switches are not the tour's to touch
+  const off = ["rec:mic", "adv:print", "set:voice", "set:sounds", "set:guide", "log:done"];
   for (const t of targets(showcase(), "press"))
     eq(off.includes(t), false, `pressed ${t}: `);
 });
 
-test("the showcase holds a conversation by typing, and submits it", () => {
+test("the showcase says its line to the microphone, not into the box", () => {
   const list = showcase();
-  const typed = kinds(list, "key").filter((b) => b.target === "rec:type");
+  const typed = kinds(list, "key").filter((b) => b.target === "rec:line");
   eq(typed.length > 10, true, "nothing was said to the Record screen: ");
-  eq(targets(list, "enter"), ["rec:type"]);
-  // the last keystroke is the whole line, and the return key follows it
+  eq(typed.length < 60, true, "the line is too long to sit through: ");
   eq(typed[typed.length - 1].value.endsWith("slept"), true, `line came out ${typed[typed.length - 1].value}: `);
-  eq(typed.length < 60, true, "the typed line is too long to sit through: ");
+  // written to the hidden line, then spoken — never typed into the visible box
+  const clicks = targets(list, "press");
+  eq(clicks.indexOf("rec:dictate") > -1, true, "the line is never spoken: ");
+  eq(clicks.includes("rec:type"), false, "it typed into the box instead of talking: ");
+});
+
+test("the showcase ends the conversation and shows the form behind it", () => {
+  const clicks = targets(showcase(), "press");
+  eq(clicks.includes("rec:end"), true, "the sheet is never opened: ");
+  eq(clicks.indexOf("log:keep") > clicks.indexOf("rec:end"), true, "the sheet is never closed again: ");
+});
+
+test("she introduces herself once, at the start, and never again", () => {
+  const hellos = [...kinds(signUp(HAANIYAH), "say"), ...kinds(showcase(), "say"), ...kinds(showcase(), "spot")]
+    .filter((b) => /I'm Haaniyah/.test(b.text));
+  eq(hellos.length, 1, "she introduced herself more than once: ");
+  eq(kinds(signUp(HAANIYAH), "say")[0].text.includes("I'm Haaniyah"), true,
+     "the introduction is not the first thing said: ");
+  // ... and the tour opens by saying what it is about to do
+  eq(/Tawaazun/.test(showcase().find((b) => b.text)?.text || ""), true,
+     "the tour opens without saying what it is showing: ");
 });
 
 test("the showcase talks the whole way through", () => {
   const list = showcase();
   const spoken = [...kinds(list, "say"), ...kinds(list, "spot")];
   eq(spoken.length >= 10, true, `only ${spoken.length} lines: `);
-  eq(kinds(list, "say").some((b) => b.hold === false), true, "nothing is ever said while it moves: ");
-  // never two hundred words to say what fits in twenty — this is an advert
+  eq(kinds(list, "say").every((b) => b.hold !== false), true, "a line is left to be cut off mid-word: ");
+  // A line is one clip and one caption, so a paragraph in a single beat would
+  // both outrun the caption bar and leave the pointer standing still.
   const longest = Math.max(...spoken.map((b) => b.text.split(/\s+/).length));
-  eq(longest <= 24, true, `a ${longest}-word line: `);
+  eq(longest <= 28, true, `a ${longest}-word line: `);
 });
 
 // ---- the tutorial ----------------------------------------------------------
 // ---- running them ----------------------------------------------------------
-test("a line that is spoken holds the reel; one spoken over the top does not", () => {
+test("a line is held for exactly as long as the voice says it takes", () => {
   const clock = fakeClock();
-  const b = fakeBrowser({ sayEvery: 4000 });
-  const list = [{ do: "say", text: "held." }, { do: "wait", ms: 0 },
-                { do: "say", text: "over the top.", hold: false }, { do: "wait", ms: 0 }];
+  const b = fakeBrowser();
+  const list = [{ do: "say", text: "first." }, { do: "say", text: "second." }, { do: "wait", ms: 0 }];
   const at = [];
+  // the browser reports what the clip actually runs to; the reel waits for it
   runReel(list, { ...b.io, say: (t) => { at.push(clock.now()); return 4000; } },
     { timer: clock.timer, clear: clock.clear });
   clock.run();
-  eq(at[1] - at[0], 4000, "a held line did not hold: ");
-  eq(clock.now() - at[1], BEAT_MS, "a line said over the top stopped everything: ");
+  eq(at[1] - at[0], 4000, "the next line started before the last had finished: ");
+});
+
+test("it waits on the app, and carries on when the app says it is done", () => {
+  const clock = fakeClock();
+  const b = fakeBrowser();
+  let asked = 0;
+  const list = [{ do: "until", what: "quiet", max: 9000 }, { do: "say", text: "after it stopped." }];
+  runReel(list, { ...b.io, until: () => (++asked < 4 ? 250 : 0) },
+    { timer: clock.timer, clear: clock.clear });
+  clock.run();
+  eq(asked, 4, "it stopped asking too early: ");
+  eq(b.said, ["after it stopped."], "it spoke before the app had finished: ");
+});
+
+test("the showcase lets the app finish answering before she speaks again", () => {
+  const list = showcase();
+  const untils = list.filter((x) => x.do === "until").map((x) => x.what);
+  eq(untils, ["talking", "quiet"], "it goes back to talking on a stopwatch: ");
+  // ... and neither wait can hang the reel for good
+  for (const u of list.filter((x) => x.do === "until"))
+    eq(typeof u.max === "number" && u.max > 0 && u.max <= 30000, true, `no deadline on ${u.what}: `);
+  // the line before the microphone hands over to it
+  const said = kinds(list, "say").map((x) => x.text);
+  eq(said.some((t) => /check-in|record my day/i.test(t)), true, "it walks into Record without a word: ");
 });
 
 test("a target that isn't there costs a beat, not the reel", () => {
   const clock = fakeClock();
   const b = fakeBrowser({ missing: ["goal:whatswrong"] });
-  runReel(signUp(SARA), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
+  runReel(signUp(HAANIYAH), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
   clock.run();
   eq(b.clicked.includes("goal:whatswrong"), false);
   eq(b.clicked.filter((c) => c === "next").length, 3, "the reel gave up: ");
-  eq(b.form.name, SARA.name);
+  eq(b.form.name, HAANIYAH.name);
 });
 
 test("every reel finishes, and none of them outstays its welcome", () => {
   // Seconds, worst case: every hop the slowest it can be. An advert that runs
   // past these is not an advert any more.
-  const limits = { "sign-up": 55, showcase: 150 };
+  const limits = { "sign-up": 105, showcase: 230 };
   for (const [name, list] of REELS) {
     const clock = fakeClock();
     const b = fakeBrowser({ moveMs: TRAVEL_MAX, revealMs: 420 });     // every hop the slowest it can be
@@ -322,14 +366,14 @@ test("the guide is spent once it has played, and once it has been skipped", () =
 test("cancelling stops it mid-word and nothing more happens", () => {
   const clock = fakeClock();
   const b = fakeBrowser();
-  const cancel = runReel(signUp(SARA), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
+  const cancel = runReel(signUp(HAANIYAH), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
   clock.step(6);                  // a few beats in, then a person takes over
   const clicksSoFar = b.clicked.length;
   cancel();
   clock.run();
   eq(b.clicked.length, clicksSoFar, "kept clicking after being cancelled: ");
   eq(b.ended, false, "ran to the end anyway: ");
-  eq(String(b.form.name || "").length < SARA.name.length, true, "typed the whole name anyway: ");
+  eq(String(b.form.name || "").length < HAANIYAH.name.length, true, "typed the whole name anyway: ");
 });
 
 test("cancelling twice is harmless", () => {

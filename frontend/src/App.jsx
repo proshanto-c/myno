@@ -9,8 +9,8 @@ import {
 import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
 // The sign-up signs itself up for a demo — beats, timings and the rule that a
 // person's form is left alone, all tested in demoreel.test.mjs.
-import { SARA, signUp, showcase, runReel, isEmpty, firstPhase, afterPhase,
-         sentences, linesOf, travelMs, sayMs, SCROLL_MS } from "./demoreel.js";
+import { HAANIYAH, signUp, showcase, runReel, isEmpty, firstPhase, afterPhase,
+         linesOf, travelMs, sayMs, SCROLL_MS, LINE_GAP_MS } from "./demoreel.js";
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
   cycleRuns, DAY_MS } from "./cycles.js";
@@ -108,6 +108,10 @@ const FONTS = `
   background:rgba(42,35,49,.62); color:#fff; border-radius:9999px; padding:6px 13px;
   font-family:${bodyf}; font-size:12px; font-weight:600; letter-spacing:.02em;
   backdrop-filter:blur(6px); animation:fadeIn .5s ease both; }
+.demo-sound{ position:fixed; z-index:126; top:52px; right:14px; cursor:pointer; border:none;
+  background:${C.plum}; color:#fff; border-radius:9999px; padding:8px 14px; display:inline-flex;
+  align-items:center; gap:6px; font-family:${bodyf}; font-size:12.5px; font-weight:700;
+  box-shadow:0 6px 18px rgba(42,35,49,.35); animation:fadeIn .4s ease both; }
 /* what is being said, for anyone watching with the sound off */
 .demo-caption{ position:fixed; z-index:125; left:50%; bottom:104px; transform:translateX(-50%);
   pointer-events:none; max-width:min(560px, calc(100% - 32px)); text-align:center;
@@ -209,7 +213,10 @@ function useSpeaker(settings) {
   const speak = useCallback((text, onDone) => {
     if (!settings.voice || !text) { onDone?.(); return; }
     doneRef.current = onDone || null;
-    queueRef.current = sentences(text);
+    // One clip for the whole reply. Splitting it by sentence started the first
+    // words sooner but left a seam — and a request — in the middle of every
+    // thought; replies are short enough that the wait is barely different.
+    queueRef.current = [String(text).trim()];
     if (!playingRef.current) playNext();
   }, [settings.voice, playNext]);
   useEffect(() => () => stop(), [stop]);
@@ -407,6 +414,54 @@ async function extractFields({ settings, text, context = "", blocked = [], categ
   if (!res.ok) throw new Error(`extract ${res.status}`);
   return await res.json();
 }
+
+/**
+ * THE INSIGHTS TAB, REMEMBERED.
+ *
+ * It is the one screen that waits on a model, and it used to ask again from
+ * scratch every time it was opened — so it opened onto "computing your stats"
+ * and stayed there for several seconds. The backend now keeps the narration
+ * beside the numbers it describes; this keeps the whole answer for the session
+ * and in localStorage, so the tab paints from the last one it had while the
+ * fresh one is on its way. `prefetchInsights` runs at boot, which is why the
+ * tab is usually already warm the first time anyone opens it.
+ */
+function remembered(storeKey) {
+  const memo = new Map();
+  return {
+    read(pid) {
+      if (memo.has(pid)) return memo.get(pid);
+      try { return (JSON.parse(localStorage.getItem(storeKey) || "{}"))[pid] || null; }
+      catch (e) { return null; }
+    },
+    keep(pid, data) {
+      memo.set(pid, data);
+      try {
+        const all = JSON.parse(localStorage.getItem(storeKey) || "{}");
+        localStorage.setItem(storeKey, JSON.stringify({ ...all, [pid]: data }));
+      } catch (e) { /* a full quota is not worth failing over */ }
+    },
+  };
+}
+const INSIGHTS = remembered("myno:insights:v2");
+const ADVOCACY = remembered("myno:advocacy:v1");
+
+async function askFor(path, memo, settings) {
+  const pid = settings.patientId;
+  if (!pid) return null;
+  const r = await fetch(`${API(settings)}/patients/${pid}/${path}`, { method: "POST" });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `That failed (${r.status}).`);
+  const body = await r.json();
+  memo.keep(pid, body);
+  return body;
+}
+const fetchInsights = (settings) => askFor("insights", INSIGHTS, settings);
+const fetchAdvocacy = (settings) => askFor("advocacy", ADVOCACY, settings);
+/** Ask for both at boot, so neither tab is caught thinking when it is opened. */
+const prefetchSlowTabs = (settings) => {
+  fetchInsights(settings).catch(() => {});
+  fetchAdvocacy(settings).catch(() => {});
+};
 
 // ---- live insights: blend tracked history with the running conversation -------
 async function extractAdvise({ settings, note, categories = [], summary = {}, blocked = [], personality = "direct" }) {
@@ -796,6 +851,9 @@ export default function App() {
         const lr = await fetch(`${base}/patients/${pid}/logs`);
         if (lr.ok) { const arr = await lr.json(); if (Array.isArray(arr) && arr.length) dbLogs = arr; }
         setSettings((p) => ({ ...p, patientId: pid }));
+        // Insights and Advocacy both wait on a model; start them now, rather
+        // than when somebody opens the tab and watches a spinner
+        prefetchSlowTabs({ ...settings0, patientId: pid });
       }
     } catch (e) { /* backend unreachable → fall back to local synthetic data */ }
     setLogs(dbLogs || (s?.logs?.length ? s.logs : genSyntheticLogs()));
@@ -881,9 +939,9 @@ export default function App() {
   // The guided demo: a voice, a pointer, and the reels they play. It reads the
   // app the way a person would and drives the same controls, so there is
   // nothing here for the screens themselves to know about.
-  const narrator = useSpeaker(settings);
-  const say = useCallback((text) => narrator.speak(text), [narrator]);
-  const demo = useDirector({ ready, profile, settings, setSettings, speak: say, silence: narrator.stop });
+  const narrator = useNarrator(settings);
+  const demo = useDirector({ ready, profile, settings, setSettings, prime: narrator.prime,
+                             speak: narrator.say, silence: narrator.stop });
 
   const axes = assessment?.axes;
   const ctx = { profile, setProfile, logs, setLogs, settings, setSettings, ins, assessment, axes,
@@ -908,7 +966,7 @@ export default function App() {
   if (!profile.onboarded) return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: bodyf, color: C.ink, display: "flex", justifyContent: "center", backgroundImage: GRAD }}>
       <style>{FONTS}</style>
-      <DemoLayer {...demo} />
+      <DemoLayer {...demo} blocked={narrator.blocked} onSound={narrator.resume} />
       <div style={{ width: "100%", maxWidth: 560 }}><Onboarding profile={profile} setProfile={setProfile} /></div>
     </div>);
 
@@ -917,14 +975,14 @@ export default function App() {
   if (wide) return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: bodyf, color: C.ink, backgroundImage: GRAD }}>
       <style>{FONTS}</style>
-      <DemoLayer {...demo} />
+      <DemoLayer {...demo} blocked={narrator.blocked} onSound={narrator.resume} />
       <TopNav tab={tab} setTab={setTab} profile={profile} />
       <main style={{ maxWidth: contentMax, margin: "0 auto", padding: "32px 40px 64px", animation: "rise .25s ease" }} key={tab}>{screen()}</main>
     </div>);
 
   // --- mobile ---
   return mobileShell(<>
-    <DemoLayer {...demo} />
+    <DemoLayer {...demo} blocked={narrator.blocked} onSound={narrator.resume} />
     <Header profile={profile} onSettings={() => setTab("settings")} />
     <div style={{ padding: "0 20px", animation: "rise .25s ease" }} key={tab}>{screen()}</div>
     <BottomNav tab={tab} setTab={setTab} />
@@ -1011,15 +1069,14 @@ const pressKey = (el, key) => {
   el.dispatchEvent(new view.KeyboardEvent("keydown", { key, bubbles: true }));
 };
 
-const REELS = { signup: () => signUp(SARA), show: showcase };
+const REELS = { signup: () => signUp(HAANIYAH), show: showcase };
 
 /**
  * THE VOICE THE GUIDE SPEAKS IN.
  *
- * One clip per line, fetched before it is needed. The app's own replies are
- * split into sentences so the first words start sooner, but a narrator read
- * that way breathes in the wrong places and loses its tail whenever the next
- * line arrives — so a line here is one request, one clip, played whole.
+ * One clip per line, fetched before it is needed. Read sentence by sentence a
+ * narrator breathes in the wrong places and loses its tail whenever the next
+ * line arrives, so a line here is one request, one clip, played whole.
  *
  * Because the clip is in hand before it plays, the reel can be paced by how
  * long it actually runs rather than by a guess, which is what keeps the pointer
@@ -1053,13 +1110,22 @@ function useNarrator(settings) {
     } catch (e) { return null; }
   }, [settings.backendUrl]);
 
+  // Lines queue, they never interrupt. The reel holds each one for as long as
+  // the clip runs, so this should not have to do anything — but a duration the
+  // browser guessed wrong, or a clip that arrived late, would otherwise cut a
+  // sentence off mid-word, which is the one thing that makes a voice sound like
+  // a machine. Waiting a beat too long is always the better failure.
+  const chain = useRef(Promise.resolve());
   const play = useCallback((clip) => {
-    try { playing.current?.pause(); } catch (e) {}
-    const a = new Audio(clip.url);
-    playing.current = a;
-    // Autoplay is a permission, not a given: a page nobody has touched may be
-    // refused. Say so rather than playing a silent tour.
-    a.play().then(() => setBlocked(false)).catch(() => setBlocked(true));
+    const start = () => new Promise((done) => {
+      const a = new Audio(clip.url);
+      playing.current = a;
+      a.onended = done; a.onerror = done;
+      // Autoplay is a permission, not a given: a page nobody has touched may be
+      // refused. Say so rather than playing a silent tour.
+      a.play().then(() => setBlocked(false)).catch(() => { setBlocked(true); done(); });
+    });
+    chain.current = chain.current.then(start, start);
   }, []);
 
   /** Fetch every line of a reel, in the order it will say them. */
@@ -1078,7 +1144,11 @@ function useNarrator(settings) {
     return null;
   }, [settings.voice, fetchClip, play]);
 
-  const stop = useCallback(() => { try { playing.current?.pause(); } catch (e) {} playing.current = null; }, []);
+  const stop = useCallback(() => {
+    try { playing.current?.pause(); } catch (e) {}
+    playing.current = null;
+    chain.current = Promise.resolve();     // nothing is waiting on a clip that will never end
+  }, []);
   // Called from a real tap, which is the one thing that lifts the block.
   const resume = useCallback(() => {
     const clip = clips.current.get(last.current);
@@ -1133,6 +1203,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
     // than no pointer at all.
     const doc = document;
     let stop = () => {}, gone = null;
+    const waitingFor = { current: null }, waitingSince = { current: 0 };
     const find = (t) => {
       if (!doc.defaultView || doc.defaultView.closed) { stop(); return null; }
       return doc.querySelector(`[data-demo="${t}"]`);
@@ -1172,6 +1243,19 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
         if (el) { const r = el.getBoundingClientRect(); setSpot({ x: r.left, y: r.top, w: r.width, h: r.height }); }
         setCaption(text);
         return (live.current.speak?.(text) || sayMs(text)) + LINE_GAP_MS;
+      },
+      // Waiting on the app rather than on the clock. `talking` holds until it
+      // has started answering, `quiet` until it has stopped; both give up after
+      // their own deadline, so a backend that never answers cannot strand the
+      // reel. Returning a number means "ask me again in that long".
+      until: (what, max) => {
+        const now = Date.now();
+        if (waitingFor.current !== what) { waitingFor.current = what; waitingSince.current = now; }
+        const done = () => { waitingFor.current = null; return 0; };
+        if (now - waitingSince.current > (max || 15000)) return done();
+        const speaking = !!find("rec:speaking");
+        if (what === "talking" ? speaking : !speaking) return done();
+        return 250;
       },
       dim: () => { setSpot(null); setCaption(""); },
       end: () => finish(false),
@@ -1228,7 +1312,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
 // What the demo puts on the screen: the spotlight under everything, the caption
 // along the bottom, and the pointer over the lot. None of it takes a click —
 // a person reaching past it to take over is the point.
-function DemoLayer({ pointer, ring, spot, caption }) {
+function DemoLayer({ pointer, ring, spot, caption, blocked, onSound }) {
   if (!pointer) return null;
   const done = !!pointer.gone;
   return (<>
@@ -1238,6 +1322,9 @@ function DemoLayer({ pointer, ring, spot, caption }) {
         it. */}
     {!done && <div className="demo-shield" />}
     {!done && <div className="demo-hint">Esc — or back — to skip</div>}
+    {/* a page nobody has touched may not be allowed to make a sound; one tap
+        is all the browser wants, and it is not a tap that skips anything */}
+    {!done && blocked && <button className="demo-sound" onClick={onSound}><Volume2 size={14} /> Tap for sound</button>}
     {spot && <div className="demo-spot" style={{ left: spot.x - 6, top: spot.y - 6, width: spot.w + 12, height: spot.h + 12 }} />}
     {caption && <div className="demo-caption"><span>{caption}</span></div>}
     {/* keyed by the click count, so every press draws its own ring where it landed */}
@@ -1981,16 +2068,22 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const speakBlock = (
     <div style={{ background: C.plumC, borderRadius: 24, padding: 22, boxShadow: SH, textAlign: "center", color: "#fff" }}>
       <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 16, lineHeight: 1.4, marginBottom: 16, opacity: 0.95 }}>How has your body been today?</div>
-      <div style={{ display: "grid", placeItems: "center", marginBottom: 12 }}>
+      <div style={{ display: "grid", placeItems: "center", marginBottom: 12, position: "relative" }}>
         <button data-demo="rec:mic" onClick={micTap} disabled={busy} style={{ width: 96, height: 96, borderRadius: "50%", border: "none", cursor: busy ? "default" : "pointer", display: "grid", placeItems: "center", background: listening ? C.roseOn : "#fff", color: listening ? "#fff" : C.plum, boxShadow: listening ? "0 0 0 6px rgba(255,255,255,0.3)" : SH, animation: listening ? "pulse 1.5s infinite" : "none", opacity: busy ? 0.7 : 1 }}>
           {listening ? <MicOff size={38} /> : <Mic size={38} />}</button>
         {/* the demo's way in: a line is written here, then said as if heard */}
+        {/* Both sit on the microphone itself, invisible: the guide's pointer is
+            hovering the mic while it "speaks", which is where a hand would be. */}
         <input data-demo="rec:line" aria-hidden="true" tabIndex={-1} onChange={(ev) => { demoLine.current = ev.target.value; }}
-          style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none" }} />
+          style={{ position: "absolute", left: "50%", top: "50%", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none" }} />
         <button data-demo="rec:dictate" aria-hidden="true" tabIndex={-1} onClick={dictate}
-          style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none", background: "none" }} /></div>
+          style={{ position: "absolute", left: "50%", top: "50%", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none", background: "none" }} /></div>
       <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, letterSpacing: "0.06em", textTransform: "uppercase", minHeight: 18 }}>{busy ? <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Loader2 size={13} className="spin" /> {status}</span> : status}</div>
       <div style={{ minHeight: 24, marginTop: 10, fontSize: 15 }}>{partial ? <i style={{ opacity: 0.92 }}>{partial}…</i> : null}</div>
+      {/* While this is in the DOM, Tawaazun is speaking. The guided demo waits
+          on it: two voices at once is the one overlap nothing excuses. */}
+      {speaker.speaking && <span data-demo="rec:speaking" aria-hidden="true"
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0 }} />}
       {reply && (<div style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", background: "rgba(255,255,255,0.16)", borderRadius: 16, padding: "12px 14px", marginTop: 12 }}>
         <Mark ring={C.plum} size={32} />
         <div style={{ flex: 1, fontSize: 15, lineHeight: 1.45 }}>{reply}</div>
@@ -2172,34 +2265,50 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   const exChip = (lbl, sel, on, demo) => (<button key={lbl} data-demo={demo} onClick={on} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 10px", borderRadius: 9999, border: "none", cursor: "pointer", background: sel ? C.plum : C.container, color: sel ? "#fff" : C.inkVar }}>{lbl}</button>);
 
   // Claude analysis + computed statistics over the DB logs
-  const [analysis, setAnalysis] = useState(null); const [stats, setStats] = useState(null); const [loadingA, setLoadingA] = useState(false);
+  // Whatever we had last time goes on screen immediately; the fresh answer
+  // replaces it when it lands. An empty screen that says "computing" is the
+  // worst of both — it looks like there is nothing to say.
+  const had = INSIGHTS.read(settings.patientId);
+  const [analysis, setAnalysis] = useState(had?.analysis || null);
+  const [stats, setStats] = useState(had?.stats || null);
+  const [loadingA, setLoadingA] = useState(!had);
   const [errA, setErrA] = useState("");
-  useEffect(() => { (async () => {
-    const pid = settings.patientId; if (!pid) return; setLoadingA(true);
-    setErrA("");
-    try {
-      const b = (settings.backendUrl || "/api").replace(/\/$/, "");
-      const r = await fetch(`${b}/patients/${pid}/insights`, { method: "POST" });
-      if (r.ok) { const j = await r.json(); setAnalysis(j.analysis); setStats(j.stats); }
-      // A failure here used to fall through silently and show the "keep logging"
-      // empty state, which reads as "not enough data" — say what actually broke.
-      else setErrA((await r.json().catch(() => ({}))).detail || `Analysis failed (${r.status}).`);
-    } catch (e) { setErrA("Can't reach the backend — make sure it's running."); }
-    setLoadingA(false);
-  })(); }, [settings.patientId]);
-
-  // research-backed tracker suggestions (generated daily in the background; poll while generating)
-  const [sugg, setSugg] = useState(null);
   useEffect(() => {
     const pid = settings.patientId; if (!pid) return;
-    let stop = false, tries = 0; const b = (settings.backendUrl || "/api").replace(/\/$/, "");
-    const load = async () => {
-      try { const r = await fetch(`${b}/patients/${pid}/suggestions`); if (!r.ok || stop) return; const j = await r.json();
-        if (stop) return; setSugg(j.suggestions || []);
-        if ((j.refreshing || !(j.suggestions || []).length) && tries < 15) { tries++; setTimeout(load, 6000); }
+    let stale = false;
+    setErrA("");
+    if (!INSIGHTS.read(pid)) setLoadingA(true);
+    fetchInsights(settings)
+      .then((j) => { if (!stale && j) { setAnalysis(j.analysis); setStats(j.stats); } })
+      // A failure here used to fall through silently and show the "keep logging"
+      // empty state, which reads as "not enough data" — say what actually broke.
+      .catch((e) => { if (!stale) setErrA(String(e.message || "Can't reach the backend — make sure it's running.")); })
+      .finally(() => { if (!stale) setLoadingA(false); });
+    return () => { stale = true; };
+  }, [settings.patientId, logs.length]);
+
+  // Things to track, and the studies behind each correlation — both are rows in
+  // Dalīl's published table, so one fetch each and no polling. What used to sit
+  // here retried fifteen times waiting for a model to finish writing; there is
+  // nothing to wait for now, and an empty list is a real answer.
+  const [sugg, setSugg] = useState(null);
+  const [evidence, setEvidence] = useState({});
+  const [openEvidence, setOpenEvidence] = useState(null);
+  useEffect(() => {
+    const pid = settings.patientId; if (!pid) return;
+    let stop = false; const b = (settings.backendUrl || "/api").replace(/\/$/, "");
+    (async () => {
+      try {
+        const r = await fetch(`${b}/patients/${pid}/suggestions`);
+        const j = r.ok ? await r.json() : {};
+        if (!stop) setSugg(j.suggestions || []);
+      } catch (e) { if (!stop) setSugg([]); }
+      try {
+        const r = await fetch(`${b}/evidence/correlations`);
+        const j = r.ok ? await r.json() : {};
+        if (!stop) setEvidence(j.correlations || {});
       } catch (e) { }
-    };
-    load();
+    })();
     return () => { stop = true; };
   }, [settings.patientId]);
 
@@ -2238,15 +2347,39 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
           <div style={{ width: `${Math.max(0, Math.min(100, it.strength ?? 0))}%`, height: "100%", borderRadius: 9999, background: C.plum }} /></div>
         <p style={{ fontSize: 13, lineHeight: 1.45, color: C.inkVar, margin: 0 }}>{it.detail}</p>
       </div>))}
-      {g.correlations.map((c, i) => { const a = Math.abs(c.r); return (
+      {g.correlations.map((c, i) => { const a = Math.abs(c.r); const papers = evidence[c.id] || []; return (
         <div key={`c${i}`} style={{ marginBottom: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
             <span style={{ fontSize: 13.5, color: C.ink }}>{c.label}</span>
             <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.plum }}>r {c.r > 0 ? "+" : ""}{c.r.toFixed(2)}</span></div>
           <div style={{ height: 6, borderRadius: 9999, background: C.high }}>
             <div style={{ width: `${Math.round(a * 100)}%`, height: "100%", borderRadius: 9999, background: a >= 0.6 ? C.plum : C.plumC }} /></div>
-          <div style={{ fontSize: 11.5, color: c.holds === false ? C.roseOn : C.outline, marginTop: 3 }}>
-            {c.strength} correlation · {c.n} days{c.holds === false ? " · runs the other way in your data" : ""}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
+            <span style={{ fontSize: 11.5, color: c.holds === false ? C.roseOn : C.outline }}>
+              {c.strength} correlation · {c.n} days{c.holds === false ? " · runs the other way in your data" : ""}</span>
+            {papers.length > 0 && (
+              <button onClick={() => setOpenEvidence(openEvidence === c.id ? null : c.id)}
+                style={{ marginLeft: "auto", border: "none", background: C.container, color: C.plum, borderRadius: 9999, padding: "2px 9px", fontFamily: bodyf, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>
+                {papers.length} {papers.length === 1 ? "study" : "studies"}
+              </button>)}
+          </div>
+          {openEvidence === c.id && papers.length > 0 && (
+            <div style={{ marginTop: 7, background: C.container, borderRadius: 12, padding: "10px 12px" }}>
+              {/* Not "the evidence for your correlation": a study of other women
+                  is not evidence about this person's r. It says what the
+                  literature says about the pair, which is a different claim. */}
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: C.inkVar, marginBottom: 6 }}>
+                What the literature says about this pair</div>
+              {papers.map((p, k) => (
+                <div key={k} style={{ paddingTop: k ? 8 : 0, borderTop: k ? `1px solid ${C.high}` : "none" }}>
+                  <div style={{ fontSize: 12.5, lineHeight: 1.45, color: C.ink }}>{p.text}</div>
+                  <div style={{ fontSize: 11, color: C.outline, marginTop: 2 }}>
+                    {p.journal || ""} {p.year || ""}{p.grade ? ` · ${p.grade}` : ""}</div>
+                  {p.url && <a href={p.url} target="_blank" rel="noopener noreferrer"
+                    style={{ fontSize: 11.5, fontWeight: 600, color: C.plum, textDecoration: "none" }}>
+                    {p.title ? p.title.slice(0, 70) : "Read the paper"} →</a>}
+                </div>))}
+            </div>)}
         </div>); })}
       {g.trends.length > 0 && (<div style={{ display: "grid", gap: 6, marginTop: g.correlations.length ? 4 : 0 }}>
         {g.trends.map((t, i) => (<div key={`t${i}`} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
@@ -2358,11 +2491,15 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   const suggestionsCard = (<Card>
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
       <Microscope size={18} color={C.plum} /><span style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>What else to track</span>
-      {(sugg === null || sugg.length === 0) && <Loader2 size={14} className="spin" color={C.outline} style={{ marginLeft: "auto" }} />}
+      {sugg === null && <Loader2 size={14} className="spin" color={C.outline} style={{ marginLeft: "auto" }} />}
     </div>
-    <p style={{ fontSize: 13, color: C.inkVar, lineHeight: 1.5, margin: "0 0 12px" }}>Research-backed ideas from recent PMOS literature (2022–2025), based on what you already track. Regenerated daily.</p>
-    {(sugg === null || sugg.length === 0) ? (
-      <p style={{ fontSize: 13, color: C.outline }}>Scanning the latest research for you…</p>
+    <p style={{ fontSize: 13, color: C.inkVar, lineHeight: 1.5, margin: "0 0 12px" }}>From PMOS papers a researcher has read and signed off — never anything you already record here.</p>
+    {sugg === null ? (
+      <p style={{ fontSize: 13, color: C.outline }}>Looking…</p>
+    ) : sugg.length === 0 ? (
+      // An empty list is an answer, not a wait. Saying "scanning the latest
+      // research for you" for ever was the old card pretending to work.
+      <p style={{ fontSize: 13, color: C.outline }}>Nothing yet beyond what this app already asks you about.</p>
     ) : (
       <div style={{ display: "grid", gap: 14 }}>{sugg.map((s, i) => { const [bg, fg] = EV[s.evidence] || [C.container, C.inkVar]; return (
         <div key={i} style={{ paddingTop: i ? 14 : 0, borderTop: i ? `1px solid ${C.high}` : "none" }}>
@@ -2373,7 +2510,13 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
           <p style={{ fontSize: 13.5, lineHeight: 1.5, color: C.inkVar, margin: "6px 0 6px" }}>{s.explanation}</p>
           <div style={{ fontSize: 12, color: C.outline, lineHeight: 1.5 }}>How: {s.tracking_method}</div>
           {s.requires_device && <div style={{ fontSize: 12, color: s.device_owned ? C.plum : C.outline, marginTop: 2 }}>{s.device_owned ? `✓ works with your ${s.device_needed}` : `needs ${s.device_needed}`}</div>}
-          <a href={s.read_more} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, fontWeight: 600, color: C.plum, marginTop: 7, textDecoration: "none" }}>Read the research →</a>
+          {/* The paper itself, at its own address. This used to be a PubMed
+              search built from a query a model invented, which retrieved
+              nothing and could not be checked. */}
+          {s.read_more && <a href={s.read_more} target="_blank" rel="noopener noreferrer" style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: C.plum, marginTop: 7, textDecoration: "none", lineHeight: 1.4 }}>
+            {s.title || "Read the paper"} →
+            <span style={{ display: "block", fontWeight: 500, fontSize: 11.5, color: C.outline }}>{s.journal || ""} {s.year || ""}{s.pmid ? ` · PMID ${s.pmid}` : ""}</span>
+          </a>}
         </div>); })}</div>
     )}
   </Card>);
@@ -2655,12 +2798,21 @@ function CorrCard({ icon: Ico, bg, on, habit, symptom, pct, note }) {
 // ---- PREPARE ---------------------------------------------------------------
 // ---- ADVOCACY (Prepare + Clinician merged) ---------------------------------
 function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, rules, labRules, setLabRules, settings, setTab }) {
-  const [rep, setRep] = useState(null); const [loadingR, setLoadingR] = useState(false);
-  useEffect(() => { (async () => {
-    const pid = settings.patientId; if (!pid) return; setLoadingR(true);
-    try { const b = (settings.backendUrl || "/api").replace(/\/$/, ""); const r = await fetch(`${b}/patients/${pid}/advocacy`, { method: "POST" }); if (r.ok) { const j = await r.json(); setRep(j.report); } } catch (e) { }
-    setLoadingR(false);
-  })(); }, [settings.patientId]);
+  // The talking points are written by a model, so they are kept between visits
+  // and put on screen while the fresh set is on its way.
+  const hadRep = ADVOCACY.read(settings.patientId);
+  const [rep, setRep] = useState(hadRep?.report || null);
+  const [loadingR, setLoadingR] = useState(!hadRep);
+  useEffect(() => {
+    const pid = settings.patientId; if (!pid) return;
+    let stale = false;
+    if (!ADVOCACY.read(pid)) setLoadingR(true);
+    fetchAdvocacy(settings)
+      .then((j) => { if (!stale && j) setRep(j.report); })
+      .catch(() => {})
+      .finally(() => { if (!stale) setLoadingR(false); });
+    return () => { stale = true; };
+  }, [settings.patientId]);
 
   const [labOpen, setLabOpen] = useState(false);
   const standCard = (<>

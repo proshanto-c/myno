@@ -10,7 +10,7 @@
  *                  summary and an assessment. Home, the cycle ring, the bar and
  *                  the calendar all have to render without a console error.
  *   3. reel      — nobody at the keyboard. The sign-up drives itself with its
- *                  own pointer, and twenty seconds later Sara has to be through
+ *                  own pointer, and a minute later Haaniyah has to be through
  *                  it and into the app, with the tour already talking: real
  *                  clicks and real input events, on the real controls, in a
  *                  real DOM. Slow on purpose — it runs at the speed a recording
@@ -18,6 +18,11 @@
  *   4. guide     — the tour on its own, for someone already signed up: it has
  *                  to be lighting parts of the interface up and talking about
  *                  them, without editing the profile it was given.
+ *   5. record    — a sentence said to the Record screen, through the same hooks
+ *                  the tour speaks through. What it heard has to appear on the
+ *                  "Your day so far" card, marked as heard. That card rendered
+ *                  categories the model stopped inventing, so it sat empty for
+ *                  good; this is what would catch it happening again.
  *
  *   docker compose build frontend && docker compose up -d frontend
  *   rm -rf /tmp/dist && mkdir -p /tmp/dist
@@ -57,6 +62,11 @@ const ASSESSMENT = {
   axes: { cycles: { met: true }, androgen: { met: false }, morphology: { met: null } }, inputs: {},
 };
 
+// what the model hears in "Bad cramps today, and I barely slept"
+const EXTRACT = { pain: 7, sleep: 2, mood: null, energy: null, period: null,
+                  painPoints: [{ view: "front", x: 0.5, y: 0.55, label: "pelvis" }],
+                  say: "Rough night. Are you on your period, or is this outside of it?" };
+
 function backend(url) {
   const u = String(url), body =
     u.includes("/record/schema") ? { schema: [], categories: [] }
@@ -66,6 +76,8 @@ function backend(url) {
     : u.includes("/assessment") || u.includes("/assess") ? ASSESSMENT
     : u.includes("/insights") ? { stats: SUMMARY, analysis: { summary: "", insights: [] }, categories: [] }
     : u.includes("/suggestions") ? { suggestions: [], refreshing: false }
+    : u.includes("/extract") ? EXTRACT
+    : u.includes("/advise") ? { headline: "", correlations: [], say: "" }
     : u.includes("/patients") ? { id: 58 }
     : {};
   return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
@@ -102,17 +114,17 @@ async function pass(name, { stored, fetch: fetchImpl, waitMs = 1500, after }) {
 
   const html = dom.window.document.getElementById("root").innerHTML;
   console.log(`[${name}] DOM ${html.length} chars`);
-  const verdict = () => {
+  const verdict = async () => {
     if (errs.length) {
       console.log(`[${name}] RUNTIME ERROR:\n${errs.slice(0, 2).join("\n---\n")}`);
       return 4;
     }
     if (html.length < 500) return 3;
-    const bad = after?.(dom, html);
+    const bad = await after?.(dom, html);
     if (bad) { console.log(`[${name}] ${bad}`); return 5; }
     return 0;
   };
-  const code = verdict();
+  const code = await verdict();
   // A pass owns its window. Closing it ends the sign-up reel this pass started,
   // which would otherwise still be clicking — into the next pass's document.
   dom.window.close();
@@ -138,13 +150,16 @@ if (code === 0) {
   // the saved profile is the thing the rest of the app runs on.
   code = await pass("reel", {
     fetch: () => Promise.reject(new Error("offline")),
-    waitMs: 40000,
+    // The sign-up talks its way through three screens and is in no hurry — and
+    // in here every clip fetch fails, so each line is held for the fallback
+    // estimate, which is the longest it can ever be. Budget for that.
+    waitMs: 115000,
     after: (dom, html) => {
       const raw = dom.window.localStorage.getItem("myno:serene:v1");
       if (!raw) return "nothing was saved: the reel never typed a thing";
       const p = JSON.parse(raw).profile || {};
       if (!p.onboarded) return `the reel stalled at: ${JSON.stringify(p)}`;
-      if (p.name !== "Sara") return `signed up as ${JSON.stringify(p.name)}, not Sara`;
+      if (p.name !== "Haaniyah") return `signed up as ${JSON.stringify(p.name)}, not Haaniyah`;
       for (const [k, want] of [["age", "28"], ["menarcheAge", "13"], ["heightCm", "166"], ["weightKg", "74"]])
         if (String(p[k]) !== want) return `${k} came out ${JSON.stringify(p[k])}, not ${want}`;
       if (!p.goals?.includes("whatswrong")) return `no goal was picked: ${JSON.stringify(p.goals)}`;
@@ -166,7 +181,7 @@ if (code === 0) {
   // have typed, tapped or changed a single thing on the way.
   code = await pass("guide", {
     stored: {
-      profile: { onboarded: true, name: "Sara", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
+      profile: { onboarded: true, name: "Haaniyah", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
       settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct", guide: true },
       logs: [],
     },
@@ -177,7 +192,39 @@ if (code === 0) {
       if (!html.includes("demo-spot")) return "the tour never lit anything up";
       if (!html.includes("demo-shield")) return "the tour left the screen open to a stray tap";
       const p = JSON.parse(dom.window.localStorage.getItem("myno:serene:v1")).profile || {};
-      if (p.name !== "Sara") return `the tour rewrote the profile: ${JSON.stringify(p.name)}`;
+      if (p.name !== "Haaniyah") return `the tour rewrote the profile: ${JSON.stringify(p.name)}`;
+      return null;
+    },
+  });
+}
+if (code === 0) {
+  // A sentence said to the Record screen, through the hooks the guide speaks
+  // through — the same path a real spoken one takes, without a microphone.
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  code = await pass("record", {
+    stored: {
+      profile: { onboarded: true, name: "Haaniyah", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
+      settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct", guide: false },
+      logs: [],
+    },
+    fetch: backend,
+    waitMs: 1500,
+    after: async (dom) => {
+      const doc = dom.window.document;
+      const at = (t) => doc.querySelector(`[data-demo="${t}"]`);
+      at("nav:record")?.click();
+      await wait(600);
+      const line = at("rec:line");
+      if (!line) return "the Record screen has no way to be spoken to";
+      // written the way the browser writes it, so React sees the change
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set
+        .call(line, "Bad cramps today, and I barely slept");
+      line.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      at("rec:dictate")?.click();
+      await wait(4000);                       // the words arrive, then the model answers
+      const card = doc.querySelector('[data-demo="rec:tracker"]')?.innerHTML || "";
+      if (!card.includes("HEARD")) return `nothing was heard onto the day card: ${card.slice(0, 200)}`;
+      if (!/Pain/.test(card)) return `the card filled in without what was said: ${card.slice(0, 200)}`;
       return null;
     },
   });

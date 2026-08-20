@@ -367,6 +367,24 @@ def test_a_capped_run_leaves_the_high_water_mark_alone():
     assert run.cursor == 20
     assert run.total == 1200, "the true size of the result should still be recorded"
     assert query.high_water == "", "a look at 20 of 1,200 must not claim the other 1,180"
+    assert run.fetched == 20, f"a capped run pulled {run.fetched} records to keep 20"
+    s.rollback()
+
+
+@test
+def test_a_cap_smaller_than_a_batch_asks_for_only_what_it_wants():
+    s = Scoped()
+    asked = []
+
+    class Watching(FakeNcbi):
+        def efetch_history(self, search, retstart, retmax=ncbi.BATCH, db="pubmed"):
+            asked.append(retmax)
+            return super().efetch_history(search, retstart, retmax, db)
+
+    fake = Watching([(str(90007500 + i), article(str(90007500 + i))) for i in range(300)],
+                    count=1200)
+    harvest.harvest(s, fake, fresh_query(s), max_records=40, batch=ncbi.BATCH)
+    assert asked == [40], f"asked for {asked} to keep 40"
     s.rollback()
 
 
@@ -459,6 +477,27 @@ def test_text_belonging_to_another_paper_is_refused_and_flagged():
     assert harvest.enrich(s, fake, row) == "id-mismatch"
     assert row.fulltext is None, "stored one paper's text against another paper's row"
     assert "id_mismatch" in (row.flags or [])
+    s.rollback()
+
+
+@test
+def test_an_open_access_paper_bioc_will_not_serve_keeps_its_licence():
+    s = Scoped()
+    row, _ = harvest.upsert(s, ncbi.parse_records(
+        wrap([article("90009050", pmcid="PMC9009050")]))[0])
+
+    class NoBioc(FakeNcbi):
+        def bioc(self, pmcid):
+            raise ncbi.NcbiError("not XML: '[Error] : No result can be found.'")
+
+    fake = NoBioc([])
+    fake.oa_records["PMC9009050"] = {"pmcid": "PMC9009050", "licence": "CC BY",
+                                     "retracted": False, "citation": ""}
+    assert harvest.enrich(s, fake, row) == "no-fulltext"
+    assert row.is_oa is True and row.licence == "CC BY", "lost what the call did answer"
+    assert row.fulltext is None
+    assert "no_bioc" in (row.flags or [])
+    assert row.screen_state == "new", "an abstract is still text to appraise"
     s.rollback()
 
 

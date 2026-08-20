@@ -35,6 +35,19 @@ def Scoped():
     return s
 
 
+def park_everyone(s):
+    """Disable whoever is already in the table, inside this test's savepoint.
+
+    Deleting them is not available: sessions and reviews point at these rows, so
+    a DELETE is a foreign-key violation rather than a clean slate. Disabling is
+    also the truer setup — "nobody is available to sign" is the state being
+    tested, not "the table is empty".
+    """
+    s.query(Reviewer).update({Reviewer.disabled_at: dt.datetime.utcnow()},
+                             synchronize_session=False)
+    s.commit()
+
+
 def a_reviewer(s, disabled=False):
     _n[0] += 1
     r = Reviewer(email=f"test:rev{_n[0]}@example.invalid", name="Ada", password_hash="x",
@@ -212,15 +225,79 @@ def test_a_disabled_account_cannot_publish():
 
 
 @test
-def test_publishing_with_sign_in_off_is_recorded_as_unsigned():
-    """The module's claim is "a named person checked this". With sign-in off
-    there is no named person, so the row says so rather than passing for one."""
+def test_with_sign_in_off_a_review_is_signed_by_the_standing_admin():
+    """The module's claim is "a named person checked this". Rather than let that
+    be false while sign-in is off, the work is attributed to the admin account
+    that is already there."""
+    import auth
     s = Scoped()
+    admin = a_reviewer(s)
+    admin.role = "admin"
+    s.commit()
+
+    who = auth.default_reviewer(s)
+    assert who.disabled_at is None
     claim, _, _ = a_claim(s)
-    out = review.act(s, {"id": None, "email": "", "role": "open"}, claim, "publish")
+    out = review.act(s, auth.as_dict(who, default=True), claim, "publish")
     assert out["ok"] is True
     row = s.query(Published).filter(Published.claim_id == claim.id).one()
-    assert row.published_by is None
+    assert row.published_by == who.id, "published with nobody's name on it"
+    s.rollback()
+
+
+@test
+def test_the_standing_admin_is_preferred_over_an_ordinary_reviewer():
+    import auth
+    s = Scoped()
+    park_everyone(s)
+    ordinary = a_reviewer(s)
+    ordinary.role = "reviewer"
+    admin = a_reviewer(s)
+    admin.role = "admin"
+    s.commit()
+    assert auth.default_reviewer(s).id == admin.id
+    s.rollback()
+
+
+@test
+def test_a_disabled_account_is_never_the_default():
+    import auth
+    s = Scoped()
+    park_everyone(s)
+    a_reviewer(s, disabled=True)
+    who = auth.default_reviewer(s)
+    assert who.disabled_at is None, "signed a review as a disabled account"
+    assert who.email == auth.LOCAL_EMAIL
+    s.rollback()
+
+
+@test
+def test_the_local_account_is_revived_rather_than_duplicated():
+    """Its email is unique, so a second insert would fail — and once there are
+    two of them, "who signed this" has two answers."""
+    import auth
+    s = Scoped()
+    park_everyone(s)
+    first = auth.default_reviewer(s)
+    park_everyone(s)
+    second = auth.default_reviewer(s)
+    assert second.id == first.id
+    assert s.query(Reviewer).filter(Reviewer.email == auth.LOCAL_EMAIL).count() == 1
+    s.rollback()
+
+
+@test
+def test_with_nobody_available_a_local_account_nobody_can_log_into_is_made():
+    import auth
+    s = Scoped()
+    park_everyone(s)
+    who = auth.default_reviewer(s)
+    assert who.email == auth.LOCAL_EMAIL
+    assert who.role == "admin"
+    # the password is random and thrown away — the account owns reviews, it is
+    # not a way in once sign-in is turned on
+    assert not auth.verify_password("", who.password_hash)
+    assert not auth.verify_password(auth.LOCAL_EMAIL, who.password_hash)
     s.rollback()
 
 

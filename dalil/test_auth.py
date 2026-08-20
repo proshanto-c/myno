@@ -268,7 +268,10 @@ def test_sign_in_is_off_by_default_and_says_so():
     class FakeRequest:
         method = "GET"; cookies = {}; headers = {}
     who = auth.require_reviewer(FakeRequest())
-    assert who["role"] == "open"
+    # …as a real account, not as nobody: a review has to have an author, and the
+    # standing admin is a truer one than a null column
+    assert who["default"] is True
+    assert who["id"] and who["email"]
 
 
 @test

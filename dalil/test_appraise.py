@@ -272,25 +272,113 @@ def test_a_contradiction_is_carried_as_a_flag():
 def test_the_prompt_hash_matches_the_prompt():
     """Editing the prompt without bumping its version fails here, so a corpus
     can never be half-graded under one wording and half under another."""
-    assert prompts.APPRAISE_HASH == prompts.hash_of(prompts.APPRAISE_SYSTEM)
+    import json as _json
+    expected = prompts.hash_of(
+        prompts.APPRAISE_SYSTEM + _json.dumps(prompts.APPRAISE_TOOL, sort_keys=True))
+    assert prompts.APPRAISE_HASH == expected
     assert prompts.APPRAISE_VERSION, "a prompt with no version is not versioned"
+
+
+# ---- the wire format ---------------------------------------------------------
+@test
+def test_a_flat_reply_is_reassembled_into_the_shape_a_report_is():
+    import model
+    out = model.reassemble({
+        "measurement_score": 12, "measurement_note": "both loggable", "measurement_quote": "q1",
+        "effect_score": 7, "effect_note": "a number", "effect_quote": "q2",
+        "daily_score": 10, "daily_note": "varies", "daily_quote": "q3",
+        "confounding_score": 4, "confounding_note": "some", "confounding_quote": "q4",
+        "sample_n": 412, "sample_note": "stated", "sample_quote": "q5",
+        "narrative": "A survey.", "claims": []})
+    assert out["measurement"] == {"score": 12, "note": "both loggable", "quote": "q1"}
+    assert out["sample"]["n"] == 412
+    assert out["narrative"] == "A survey."
+
+
+@test
+def test_a_score_over_its_weight_is_clipped_on_the_way_in():
+    import model
+    out = model.reassemble({"effect_score": 99, "measurement_score": -4})
+    assert out["effect"]["score"] == 10
+    assert out["measurement"]["score"] == 0
+
+
+@test
+def test_a_number_written_as_a_sentence_is_still_a_number():
+    import model
+    for written, want in (("412", 412), ("n = 412", 412), ("1,107", 1107), (None, None),
+                          ("not stated", None), (412, 412), (0.31, 0.31)):
+        assert model.reassemble({"sample_n": written})["sample"]["n"] == want, written
+
+
+@test
+def test_a_claims_effect_is_gathered_back_up_from_its_flat_parts():
+    import model
+    out = model.reassemble({"claims": [{
+        "claim_text": "Shorter sleep, more fog", "exposure_field": "sleep",
+        "outcome_field": "brainFog", "direction": "-", "certainty": "low", "quote": "q",
+        "effect_measure": "r", "effect_value": -0.31, "effect_p": 0.001}]})
+    claim = out["claims"][0]
+    assert claim["effect"] == {"measure": "r", "value": -0.31, "ci_low": None,
+                               "ci_high": None, "p": 0.001}
+    assert claim["moderator_field"] is None
+    assert claim["relation"] == "associated_with", "a missing relation should not be blank"
+
+
+@test
+def test_a_reply_that_is_not_a_dictionary_reassembles_into_an_empty_report():
+    import model
+    for junk in (None, "a string", [1, 2, 3], 7):
+        out = model.reassemble(junk)
+        assert out["claims"] == []
+        assert all(out[k]["score"] == 0 for k in prompts.MODULE_MAXIMUMS), junk
 
 
 @test
 def test_the_prompt_says_the_things_the_rubric_depends_on():
     text = prompts.APPRAISE_SYSTEM
-    for demand in ("character for character", "quote", "proposed", "cross-sectional"):
+    for demand in ("character for character", "quote", "tracker_label", "cross-sectional"):
         assert demand in text, f"the prompt no longer says {demand!r}"
 
 
 @test
 def test_the_tool_schema_asks_for_every_module_the_rubric_scores():
     props = prompts.APPRAISE_TOOL["input_schema"]["properties"]
+    required = prompts.APPRAISE_TOOL["input_schema"]["required"]
     for key in appraise.MODEL_MODULES:
-        assert key in props, f"the rubric scores {key} but the tool never asks for it"
-        assert "quote" in props[key]["required"], f"{key} could come back without a quote"
-    for key in ("measurement", "effect", "daily", "confounding"):
-        assert props[key]["properties"]["score"]["maximum"] == appraise.WEIGHTS[key], key
+        want = f"{key}_n" if key == "sample" else f"{key}_score"
+        assert want in props, f"the rubric scores {key} but the tool never asks for it"
+        assert f"{key}_quote" in required, f"{key} could come back without a quote"
+    for key, top in prompts.MODULE_MAXIMUMS.items():
+        assert props[f"{key}_score"]["maximum"] == appraise.WEIGHTS[key], key
+        assert top == appraise.WEIGHTS[key], f"{key}: the tool and the rubric disagree"
+
+
+@test
+def test_the_schema_stays_flat_because_nesting_did_not_survive_the_round_trip():
+    """Opus filled a nested {score, note, quote} by writing
+    `"measurement": "<parameter name=\\"score\\">2"` and hoisting the rest to the
+    top level, so every module scored zero. Three scalars cannot be flattened."""
+    props = prompts.APPRAISE_TOOL["input_schema"]["properties"]
+    for key, spec in props.items():
+        if key == "claims":
+            continue                       # a list of repeated things survives
+        assert spec.get("type") != "object", f"{key} is nested again"
+    item = props["claims"]["items"]["properties"]
+    for key, spec in item.items():
+        assert spec.get("type") != "object", f"claims.{key} is nested"
+
+
+@test
+def test_the_hash_covers_the_tool_as_well_as_the_words():
+    """The tool is part of the prompt: change its shape and the model answers
+    differently, so changing it without a version bump has to fail here too."""
+    import copy
+    import json as _json
+    altered = copy.deepcopy(prompts.APPRAISE_TOOL)
+    altered["input_schema"]["properties"]["effect_score"]["maximum"] = 99
+    moved = prompts.hash_of(prompts.APPRAISE_SYSTEM + _json.dumps(altered, sort_keys=True))
+    assert moved != prompts.APPRAISE_HASH
 
 
 if __name__ == "__main__":

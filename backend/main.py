@@ -8,12 +8,13 @@ Responsibilities:
   * A /chat endpoint that drives the conversation: it knows general PMOS facts,
     asks the next relevant question, reuses the patient's own words, ADAPTS to
     them, and NEVER asks about blacklisted features. Claude is the LLM.
-  * Thin /tts proxy so the frontend has a single origin.
+  * Thin /tts proxy so the frontend has a single origin, speaking in a cloned
+    voice when one is configured and caching every line it has said before.
 
 Run via docker-compose (see docker-compose.yml). Env:
-  DATABASE_URL, ANTHROPIC_API_KEY, TTS_URL
+  DATABASE_URL, ANTHROPIC_API_KEY, TTS_URL, VOICE_URL, VOICE_ID
 """
-import os, json, random, math, statistics, asyncio, hashlib, urllib.parse, datetime as dt
+import os, json, random, math, statistics, asyncio, hashlib, pathlib, urllib.parse, datetime as dt
 from collections import OrderedDict
 from typing import Optional
 
@@ -27,12 +28,30 @@ from sqlalchemy import (create_engine, Column, Integer, String, Boolean, Float,
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 import criteria
+import evidence
 import insights
 import record
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg2://myno:myno@db:5432/myno")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 TTS_URL = os.environ.get("TTS_URL", "http://tts:8001")
+# A cloned voice, spoken by VoiceStudio through its OpenAI-compatible endpoint.
+# Set both and every spoken line in the app — the sign-up, the guided demo and
+# the replies on the Record screen — comes back in that voice. Unset, or if the
+# service is down, NeMo answers as before, and if that is down too the browser
+# falls back to its own speech synthesis. One switch, three ways to survive it.
+VOICE_URL = os.environ.get("VOICE_URL", "").rstrip("/")
+VOICE_ID = os.environ.get("VOICE_ID", "")
+VOICE_MODEL = os.environ.get("VOICE_MODEL", "omnivoice")
+# How fast she talks. The engine resamples cleanly to about 1.2; past that it
+# starts to sound hurried rather than lively. A guided demo is 70% narration by
+# the clock, so this is the one dial that shortens it without losing a word.
+VOICE_SPEED = float(os.environ.get("VOICE_SPEED", "1.0"))
+# Synthesis costs seconds a sentence, and the guided demo says the same lines
+# every time it runs, so a line is only ever paid for once. The key is the
+# voice, the engine and the exact text — change any of them and it is a
+# different recording, not a stale one.
+VOICE_CACHE = pathlib.Path(os.environ.get("VOICE_CACHE_DIR", "/tmp/myno-voice"))
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -63,6 +82,11 @@ class Patient(Base):
     drugs = Column(JSON, default=list)              # current drug therapy (home)
     suggestions = Column(JSON, default=list)        # research-backed tracker suggestions (daily)
     suggestions_at = Column(DateTime, nullable=True)
+    # The Insights narration, kept beside the numbers it was written about:
+    # {"key": <fingerprint of those numbers>, "analysis": {...}}. Same numbers,
+    # same narration — the model is only asked again when they move.
+    insights_cache = Column(JSON, default=dict)
+    advocacy_cache = Column(JSON, default=dict)     # ... and the same for the advocacy report
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     logs = relationship("DailyLog", back_populates="patient", cascade="all,delete")
     descriptors = relationship("Descriptor", back_populates="patient", cascade="all,delete")
@@ -106,6 +130,8 @@ with engine.begin() as _conn:
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS conditions JSON DEFAULT '[]'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS mfg JSON DEFAULT '{}'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS drugs JSON DEFAULT '[]'::json"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS insights_cache JSON DEFAULT '{}'::json"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS advocacy_cache JSON DEFAULT '{}'::json"))
 
 # ---------------------------------------------------------------- app
 app = FastAPI(title="Tawaazun backend")
@@ -309,11 +335,24 @@ def patient_summary(pid: int):
 
 @app.post("/patients/{pid}/insights")
 async def patient_insights(pid: int):
+    """The Insights tab: computed numbers, plus a narration of them.
+
+    The numbers are cheap and always recomputed. The narration costs a model
+    call and several seconds, and does not change while the numbers behind it
+    do not — so it is kept on the patient beside a fingerprint of those numbers
+    and only rewritten when they move. Opening the tab a second time, or a
+    hundredth, is a database read.
+    """
     s = Session()
     rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
     p = s.get(Patient, pid); blocked = (p.blacklist or []) if p else []
+    cached = (p.insights_cache or {}) if p else {}
     logs = [_log_dict(r) for r in rows]; s.close()
     stats = _summarise(logs)
+    key = hashlib.sha1(json.dumps([stats, sorted(blocked)], sort_keys=True, default=str).encode()).hexdigest()
+    if cached.get("key") == key and cached.get("analysis"):
+        return {"stats": stats, "analysis": cached["analysis"], "cached": True,
+                "categories": [{"key": k, "label": l} for k, l in record.CATEGORIES]}
     block_line = ", ".join(FEATURES[f]["label"] for f in blocked if f in FEATURES) or "none"
     sections = ", ".join(f'"{k}" ({l})' for k, l in record.CATEGORIES)
     sys = (
@@ -334,7 +373,15 @@ async def patient_insights(pid: int):
     except Exception:
         analysis = {"summary": "", "insights": []}
     analysis["insights"] = [_categorise(i) for i in (analysis.get("insights") or []) if isinstance(i, dict)]
-    return {"stats": stats, "analysis": analysis,
+    # Only worth keeping if the model actually said something.
+    if analysis.get("summary") or analysis.get("insights"):
+        s2 = Session()
+        p2 = s2.get(Patient, pid)
+        if p2:
+            p2.insights_cache = {"key": key, "analysis": analysis, "at": dt.datetime.utcnow().isoformat()}
+            s2.commit()
+        s2.close()
+    return {"stats": stats, "analysis": analysis, "cached": False,
             "categories": [{"key": k, "label": l} for k, l in record.CATEGORIES]}
 
 
@@ -351,109 +398,13 @@ def _categorise(insight: dict) -> dict:
             return {**insight, "category": record.FIELD_CATEGORY[field]}
     return {**insight, "category": "body"}
 
-# ----- research-backed "what else to track" suggestions (regenerated daily in
-# the background over each patient's data; surfaced dynamically in the UI)
-STANDARD_TRACKERS = [
-    "menstrual period start", "cycle length", "flow intensity", "birth control", "mood", "energy",
-    "sleep quality", "brain fog", "sex drive", "pelvic / cramp pain", "pain location", "morning body weight",
-    "cravings", "food / appetite drive", "diet & exercise", "acne / breakouts", "excess hair growth",
-    "hair loss", "skin patches", "hyperpigmentation", "bloating", "existing diagnoses",
-]
-SUGG_SYSTEM = (
-    "You are a PMOS research analyst reviewing recent literature (2022-2025). The purpose is to generate "
-    "possible items for the user to track in another part of the app.\n"
-    "The user will tell you what their app already tracks, and optionally what devices they own.\n"
-    "Return ONLY a JSON array, no markdown, no preamble. Each item:\n"
-    '{"tracker":"short name (2-5 words)","explanation":"1-2 sentences for a general audience (no jargon) on why '
-    'this is worth tracking for PMOS - focus on what the person might notice or why it matters for how they feel",'
-    '"category":"one of: Symptom | Metabolic | Hormonal | Gut | Sleep | Skin | Neurological | Reproductive",'
-    '"evidence":"Strong | Emerging | Early","tracking_method":"how the tracking app can get this information.",'
-    '"requires_device":true or false,"device_needed":"name of device if requires_device is true, else null",'
-    '"pubmed_query":"a precise 4-8 word PubMed search query to find the key supporting paper"}\n'
-    "Rules:\n- Only suggest things NOT already tracked by the app\n"
-    "- If requires_device is true AND the user does not own that device, still include it (the caller deprioritises it)\n"
-    "- Order: self-report items first, device-dependent items last\n- 6-10 suggestions total"
-)
-SUGG_TTL = dt.timedelta(hours=20)
-
-def _pubmed_link(q: str) -> str:
-    return f"https://pubmed.ncbi.nlm.nih.gov/?term={urllib.parse.quote(q or 'PMOS')}&sort=date"
-
-async def _gap_suggestions(current_trackers, devices, focus):
-    trackers_str = "\n".join(f"- {t}" for t in current_trackers)
-    devices_str = "\n".join(f"- {d}" for d in devices) if devices else "none specified"
-    focus_line = f"\nFocus area: {focus}" if focus else ""
-    prompt = f"Current app trackers:\n{trackers_str}\n\nUser's devices:\n{devices_str}{focus_line}"
-    raw = await claude(SUGG_SYSTEM, [{"role": "user", "content": prompt}], max_tokens=2000)
-    try:
-        a, b = raw.index("["), raw.rindex("]"); items = json.loads(raw[a:b + 1])
-    except Exception:
-        return []
-    dev_lower = [d.lower() for d in (devices or [])]
-    out = []
-    for s in items:
-        if not isinstance(s, dict) or not s.get("tracker"):
-            continue
-        rd = bool(s.get("requires_device"))
-        dn = s.get("device_needed") or ""
-        owned = (not rd) or any(dn.lower() in d for d in dev_lower)
-        out.append({
-            "tracker": s.get("tracker", ""), "explanation": s.get("explanation", ""),
-            "category": s.get("category", ""), "evidence": s.get("evidence", ""),
-            "tracking_method": s.get("tracking_method", ""), "requires_device": rd,
-            "device_needed": s.get("device_needed"), "device_owned": owned,
-            "read_more": _pubmed_link(s.get("pubmed_query", "PMOS")),
-        })
-    out.sort(key=lambda x: (x["requires_device"], not x["device_owned"]))
-    return out
-
-_sugg_inflight = set()
-
-async def _refresh_suggestions(pid: int, force: bool = False):
-    if pid in _sugg_inflight:
-        return
-    s = Session(); p = s.get(Patient, pid)
-    if not p:
-        s.close(); return
-    fresh = p.suggestions and p.suggestions_at and (dt.datetime.utcnow() - p.suggestions_at) < SUGG_TTL
-    if fresh and not force:
-        s.close(); return
-    rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date.desc()).limit(60).all()
-    cats = {}
-    for r in rows:
-        for c in ((r.data or {}).get("categories") or []):
-            if c.get("label"):
-                cats[c["key"]] = c["label"]
-    devices = p.integrations or []
-    s.close()
-    _sugg_inflight.add(pid)
-    try:
-        current = STANDARD_TRACKERS + list(cats.values())
-        sugg = await _gap_suggestions(current, devices, "insulin resistance")
-        if sugg:
-            s2 = Session(); p2 = s2.get(Patient, pid)
-            if p2:
-                p2.suggestions = sugg; p2.suggestions_at = dt.datetime.utcnow(); s2.commit()
-            s2.close()
-    except Exception:
-        pass
-    finally:
-        _sugg_inflight.discard(pid)
-
-async def _suggestions_daily_loop():
-    await asyncio.sleep(30)  # let startup settle; GET handles the first on-demand fill
-    while True:
-        try:
-            s = Session(); ids = [p.id for p in s.query(Patient).all()]; s.close()
-            for pid in ids:
-                await _refresh_suggestions(pid)
-        except Exception:
-            pass
-        await asyncio.sleep(24 * 3600)
-
-@app.on_event("startup")
-async def _startup():
-    track(_suggestions_daily_loop())
+# ----- "what else to track", served from Dalīl's published claims
+# What used to sit here asked Claude for tracker ideas and rendered each with an
+# evidence grade and a "Read the research" link. The link was a PubMed *search*
+# built from a query string the model invented: no paper was ever retrieved, and
+# the Strong/Emerging/Early badge was free text with no rubric behind it. Both
+# are now earned — see dalil/claims.py GRADE_RULES — and the link points at a
+# specific paper. Nothing here calls a model at all.
 
 @app.on_event("shutdown")
 async def _shutdown():
@@ -636,30 +587,68 @@ async def advocacy(pid: int):
     logs = [_log_dict(r) for r in rows]
     descriptors = [{"concept": d.concept, "phrase": d.phrase} for d in s.query(Descriptor).filter_by(patient_id=pid).all()]
     blacklist = p.blacklist or []; adapt = p.adapt_state or {}
+    cached = p.advocacy_cache or {}
     metrics = _advocacy_metrics(logs, p)
     s.close()
     blocked = {ADVOCACY_BL_MAP.get(b, b) for b in blacklist}
     matched = _match_bank(metrics, blocked)
     payload = {"period_days": metrics["period_days"], "insights": metrics, "descriptors": descriptors,
                "blacklist": blacklist, "adapt_state": adapt, "matched_advocacy_entries": matched}
+    # The talking points are written about this payload and nothing else, so
+    # they are kept beside a fingerprint of it. Same numbers, same words to say
+    # — and opening the tab again is a database read rather than a model call.
+    key = hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+    if cached.get("key") == key and cached.get("report"):
+        return {"report": cached["report"], "matched": [e["id"] for e in matched],
+                "metrics": metrics, "cached": True}
     raw = await claude(ADVOCACY_SYSTEM, [{"role": "user", "content": json.dumps(payload)}], max_tokens=2000)
     try:
         a, b = raw.index("{"), raw.rindex("}"); report = json.loads(raw[a:b + 1])
     except Exception:
         report = {"trends_summary": "", "flagged_patterns": [], "talking_points": [], "documentation_request_text": ""}
-    return {"report": report, "matched": [e["id"] for e in matched], "metrics": metrics}
+    if report.get("talking_points") or report.get("trends_summary"):
+        s2 = Session()
+        p2 = s2.get(Patient, pid)
+        if p2:
+            p2.advocacy_cache = {"key": key, "report": report, "at": dt.datetime.utcnow().isoformat()}
+            s2.commit()
+        s2.close()
+    return {"report": report, "matched": [e["id"] for e in matched], "metrics": metrics, "cached": False}
 
 @app.get("/patients/{pid}/suggestions")
-async def get_suggestions(pid: int):
+def get_suggestions(pid: int):
+    """One query over published claims. No model call, and none to wait for, so
+    the `refreshing` the card used to poll on is always false."""
     s = Session(); p = s.get(Patient, pid)
     if not p:
         s.close(); raise HTTPException(404)
-    sugg = p.suggestions or []; at = p.suggestions_at; s.close()
-    stale = (at is None) or (dt.datetime.utcnow() - at > SUGG_TTL)
-    if not sugg or stale:
-        track(_refresh_suggestions(pid))
-        return {"suggestions": sugg, "refreshing": True}
-    return {"suggestions": sugg, "refreshing": False, "generatedAt": at.isoformat()}
+    owned = [d.lower() for d in (p.integrations or [])]
+    s.close()
+
+    out = []
+    for item in evidence.trackers(engine):
+        needed = (item.get("device_needed") or "").lower()
+        # A device-dependent tracker is still shown; it just sorts last, which
+        # is what the old ordering rule asked a model to do for itself.
+        item["device_owned"] = (not item["requires_device"]) or any(needed in d for d in owned)
+        out.append(item)
+    out.sort(key=lambda t: (t["requires_device"], not t["device_owned"]))
+    return {"suggestions": out, "refreshing": False}
+
+
+@app.get("/evidence/correlations")
+def evidence_correlations():
+    """Which reviewed studies stand behind each pair Insights looks for.
+
+    Keyed by `insights.CORRELATIONS[…]["id"]`, so the app can hang the count on
+    the row it already renders.
+    """
+    return {"correlations": evidence.by_correlation(engine)}
+
+
+@app.get("/evidence/trackers")
+def evidence_trackers():
+    return {"trackers": evidence.trackers(engine)}
 
 # ----- diagnostic criteria (rules live in criteria.py; nothing here diagnoses)
 @app.get("/record/schema")
@@ -926,10 +915,42 @@ def _avg_cycle(s, pid):
     return insights.average_cycle_days(_patient_logs(s, pid))
 
 # ----- TTS proxy (single origin for the browser)
+def _voice_cache_path(text: str) -> pathlib.Path:
+    key = hashlib.sha1(f"{VOICE_URL}|{VOICE_MODEL}|{VOICE_ID}|{VOICE_SPEED}|{text}".encode()).hexdigest()
+    return VOICE_CACHE / f"{key}.wav"
+
 @app.post("/tts")
 async def tts(body: dict):
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "Nothing to say")
+    # The cloned voice first, when there is one.
+    if VOICE_URL and VOICE_ID:
+        cached = _voice_cache_path(text)
+        try:
+            if cached.is_file() and cached.stat().st_size:
+                return Response(content=cached.read_bytes(), media_type="audio/wav")
+        except OSError:
+            pass                      # an unreadable cache is not a reason to go quiet
+        try:
+            r = await http().post(f"{VOICE_URL}/v1/audio/speech",
+                                  json={"model": VOICE_MODEL, "input": text, "voice": VOICE_ID,
+                                        "response_format": "wav", "speed": VOICE_SPEED},
+                                  timeout=httpx.Timeout(180.0, connect=10.0))
+            if r.status_code < 400:
+                try:
+                    VOICE_CACHE.mkdir(parents=True, exist_ok=True)
+                    tmp = cached.with_suffix(".part")
+                    tmp.write_bytes(r.content)      # written whole, then moved, so a
+                    tmp.replace(cached)             # reader never sees half a wav
+                except OSError as e:
+                    log.warning("could not cache the line (%s)", e)
+                return Response(content=r.content, media_type="audio/wav")
+            log.warning("voice %s said %s — falling back to NeMo", VOICE_URL, r.status_code)
+        except httpx.HTTPError as e:
+            log.warning("voice %s unreachable (%s) — falling back to NeMo", VOICE_URL, e)
     try:
-        r = await http().post(f"{TTS_URL}/tts", json={"text": body.get("text", "")})
+        r = await http().post(f"{TTS_URL}/tts", json={"text": text})
     except httpx.HTTPError as e:
         raise HTTPException(502, f"Couldn't reach the speech server: {e}")
     if r.status_code >= 400:

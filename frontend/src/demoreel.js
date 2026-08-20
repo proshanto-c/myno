@@ -3,9 +3,9 @@
  *
  * Three reels, in the order a first visit meets them:
  *
- *   signUp()    the sign-up signing itself up — a pointer walks on, picks the
- *               goal, types Sara into the boxes and lets itself in.
- *   showcase()  the app shown off: Haaniyah drives it and explains it in the
+ *   signUp()    Haaniyah signing herself up — a pointer walks on, picks the
+ *               goal, types her into the boxes and lets her in.
+ *   showcase()  her account, shown off: she drives it and explains it in the
  *               same pass, in English, with whatever she is talking about lit
  *               up and hovered under the pointer while she says it.
  *
@@ -25,39 +25,45 @@
  * a single real timer, element or utterance. See demoreel.test.mjs.
  */
 
-/** Sara. Her numbers sit inside the bands criteria.py actually judges, so the
- *  reel ends on an app with something to say rather than a shrug. */
-export const SARA = {
-  name: "Sara", age: 28, menarcheAge: 13, heightCm: 166, weightKg: 74,
-  goals: ["whatswrong"],                    // she is here to find out what is wrong
+/**
+ * Haaniyah. It is her account: she signs herself up at the start and everything
+ * after that is her own screen, which is why she can say "my cycle" and mean
+ * it. Her numbers sit inside the bands criteria.py actually judges, so the reel
+ * ends on an app with something to say rather than a shrug.
+ */
+export const HAANIYAH = {
+  name: "Haaniyah", age: 28, menarcheAge: 13, heightCm: 166, weightKg: 74,
+  goals: ["whatswrong"],           // she is here to find out what is wrong
   chips: ["familyHistory", "acne"],
-  diagnosis: "unsure",                      // ... so "Not sure" is the honest answer
-  conditions: [],
+  diagnosis: "unsure",             // ... so "Not sure" is the honest answer
+  conditions: ["hirsutism"],       // told to her by a clinician, and it settles a criterion
 };
 
 /** The basics step, in the order the boxes are laid out. */
 export const FIELDS = ["name", "age", "menarcheAge", "heightCm", "weightKg"];
 
 /**
- * Pace. This is an advert, not a manual: the hand moves at the speed of someone
- * who already knows where everything is, and never waits on a screen it has
- * finished with. Typing stays uneven, because an even one reads as a machine.
+ * Pace. An advert, not a manual — but a demo nobody can follow sells nothing,
+ * so every screen is given long enough to be looked at and every line long
+ * enough to be finished. Typing stays uneven, because an even one reads as a
+ * machine.
  */
-export const TYPE_MS = 34;
-export const JITTER_MS = 26;
-export const FIELD_GAP_MS = 200;
-export const PRESS_MS = 150;      // the click itself, and the ring it leaves
-export const BEAT_MS = 200;       // after a click, before moving off
-export const STEP_MS = 420;       // a new step needs a moment before it is worked
-export const OPEN_MS = 700;       // ... and the first screen needs longer
-export const SCROLL_MS = 300;     // a smooth scroll, settling
-export const SCREEN_MS = 550;     // a whole screen changing under the pointer
+export const TYPE_MS = 26;
+export const JITTER_MS = 18;
+export const FIELD_GAP_MS = 140;
+export const PRESS_MS = 180;      // the click itself, and the ring it leaves
+export const BEAT_MS = 320;       // after a click, before moving off
+export const STEP_MS = 600;       // a new step needs a moment before it is worked
+export const OPEN_MS = 900;       // ... and the first screen needs longer
+export const SCROLL_MS = 380;     // a smooth scroll, settling
+export const SCREEN_MS = 650;     // a whole screen changing under the pointer
+export const LINE_GAP_MS = 300;   // a breath between two spoken lines
 
 /** How long the pointer takes to cross a gap: a floor so short hops still read
  *  as movement, a ceiling so a long one never turns into a wait. */
-export const TRAVEL_MIN = 190;
-export const TRAVEL_MAX = 600;
-export const TRAVEL_PER_PX = 0.40;
+export const TRAVEL_MIN = 240;
+export const TRAVEL_MAX = 700;
+export const TRAVEL_PER_PX = 0.48;
 export const travelMs = (dx, dy) => {
   const d = Math.hypot(dx, dy);
   return Math.round(Math.min(TRAVEL_MAX, TRAVEL_MIN + d * TRAVEL_PER_PX));
@@ -67,34 +73,22 @@ export const travelMs = (dx, dy) => {
  *  reel budgets for it: 420ms a word is what the cloned voice actually runs at,
  *  floored so a short line still lands and capped so a long one cannot strand
  *  the pointer. Captions are on screen for exactly the same stretch. */
-export const SAY_PER_WORD_MS = 420;
-export const SAY_MIN_MS = 1100;
-export const SAY_MAX_MS = 9000;
+export const SAY_PER_WORD_MS = 560;
+export const SAY_MIN_MS = 1600;
+export const SAY_MAX_MS = 12000;
 export const sayMs = (text) => {
   const words = String(text || "").trim().split(/\s+/).filter(Boolean).length;
-  return Math.round(Math.min(SAY_MAX_MS, Math.max(SAY_MIN_MS, 250 + words * SAY_PER_WORD_MS)));
+  return Math.round(Math.min(SAY_MAX_MS, Math.max(SAY_MIN_MS, 350 + words * SAY_PER_WORD_MS)));
 };
-
-/**
- * A line, split the way it is spoken: one sentence per request, so the first
- * words start while the rest are still being made. The backend caches what it
- * has said before, keyed on the exact text — which is why this split has to be
- * the same everywhere. scripts/warm-voice.sh fills that cache from here, and a
- * different split would miss every key.
- */
-export const sentences = (text) =>
-  (String(text ?? "").match(/[^.!?]+[.!?]*\s*/g) || [String(text ?? "")])
-    .map((x) => x.trim()).filter(Boolean);
 
 /**
  * Every line the reels say, in order, deduplicated — what there is to warm.
  *
- * A whole line at a time, not a sentence: the guide plays one clip per line, so
- * the pause between two sentences is the speaker's own rather than a gap while
- * the next request comes back. `sentences` is still what the app's own replies
- * are split by, where the first words matter more than the seam.
+ * A whole line at a time. One clip per line means the pause between two
+ * sentences is the speaker's own, rather than a gap while the next request
+ * comes back — which is what made the voice sound spliced.
  */
-export function spokenLines(person = SARA) {
+export function spokenLines(person = HAANIYAH) {
   const seen = new Set();
   for (const list of [signUp(person), showcase()])
     for (const b of list)
@@ -126,8 +120,8 @@ export function keystrokes(person, fields = FIELDS) {
  *            slider's new position)
  *   enter  — the return key, for a box that submits on it
  *   say    — speak a line, and hold until it has been said
- *   over   — speak a line and carry on moving while it is said
- *   spot   — light the target up and explain it
+ *   spot   — light the target up and explain it, held the same way
+ *   until  — hold until the app itself says it is ready
  *   dim    — put the lights back
  *   wait   — let the screen be read
  *
@@ -139,9 +133,10 @@ function reel() {
   const api = {
     beats,
     wait: (ms) => (beats.push({ do: "wait", ms }), api),
+    /** Always held to the end of the line. Narration that ran underneath the
+     *  next few beats sounded quicker, and was cut off mid-word every time the
+     *  beats ran short — which they mostly did. */
     say: (text) => (beats.push({ do: "say", text }), api),
-    /** narration that runs underneath the next few beats instead of stopping them */
-    over: (text) => (beats.push({ do: "say", text, hold: false }), api),
     to: (target) => (beats.push({ do: "reveal", target }, { do: "move", target }), api),
     tap: (target) => (api.to(target), beats.push({ do: "press", target }, { do: "wait", ms: BEAT_MS }), api),
     /** a whole screen arrives after this one, so give it time to */
@@ -159,6 +154,10 @@ function reel() {
                                                        { do: "wait", ms: BEAT_MS }), api),
     enter: (target) => (beats.push({ do: "enter", target }, { do: "wait", ms: BEAT_MS }), api),
     spot: (target, text) => (api.to(target), beats.push({ do: "spot", target, text }), api),
+    /** Wait on the app, not on the clock: `until("talking")` holds until it has
+     *  started answering, `until("quiet")` until it has finished. `max` is the
+     *  longest it will wait before giving up and carrying on regardless. */
+    until: (what, max) => (beats.push({ do: "until", what, max }), api),
     dim: () => (beats.push({ do: "dim" }), api),
   };
   return api;
@@ -167,90 +166,96 @@ function reel() {
 /**
  * THE SIGN-UP, SIGNING ITSELF UP.
  *
- * Haaniyah hosts all three reels. She is a person showing you round Tawaazun,
- * not the app talking about itself, and she talks the way someone does when
- * they like the thing they are showing you: short sentences, no manual.
+ * Haaniyah signs herself up while she talks you through it. The words are hers,
+ * verbatim — this file only decides where in the screen each line lands, and
+ * what the pointer is doing while she says it.
  */
-export function signUp(person = SARA) {
+export function signUp(person = HAANIYAH) {
   const s = reel();
   s.wait(OPEN_MS);
-  s.over(`Hi, I'm Haaniyah. Welcome to Tawaazun — I'll sign ${person.name} up, so you can see how quick it is.`);
+  s.say("Hey everyone! I'm Haaniyah, and I'm so excited to introduce you to Tawaazun. Let's walk through the sign-up together — it only takes a minute.");
   for (const g of person.goals) s.tap(`goal:${g}`);
-  s.over("First, what brings you here.");
+  s.say("First, it asks what brings you here. For me, it's about finally figuring out what's going on with my body.");
   s.tap("next").wait(STEP_MS);
 
-  s.over("Then the basics. Every one of them feeds a rule a clinician would use.");
+  s.say("It covers the basics — and every single question ties back to the actual clinical rules a doctor uses.");
   for (const f of FIELDS) s.write(`field:${f}`, person[f]);
   for (const c of person.chips) s.tap(`chip:${c}`);
+  s.say("We cover family history and things like acne.");
   s.tap("next").wait(STEP_MS);
 
-  s.over("And anything a clinician has already told you.");
   s.tap(`dx:${person.diagnosis}`);
+  s.to("cond:hirsutism");
+  s.say("When I note that my doctor previously mentioned hirsutism, the app instantly pulls up a clinical scoring sheet.");
   for (const c of person.conditions || []) s.tap(`cond:${c}`);
-  s.say("That's it. Three screens, and nothing to buy.");
+  s.tap("fg:chin:3").tap("fg:upperLip:2");
+  s.say("Just by filling that out, it settles one of the main diagnostic criteria without needing a single blood test.");
   s.tap("next");
   return s.beats;
 }
 
 /**
- * THE SHOWCASE — the highlights, at the speed of an advert.
+ * THE SHOWCASE — her own account, shown the way you would show a friend.
  *
- * One reel, not two: Haaniyah drives the app and explains it in the same pass,
- * so the thing she is talking about is lit up under her pointer while she says
- * it. Not every feature either — the four moments that make someone want this:
- * a period marked in one tap, a day recorded by talking, a history read back,
- * and the hair-growth sheet settling a criterion that usually costs a blood
- * test. Everything it changes, it changes back.
+ * Home, then a day recorded by talking, then the history read back, then the
+ * part she takes to an appointment. Everything it changes, it changes back.
+ * Two beats are deliberately silent — the app answering her out loud, and the
+ * end-of-conversation form — because something is happening there worth
+ * hearing and watching rather than being talked over.
  */
 export function showcase() {
   const s = reel();
   s.wait(SCREEN_MS);
-  s.over("Hi, I'm Haaniyah. Welcome to Tawaazun — here are the good bits.");
+  s.say("Now, let me show you what Tawaazun actually does when you use it.");
 
-  // HOME — one tap, and everything catches up
+  // HOME — the calendar, the ring, and what she is taking
   s.open("nav:home");
-  s.spot("cal:grid", "This is your cycle, as you actually live it.");
+  s.spot("cal:grid", "I just tap the day my cycle started, and that's it. The whole process is incredibly simple.");
   s.tap("cal:today");
-  s.over("A period is one tap.");
-  s.spot("home:ring", "The ring, your phase, the date it expects next — all of it catches up.");
+  s.spot("home:ring", "It catches up immediately.");
+  s.say("It shows exactly where I am in my cycle and predicts the next one based on my actual data, not just a generic monthly average.");
   s.tap("cal:today");
+  s.spot("home:drugs", "Everything I take is pinned right here, ensuring my symptoms are always read with my medications in context.");
   s.dim();
+  s.say("So — let's do my daily check-in.");
 
-  // RECORD — you talk, it writes
+  // RECORD — she talks, it answers, the trends move
   s.open("go:record");
-  s.spot("rec:mic", "Then you just talk about your day.");
-  s.write("rec:type", "Bad cramps today and I barely slept");
-  s.enter("rec:type");
-  s.over("It listens, answers, and fills the tracker in as you talk.");
-  s.wait(3500);                            // its own voice, over the top of nobody
-  s.spot("rec:tracker", "In your words. Not somebody else's list of symptoms.");
+  s.spot("rec:mic", "This next bit is my absolute favorite. You don't have to fill out endless, tedious forms — you just talk to it!");
+  s.write("rec:line", "Bad cramps today, and I barely slept");   // the guide's own microphone
+  s.tap("rec:dictate");
+  s.wait(2000);                                                  // the words arriving in the transcript
+  // Then it thinks, and answers in its own voice. She waits for both — talking
+  // over the app's reply is the one overlap a demo can't explain away.
+  s.until("talking", 12000);
+  s.until("quiet", 25000);
+  s.spot("rec:tracker", "Listen to this — it answers back, transcribes my words, and automatically fills out the log for me. I didn't type a single thing.");
+  s.spot("rec:insights", "As I'm talking, you can see the trend graphs moving and placing today's entry right into my overall pattern.");
   s.dim();
 
-  // INSIGHTS — the patterns nobody has time to find
+  // ... and the form behind the conversation, shown rather than narrated
+  s.open("rec:end");
+  s.to("log:group:cycle").wait(1500);
+  s.tap("log:keep");
+
+  // INSIGHTS — her history, handed back
   s.open("nav:insights");
-  s.spot("ins:summary", "And it reads your history back — the patterns nobody has time to find.");
+  s.spot("ins:summary", "The Insights tab hands your history right back to you.");
+  s.spot("ins:cat:cycle", "It translates your cycle into hard numbers and charts, so you can test your own hunches instead of relying on a vague feeling.");
+  s.to("charts").wait(1100);
   s.dim();
 
-  // SETTINGS — what it will and won't ask, and the one that settles a criterion
-  s.open("nav:settings");
-  s.spot("set:block", "Anything you'd rather it never asked about, switch off here.");
-  s.over("A clinician already found something? It goes in here.");
-  s.tap("cond:hirsutism");
-  s.tap("fg:chin:3").tap("fg:upperLip:2");
-  s.say("Score the hair-growth sheet, and a criterion is settled — no blood test.");
-
-  // ADVOCACY — the payoff
+  // ADVOCACY — the part that speaks for her
+  s.open("nav:home");
   s.open("go:advocacy");
-  s.spot("adv:triad", "And this is what you take to the appointment, with the words for it.");
+  s.spot("adv:triad", "This is the part that truly advocates for you. There are three criteria used for this diagnosis, and Tawaazun helps me track two of them myself.");
+  s.spot("adv:indicator", "It shows exactly where my data stands against those clinical benchmarks.");
+  s.spot("adv:points", "While it clearly states it isn't giving a medical diagnosis, it does give me the exact words to use.");
+  s.say("It tells me what symptoms to raise, how to phrase them, and what tests to ask for.");
+  s.spot("adv:print", "I just print the summary out and take it directly to my appointment.");
   s.dim();
-
-  // ... and back exactly as it was
-  s.open("nav:settings");
-  s.over("Off as easily as on.");
-  s.tap("fg:chin:3").tap("fg:upperLip:2").tap("cond:hirsutism");
-  s.spot("set:guide", "That's my off switch, whenever you like.");
-  s.dim();
-  s.say("Tawaazun. It's yours.");
+  s.say("With Tawaazun, I'm not starting from scratch, and I'm no longer spending years being told my symptoms are just “normal.”");
+  s.say("That's Tawaazun. Go ahead and jump in — it's all yours!");
   return s.beats;
 }
 
@@ -309,8 +314,14 @@ export function runReel(list, io, { timer = setTimeout, clear = clearTimeout, ra
     else if (b.do === "press") { io.press?.(b.target); gap = PRESS_MS; }
     else if (b.do === "key") { io.key?.(b.target, b.value); gap = TYPE_MS + rand() * JITTER_MS; }
     else if (b.do === "enter") { io.enter?.(b.target); gap = PRESS_MS; }
-    else if (b.do === "say") { const ms = io.say?.(b.text) ?? sayMs(b.text); gap = b.hold === false ? BEAT_MS : ms; }
+    else if (b.do === "say") gap = io.say?.(b.text) ?? sayMs(b.text);
     else if (b.do === "spot") gap = io.spot?.(b.target, b.text) ?? sayMs(b.text);
+    else if (b.do === "until") {
+      // io says how long to leave it before asking again, or nothing when the
+      // wait is over. Asking again means replaying this same beat.
+      const again = io.until?.(b.what, b.max);
+      if (again) { index -= 1; gap = again; } else gap = BEAT_MS;
+    }
     else if (b.do === "dim") { io.dim?.(); gap = BEAT_MS; }
     handle = timer(beat, gap);
   };

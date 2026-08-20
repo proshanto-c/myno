@@ -370,6 +370,20 @@ def test_not_in_the_open_access_subset_is_none_not_an_error():
 
 
 @test
+def test_a_plain_text_error_with_a_200_is_read_as_one():
+    """BioC answers for an article it does not hold with prose and HTTP 200.
+    A bare ParseError tells a reader nothing, so the body comes with it."""
+    body = b"[Error] : No result can be found.\n"
+    for parser in (ncbi.parse_bioc, ncbi.parse_records, ncbi.parse_oa, ncbi.parse_esearch):
+        try:
+            parser(body)
+        except ncbi.NcbiError as e:
+            assert "No result can be found" in str(e), (parser.__name__, str(e))
+        else:
+            raise AssertionError(f"{parser.__name__} accepted prose as XML")
+
+
+@test
 def test_full_text_offsets_index_the_text_we_store():
     text, passages = ncbi.parse_bioc(BIOC_XML)
     for p in passages:

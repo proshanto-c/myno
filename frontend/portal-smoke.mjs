@@ -82,7 +82,8 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
       : u.includes("/runs") ? { runs: RUNS }
       : u.includes("/reports") ? { reports: REPORTS }
       : u.includes("/report/") ? { source: SOURCES[1], report: REPORTS[0], claims: CLAIMS, citedBy: 4 }
-      : u.includes("/queue") ? { claims: QUEUE, open: 1, published: 0, signedIn: false }
+      : u.includes("/queue") ? { claims: QUEUE, open: 1, published: 0, signedIn: false,
+                                 reviewer: "admin@tawaazun.io" }
       : u.includes("/candidates") ? { correlations: [{ exposure: "dietFibre", outcome: "acne", claims: 3 }],
                                       fields: [{ key: "hotFlushes", claims: 2, labels: ["Hot flushes"] }] }
       : u.includes("/jobs") ? { current: null, past: [] }
@@ -125,7 +126,7 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
   if (authRequired && !signedIn) {
     if (!html.includes("Sign in")) { console.log(`[${name}] no sign-in form behind the gate`); return 3; }
   } else if (hash === "#queue") {
-    for (const want of ["Queue", "unsigned", "What the patient reads", "Shorter sleep goes with more brain fog",
+    for (const want of ["Queue", "admin@tawaazun.io", "What the patient reads", "Shorter sleep goes with more brain fog",
                         "p publish", "dietFibre", "Hot flushes"]) {
       if (!html.includes(want)) { console.log(`[${name}] the queue omits ${JSON.stringify(want)}`); return 3; }
     }

@@ -197,6 +197,21 @@ class Search:
 
 
 # ---- reading XML ------------------------------------------------------------
+def parse(xml_bytes: bytes):
+    """Every parser's front door.
+
+    NCBI answers some requests with a plain-text error and HTTP 200 — BioC does
+    it for an article that is not in its collection — so "the body is not XML"
+    is a normal reply here, not a crash. Raised as an NcbiError carrying what
+    was actually said, because a bare ParseError tells a reader nothing.
+    """
+    try:
+        return DET.fromstring(xml_bytes)
+    except Exception as e:
+        snippet = (xml_bytes or b"")[:120].decode("utf-8", "replace").strip()
+        raise NcbiError(f"not XML ({e}): {snippet!r}") from e
+
+
 def _text(node) -> str:
     """All the text under a node, whitespace collapsed.
 
@@ -365,7 +380,7 @@ def _parse_book(node) -> Record:
 
 def parse_records(xml_bytes: bytes) -> list:
     """Both node types, from one efetch. Deleted citations are skipped."""
-    root = DET.fromstring(xml_bytes)
+    root = parse(xml_bytes)
     out = []
     for node in root:
         if node.tag == "PubmedArticle":
@@ -376,7 +391,7 @@ def parse_records(xml_bytes: bytes) -> list:
 
 
 def parse_esearch(xml_bytes: bytes) -> Search:
-    root = DET.fromstring(xml_bytes)
+    root = parse(xml_bytes)
     error = root.findtext("ERROR")
     if error:
         raise NcbiError(f"esearch: {error}")
@@ -387,7 +402,7 @@ def parse_esearch(xml_bytes: bytes) -> Search:
 
 
 def parse_esearch_ids(xml_bytes: bytes) -> list:
-    root = DET.fromstring(xml_bytes)
+    root = parse(xml_bytes)
     return [_text(i) for i in root.findall("./IdList/Id")]
 
 
@@ -398,7 +413,7 @@ def parse_oa(xml_bytes: bytes) -> dict | None:
     the same answer the service gives for one that does not exist at all, so a
     None here means "no full text for us", never "no such paper".
     """
-    root = DET.fromstring(xml_bytes)
+    root = parse(xml_bytes)
     if root.find("error") is not None:
         return None
     record = root.find("./records/record")
@@ -423,7 +438,7 @@ def parse_bioc(xml_bytes: bytes, skip: Sequence[str] = SKIP_SECTIONS) -> tuple:
     BioC's own coordinate space: a stored offset has to index the stored text or
     quote verification is checking the wrong document.
     """
-    root = DET.fromstring(xml_bytes)
+    root = parse(xml_bytes)
     parts, passages, cursor = [], [], 0
     for passage in root.findall(".//passage"):
         infons = {i.get("key"): (i.text or "") for i in passage.findall("infon")}

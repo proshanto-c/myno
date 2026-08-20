@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 # Dalīl bootstrap credentials never belong in the repo
 dalil/.env
+
+# generated reference clips for the cloned voice
+voice/*.wav

@@ -377,11 +377,12 @@ function Queue({ data, onAct, onSkip, index, busy, problems, candidates }) {
     <section>
       <H2 count={`${data.open || 0} open · ${data.published || 0} published`}>Queue</H2>
 
-      {data.signedIn === false && (
-        <div style={{ ...card, padding: "10px 14px", marginBottom: 14, background: T.warnSoft,
-          border: `1px solid ${T.warn}33`, fontFamily: sans, fontSize: 13, color: T.warn }}>
-          Sign-in is off, so anything published now is recorded as <b>unsigned</b>. The claim this
-          module makes is that a named person checked it; that claim is not true of these rows.
+      {data.signedIn === false && data.reviewer && (
+        <div style={{ ...card, padding: "10px 14px", marginBottom: 14, background: T.accentSoft,
+          border: `1px solid ${T.accent}22`, fontFamily: sans, fontSize: 13, color: T.inkMid }}>
+          Sign-in is off, so every review is signed as <b>{data.reviewer}</b>. Turn
+          <span style={{ fontFamily: mono, fontSize: 12 }}> DALIL_REQUIRE_AUTH=1 </span>
+          on to have people sign in as themselves.
         </div>
       )}
 
@@ -705,13 +706,22 @@ function ReportView({ data, onBack, onAppraise, busy }) {
               </p>
             : claims.map((c) => <ClaimCard key={c.id} claim={c} />)}
 
-          <Section title="Provenance">
-            <div style={{ fontFamily: mono, fontSize: 12, color: T.inkMid, lineHeight: 1.7 }}>
+          {/* Provenance matters and is almost never read, so it sits as one
+              line that opens rather than a block that has to be scrolled past
+              on the way to the next report. */}
+          <details style={{ ...card, padding: "10px 16px", marginTop: 4 }}>
+            <summary style={{ cursor: "pointer", fontFamily: sans, fontSize: 12,
+              fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase",
+              color: T.inkSoft, listStyle: "revert" }}>
+              Provenance — rubric {report.rubricVersion}, {report.model || "no model"}
+            </summary>
+            <div style={{ fontFamily: mono, fontSize: 12, color: T.inkMid, lineHeight: 1.7,
+              marginTop: 8 }}>
               rubric {report.rubricVersion} · prompt {report.promptVersion} · {report.model || "no model"}<br />
               {(report.tokensIn || 0).toLocaleString()} tokens in, {(report.tokensOut || 0).toLocaleString()} out
               · {(report.createdAt || "").replace("T", " ").slice(0, 16)}
             </div>
-          </Section>
+          </details>
         </>
       )}
     </section>
@@ -953,7 +963,8 @@ export default function Portal() {
       setRuns(ran.runs || []);
       setReportRows(made.reports || []);
       setQueue({ claims: waiting.claims || [], open: waiting.open,
-                 published: waiting.published, signedIn: waiting.signedIn });
+                 published: waiting.published, signedIn: waiting.signedIn,
+                 reviewer: waiting.reviewer });
       setCandidates(loops);
     } catch (err) {
       mishap(err);
@@ -1053,7 +1064,10 @@ export default function Portal() {
           </nav>
           <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
             {me.authRequired === false
-              ? <Tag fg={T.warn} bg={T.warnSoft}>sign-in off</Tag>
+              ? <>
+                  <span style={{ fontFamily: sans, fontSize: 12.5, color: T.inkSoft }}>{me.email}</span>
+                  <Tag>sign-in off</Tag>
+                </>
               : <>
                   <span style={{ fontFamily: sans, fontSize: 12.5, color: T.inkSoft }}>{me.email}</span>
                   <button onClick={async () => { await api.logout().catch(() => {}); setMe(null); }}

@@ -2,7 +2,8 @@
 #   db        Postgres (patients, logs, descriptors, blacklist, conversations)
 #   backend   FastAPI orchestrator (Claude, personalization, blacklist, DB, TTS proxy)
 #   asr       NeMo cache-aware streaming ASR  (GPU)
-#   tts       NeMo FastPitch + HiFi-GAN TTS   (GPU)
+#   tts       NeMo FastPitch + HiFi-GAN TTS   (GPU)  — the fallback voice
+#   voice     VoiceStudio: the cloned voice the app speaks in       (GPU)
 #   frontend  React app behind nginx (proxies /api -> backend, /asr -> asr)
 #
 # Prereqs on the A100 host: Docker, the NVIDIA Container Toolkit, and an NGC
@@ -35,6 +36,18 @@ services:
       DATABASE_URL: postgresql+psycopg2://myno:myno@db:5432/myno
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in your environment}
       TTS_URL: http://tts:8001
+      # The cloned voice. VOICE_ID is the profile id VoiceStudio gives back when
+      # the reference recording is registered (scripts/clone-voice.sh prints it,
+      # and writes it into .env). Unset it and the app falls back to NeMo.
+      VOICE_URL: http://voice:3900
+      VOICE_ID: ${VOICE_ID:-}
+      VOICE_MODEL: ${VOICE_MODEL:-omnivoice}
+      VOICE_SPEED: ${VOICE_SPEED:-1.15}
+      # Every line the app has said before, kept between restarts: the guided
+      # demo repeats itself word for word, and synthesis costs seconds a line.
+      VOICE_CACHE_DIR: /var/cache/myno-voice
+    volumes:
+      - voice_cache:/var/cache/myno-voice
     depends_on:
       db:
         condition: service_healthy
@@ -90,6 +103,40 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # The voice the app speaks in: VoiceStudio, cloning one reference recording
+  # and serving it on an OpenAI-compatible /v1/audio/speech. Loopback only —
+  # it ships no authentication of its own, and the browser never talks to it
+  # directly: every line goes through the backend's /api/tts.
+  voice:
+    image: ghcr.io/debpalash/omnivoice-studio:latest
+    container_name: voicestudio
+    ports:
+      - "127.0.0.1:3900:3900"
+    volumes:
+      - voicestudio_data:/app/omnivoice_data
+    environment:
+      HF_HOME: /app/omnivoice_data/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+      OMNIVOICE_DATA_DIR: /app/omnivoice_data
+      PYTHONPATH: /app/backend
+      PYTHONUNBUFFERED: "1"
+      OMNIVOICE_BIND_HOST: 0.0.0.0
+      OMNIVOICE_SERVER_MODE: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3900/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   frontend:
     build: ./frontend
     depends_on:
@@ -100,3 +147,8 @@ services:
 
 volumes:
   myno_db:
+  # Named to match the volume the standalone container filled, so the models
+  # and the cloned profile survive the move into compose.
+  voicestudio_data:
+    name: voicestudio-data
+  voice_cache:

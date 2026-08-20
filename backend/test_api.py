@@ -326,6 +326,105 @@ def test_extract_prompt_lists_every_schema_field():
         assert f'"{f["key"]}"' in shape, f["key"]
 
 
+# ---- the evidence Dalīl publishes ------------------------------------------
+@test
+def test_every_correlation_has_an_id_and_it_reaches_the_page():
+    """Those ids are foreign keys — Dalīl files studies under them — so a
+    renamed one silently detaches every citation filed against it."""
+    import insights
+    ids = [c["id"] for c in insights.CORRELATIONS]
+    assert len(set(ids)) == len(ids), "two correlations share an id"
+    assert all(i and i.replace("_", "").isalnum() for i in ids), ids
+    assert insights.CORRELATION_BY_PAIR[("sleep", "brainFog")] == "sleep_brainfog"
+
+    r = client.get("/insights/correlations")
+    assert r.status_code == 200
+    published = {c["id"] for c in r.json()["correlations"]}
+    assert published == set(ids), "the contract and the list disagree"
+
+
+@test
+def test_a_correlation_carries_its_id_all_the_way_to_the_page():
+    """summarise() whitelists the keys it emits, so the id has to be added
+    there too — and by_category() filters by reference, so one edit carries it
+    the rest of the way."""
+    import insights
+    logs = [{"date": iso(n), "sleep": 5 if n % 2 else 9, "brainFog": 8 if n % 2 else 2}
+            for n in range(20)]
+    summary = insights.summarise(logs)
+    found = summary["correlations"]
+    assert found, "the fixture should produce at least one correlation"
+    assert all(c.get("id") for c in found), found
+    assert any(c["id"] == "sleep_brainfog" for c in found), [c["id"] for c in found]
+
+    grouped = insights.by_category(summary)
+    carried = [c for g in grouped for c in g["correlations"]]
+    assert carried and all(c.get("id") for c in carried), carried
+
+
+@test
+def test_the_evidence_endpoints_answer_even_with_nothing_published():
+    for path in ("/evidence/correlations", "/evidence/trackers"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert isinstance(list(r.json().values())[0], (dict, list)), path
+
+
+@test
+def test_what_else_to_track_no_longer_asks_a_model_anything():
+    """The card used to be a prompt. `refreshing` was how it told the app to
+    poll while Claude wrote; there is nothing to wait for now."""
+    pid = new_patient()
+    r = client.get(f"/patients/{pid}/suggestions")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["refreshing"] is False
+    assert isinstance(body["suggestions"], list)
+    for item in body["suggestions"]:
+        # never a search URL built from words a model chose
+        assert "?term=" not in (item.get("read_more") or ""), item
+        assert item.get("evidence") in ("Strong", "Emerging", "Early", ""), item
+    client.delete(f"/patients/{pid}")
+
+
+@test
+def test_the_model_written_suggestion_machinery_is_gone():
+    source = open(__file__.replace("test_api.py", "main.py")).read()
+    for ghost in ("SUGG_SYSTEM", "STANDARD_TRACKERS", "_pubmed_link",
+                  "_gap_suggestions", "_refresh_suggestions", "_suggestions_daily_loop"):
+        assert f"def {ghost}" not in source and f"{ghost} =" not in source, ghost
+
+
+@test
+def test_a_claim_nobody_published_is_invisible_to_a_patient():
+    """The boundary is a table. A claim that exists but was never published must
+    not appear in anything the app serves — this writes one and looks for it."""
+    from sqlalchemy import text as sql
+    nonce = f"nonce-{dt.datetime.utcnow().timestamp()}"
+    made = []
+    with main.engine.begin() as conn:
+        try:
+            conn.execute(sql("SELECT 1 FROM dalil_claims LIMIT 1"))
+        except Exception:
+            return                              # no Dalīl on this database yet
+        row = conn.execute(sql(
+            "INSERT INTO dalil_claims (source_id, state, claim_text, display_text, "
+            "quote, quote_verified) VALUES (NULL, 'accepted', :t, :t, :t, true) RETURNING id"),
+            {"t": nonce}).scalar()
+        made.append(row)
+    try:
+        import evidence
+        evidence.reset()
+        for path in ("/evidence/correlations", "/evidence/trackers"):
+            assert nonce not in client.get(path).text, path
+        pid = new_patient()
+        assert nonce not in client.get(f"/patients/{pid}/suggestions").text
+        client.delete(f"/patients/{pid}")
+    finally:
+        with main.engine.begin() as conn:
+            conn.execute(sql("DELETE FROM dalil_claims WHERE id = ANY(:ids)"), {"ids": made})
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in T:

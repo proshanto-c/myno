@@ -9,8 +9,9 @@ That is the same forcing function `test_api.py` already applies to the guideline
 thresholds — a prompt that quietly changed would silently re-grade a corpus.
 """
 import hashlib
+import json
 
-APPRAISE_VERSION = "1"
+APPRAISE_VERSION = "2"
 
 
 def hash_of(text: str) -> str:
@@ -43,8 +44,9 @@ quote costs you the point you were trying to win.
 2. If the text does not support a module, score it 0 and say why in `note`. A \
 guess is worth less than a zero, because a zero is honest.
 3. Claims bind to the field keys you are given and to nothing else. If a paper \
-is about something the app does not record, set `proposed` true on that side and \
-give a short `tracker_label` for what a person would have to log.
+is about something the app does not record, use a short camelCase key of your \
+own for that side and give a `tracker_label` naming what a person would have to \
+log; it is stored as a proposal for a human to accept or ignore.
 4. `relation` states what the study design establishes, not what its authors \
 hope. A cross-sectional survey supports `associated_with`. It never supports \
 `increases` or `reduces`, whatever the discussion section says.
@@ -83,7 +85,28 @@ plainly that somebody with the condition and no training could tell whether it \
 matches their own data. `claim_text` is yours to write; `quote` is the paper's.
 """
 
-APPRAISE_HASH = hash_of(APPRAISE_SYSTEM)
+# The schema is flat on purpose, and this is not a style preference.
+#
+# The first version nested each module as {score, note, quote}. Opus filled it
+# by emitting `"measurement": "\n<parameter name=\"score\">2"` and hoisting
+# `note` and `quote` to the top level — the nesting was flattened on the way
+# out, and every module scored zero as a result. Three scalars per module
+# cannot be flattened wrongly, because there is nothing left to flatten.
+#
+# `claims` stays an array of objects: a list of repeated things is a shape that
+# survives, and there is no fixed number of claims to flatten it into. Its own
+# effect numbers are flat inside each item for the same reason as above.
+MODULE_MAXIMUMS = {"measurement": 12, "effect": 10, "daily": 10, "confounding": 8}
+
+
+def _module_props():
+    props = {}
+    for key, top in MODULE_MAXIMUMS.items():
+        props[f"{key}_score"] = {"type": "integer", "minimum": 0, "maximum": top}
+        props[f"{key}_note"] = {"type": "string"}
+        props[f"{key}_quote"] = {"type": "string",
+                                 "description": "copied character for character from the text"}
+    return props
 
 
 APPRAISE_TOOL = {
@@ -92,31 +115,14 @@ APPRAISE_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "measurement": {
-                "type": "object",
-                "properties": {"score": {"type": "integer", "minimum": 0, "maximum": 12},
-                               "note": {"type": "string"}, "quote": {"type": "string"}},
-                "required": ["score", "note", "quote"]},
-            "effect": {
-                "type": "object",
-                "properties": {"score": {"type": "integer", "minimum": 0, "maximum": 10},
-                               "note": {"type": "string"}, "quote": {"type": "string"}},
-                "required": ["score", "note", "quote"]},
-            "daily": {
-                "type": "object",
-                "properties": {"score": {"type": "integer", "minimum": 0, "maximum": 10},
-                               "note": {"type": "string"}, "quote": {"type": "string"}},
-                "required": ["score", "note", "quote"]},
-            "confounding": {
-                "type": "object",
-                "properties": {"score": {"type": "integer", "minimum": 0, "maximum": 8},
-                               "note": {"type": "string"}, "quote": {"type": "string"}},
-                "required": ["score", "note", "quote"]},
-            "sample": {
-                "type": "object",
-                "properties": {"n": {"type": ["integer", "null"]},
-                               "note": {"type": "string"}, "quote": {"type": "string"}},
-                "required": ["n", "note", "quote"]},
+            **_module_props(),
+            "sample_n": {"type": ["integer", "null"],
+                         "description": "participants the analysis was run on, or null"},
+            "sample_note": {"type": "string"},
+            "sample_quote": {"type": "string"},
+            "narrative": {"type": "string",
+                          "description": "Three or four sentences a reviewer reads first: "
+                                         "what the paper found, and what it is worth here."},
             "claims": {
                 "type": "array",
                 "items": {
@@ -131,15 +137,12 @@ APPRAISE_TOOL = {
                         "exposure_field": {"type": "string"},
                         "outcome_field": {"type": "string"},
                         "moderator_field": {"type": ["string", "null"]},
-                        "proposed": {"type": "array", "items": {"type": "string"}},
                         "tracker_label": {"type": ["string", "null"]},
-                        "effect": {
-                            "type": "object",
-                            "properties": {"measure": {"type": "string"},
-                                           "value": {"type": ["number", "null"]},
-                                           "ci_low": {"type": ["number", "null"]},
-                                           "ci_high": {"type": ["number", "null"]},
-                                           "p": {"type": ["number", "null"]}}},
+                        "effect_measure": {"type": "string"},
+                        "effect_value": {"type": ["number", "null"]},
+                        "effect_ci_low": {"type": ["number", "null"]},
+                        "effect_ci_high": {"type": ["number", "null"]},
+                        "effect_p": {"type": ["number", "null"]},
                         "certainty": {"type": "string",
                                       "enum": ["high", "moderate", "low", "very_low"]},
                         "quote": {"type": "string"},
@@ -147,11 +150,12 @@ APPRAISE_TOOL = {
                     "required": ["claim_text", "relation", "direction", "population",
                                  "exposure_field", "outcome_field", "certainty", "quote"]},
             },
-            "narrative": {"type": "string",
-                          "description": "Three or four sentences a reviewer reads first: "
-                                         "what the paper found, and what it is worth here."},
         },
-        "required": ["measurement", "effect", "daily", "confounding", "sample",
+        "required": [*_module_props(), "sample_n", "sample_note", "sample_quote",
                      "claims", "narrative"],
     },
 }
+
+# The tool is part of the prompt: change its shape and the model answers
+# differently, so the version has to move with it.
+APPRAISE_HASH = hash_of(APPRAISE_SYSTEM + json.dumps(APPRAISE_TOOL, sort_keys=True))

@@ -21,12 +21,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import httpx
 
 import prompts
 
-MODEL = "claude-sonnet-4-6"
+# Opus rather than the model the patient app talks with. Appraisal is the one
+# place in this product where a judgement is recorded, versioned and shown to a
+# reviewer as a number; a conversation that gets a word wrong can be corrected
+# in the next sentence, and a rubric score cannot.
+MODEL = os.environ.get("DALIL_MODEL", "claude-opus-5")
 API = "https://api.anthropic.com/v1/messages"
 VERSION = "2023-06-01"
 MAX_TOKENS = 4000
@@ -73,6 +78,66 @@ def source_block(source: dict) -> str:
     return "\n".join(bits) + "\n\n---\n\n" + text
 
 
+def _text(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _number(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:                                   # "412", "n = 412" and "1,107" all happen
+        return int(re.sub(r"[^\d-]", "", str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def reassemble(flat: dict) -> dict:
+    """Flat on the wire, nested in the pipeline.
+
+    The wire format is flat because nesting did not survive the round trip; the
+    rest of the module reads `{measurement: {score, note, quote}}` because that
+    is the shape a report is. This is the one place that knows both, which is
+    the same reason `ncbi.py` is the only module that knows PubMed's XML.
+    """
+    flat = flat if isinstance(flat, dict) else {}
+    out: dict = {}
+    for key, top in prompts.MODULE_MAXIMUMS.items():
+        score = _number(flat.get(f"{key}_score"))
+        out[key] = {"score": max(0, min(top, int(score))) if score is not None else 0,
+                    "note": _text(flat.get(f"{key}_note")),
+                    "quote": _text(flat.get(f"{key}_quote"))}
+    out["sample"] = {"n": _number(flat.get("sample_n")),
+                     "note": _text(flat.get("sample_note")),
+                     "quote": _text(flat.get("sample_quote"))}
+    out["narrative"] = _text(flat.get("narrative"))
+
+    claims = flat.get("claims")
+    out["claims"] = []
+    for item in (claims if isinstance(claims, list) else []):
+        if not isinstance(item, dict):
+            continue
+        out["claims"].append({
+            "claim_text": _text(item.get("claim_text")),
+            "relation": _text(item.get("relation")) or "associated_with",
+            "direction": _text(item.get("direction")),
+            "population": _text(item.get("population")),
+            "exposure_field": _text(item.get("exposure_field")),
+            "outcome_field": _text(item.get("outcome_field")),
+            "moderator_field": _text(item.get("moderator_field")) or None,
+            "tracker_label": _text(item.get("tracker_label")) or None,
+            "certainty": _text(item.get("certainty")),
+            "quote": _text(item.get("quote")),
+            "effect": {"measure": _text(item.get("effect_measure")),
+                       "value": _number(item.get("effect_value")),
+                       "ci_low": _number(item.get("effect_ci_low")),
+                       "ci_high": _number(item.get("effect_ci_high")),
+                       "p": _number(item.get("effect_p"))},
+        })
+    return out
+
+
 def appraise(source: dict, fields: dict, labels: dict, *, http: httpx.Client | None = None,
              api_key: str = "", model: str = MODEL) -> dict:
     """One paper in, the model's half of the rubric out."""
@@ -113,7 +178,7 @@ def appraise(source: dict, fields: dict, labels: dict, *, http: httpx.Client | N
         raise ModelError(f"no tool call in the reply: {json.dumps(data)[:400]}")
 
     usage = data.get("usage", {})
-    return {"out": block.get("input", {}), "model": data.get("model", model),
+    return {"out": reassemble(block.get("input", {})), "model": data.get("model", model),
             "promptVersion": prompts.APPRAISE_VERSION,
             "promptHash": prompts.APPRAISE_HASH,
             "tokensIn": usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0),

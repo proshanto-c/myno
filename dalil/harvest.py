@@ -270,15 +270,19 @@ def advance(s, client: ncbi.Client, run: Run, batches: int = 1, batch: int = ncb
             _mark_covered(s, run)
             s.commit()
             break
+        # Never ask for more than is still wanted. Without this a cap of 40 still
+        # pulls a full batch of 200 and stores all of them, which makes "a look
+        # at 40 of 1,200" a false description of what just happened.
+        take = min(batch, target - run.cursor)
         try:
-            xml = client.efetch_history(search, run.cursor, batch)
+            xml = client.efetch_history(search, run.cursor, take)
         except ncbi.NcbiUnavailable:
             run.state, run.error = "paused", "NCBI unavailable"
             s.commit()
             raise
         except ncbi.NcbiError:
             search = _resume_search(s, client, run)
-            xml = client.efetch_history(search, run.cursor, batch)
+            xml = client.efetch_history(search, run.cursor, take)
 
         records = ncbi.parse_records(xml)
         added = 0
@@ -288,7 +292,7 @@ def advance(s, client: ncbi.Client, run: Run, batches: int = 1, batch: int = ncb
         # Advance by what was asked for, not by what came back: a window
         # containing deleted citations returns fewer records than requested, and
         # advancing by the count would fetch that window for ever.
-        run.cursor = min(run.cursor + batch, target)
+        run.cursor = min(run.cursor + take, target)
         run.fetched = (run.fetched or 0) + len(records)
         run.added = (run.added or 0) + added
         stats["fetched"] += len(records)
@@ -423,7 +427,16 @@ def _enrich(client: ncbi.Client, source: Source, want_fulltext: bool) -> str:
     if not want_fulltext or source.fulltext:
         return "metadata"
 
-    text, passages = client.bioc(source.pmcid)
+    try:
+        text, passages = client.bioc(source.pmcid)
+    except ncbi.NcbiError as e:
+        # Being in the OA subset does not mean BioC holds a machine-readable
+        # copy; it answers for those it does not with a plain-text error. The
+        # licence and the retraction status are what we came for, and we have
+        # them, so this is an outcome rather than a failure.
+        _flag(source, "no_bioc")
+        source.screen_reason = str(e)[:200]
+        return "no-fulltext"
     heading = next((text[p["offset"]:p["offset"] + p["len"]]
                     for p in passages if p["section"] == "TITLE"), "")
     if heading and not titles_match(heading, source.title):

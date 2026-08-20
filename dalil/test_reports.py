@@ -166,6 +166,52 @@ def test_the_verified_fraction_is_recorded_the_way_the_report_shows_it():
     s.rollback()
 
 
+@test
+def test_a_module_that_comes_back_the_wrong_shape_scores_zero_rather_than_raising():
+    """A tool schema is guidance, not a guarantee. This happened on the first
+    live run: one module arrived as something `dict()` could not build, and the
+    exception took the whole batch of four with it."""
+    s = Scoped_()
+    row = a_source(s)
+    reply = answer()
+    reply["out"]["measurement"] = "12 — both sides are loggable"     # a string
+    reply["out"]["effect"] = ["something", "else"]                   # a list
+    reply["out"]["daily"] = None
+
+    report, made, _ = reports.appraise_source(s, row, VOCAB, call=caller(reply))
+    assert made is True
+    by_key = {m["key"]: m for m in report.modules}
+    for key in ("measurement", "effect", "daily"):
+        assert by_key[key]["score"] == 0, key
+        assert "not an object" in by_key[key]["note"], by_key[key]["note"]
+    assert by_key["confounding"]["score"] == 8, "a well-formed module was punished too"
+    s.rollback()
+
+
+@test
+def test_a_reply_with_nothing_usable_in_it_still_makes_a_report():
+    s = Scoped_()
+    row = a_source(s)
+    report, made, stats = reports.appraise_source(
+        s, row, VOCAB, call=caller({"out": "the whole thing is a string", "model": "m",
+                                    "tokensIn": 1, "tokensOut": 1}))
+    assert made is True
+    assert stats["kept"] == 0
+    assert report.score > 0, "the deterministic half is unaffected by a bad reply"
+    assert "quote_unverified" in report.flags
+    s.rollback()
+
+
+@test
+def test_a_claim_that_is_not_an_object_is_dropped_not_stored():
+    s = Scoped_()
+    row = a_source(s)
+    reply = answer(claims=["a bare string", None, one_claim()])
+    _, _, stats = reports.appraise_source(s, row, VOCAB, call=caller(reply))
+    assert stats["kept"] == 1 and stats["dropped"] == 2
+    s.rollback()
+
+
 # ---- bindings ----------------------------------------------------------------
 @test
 def test_a_field_the_app_does_not_record_becomes_a_proposal():

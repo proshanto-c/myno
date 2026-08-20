@@ -104,7 +104,12 @@ def whoami(request: Request):
     """Deliberately on the public router: the portal asks this on load to decide
     whether to show the login form, so it must answer without a session."""
     if not auth.auth_required():
-        return {"signedIn": True, "authRequired": False, **auth.OPEN_REVIEWER}
+        s = Session()
+        try:
+            return {"signedIn": True, "authRequired": False,
+                    **auth.as_dict(auth.default_reviewer(s), default=True)}
+        finally:
+            s.close()
     s = Session()
     try:
         reviewer = auth.resolve(s, request.cookies.get(auth.COOKIE, ""))
@@ -308,7 +313,17 @@ def job_enrich(limit: int = 50):
             tally: dict = {}
             with ncbi.Client() as client:
                 for row in rows:
-                    outcome = harvest.enrich(s, client, row)
+                    # One awkward record must not cost the other fifty-nine: the
+                    # cheapest thing a batch can do is keep going and say what
+                    # went wrong at the end.
+                    try:
+                        outcome = harvest.enrich(s, client, row)
+                    except ncbi.NcbiUnavailable:
+                        tally["stopped"] = tally.get("stopped", 0) + 1
+                        break
+                    except Exception as e:
+                        s.rollback()
+                        outcome = f"error: {type(e).__name__}"
                     tally[outcome] = tally.get(outcome, 0) + 1
                 return {"checked": len(rows), "outcomes": tally, "requests": client.requests}
         finally:
@@ -474,14 +489,14 @@ def _queue_row(s, claim: Claim, report: Report, source: Source) -> dict:
 
 
 @research.get("/queue")
-def review_queue(limit: int = 50, state: str = ""):
+def review_queue(limit: int = 50, state: str = "", reviewer=Depends(auth.require_reviewer)):
     s = Session()
     try:
         rows = review.queue(s, limit=limit, state=state)
         return {"claims": [_queue_row(s, c, r, src) for c, r, src in rows],
                 "open": s.query(Claim).filter(Claim.state.in_(review.OPEN_STATES)).count(),
                 "published": s.query(Published).filter(Published.revoked_at.is_(None)).count(),
-                "signedIn": auth.auth_required()}
+                "signedIn": auth.auth_required(), "reviewer": reviewer.get("email")}
     finally:
         s.close()
 

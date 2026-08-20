@@ -144,21 +144,60 @@ def clear_cookie(response: Response) -> None:
 def auth_required() -> bool:
     """Off while the portal is being built, on with one environment variable.
 
-    Turned off, the portal is open to anyone who reaches /research/ — which is
-    only the corpus metadata, all of it already public on PubMed. It has to go
-    back on before anything is *published*, because an unsigned review is not a
-    review: "a named person checked this" is the whole claim the module makes.
+    Turned off, the portal is open to anyone who reaches it — which is only the
+    corpus metadata, all of it already public on PubMed — and every review is
+    signed by `default_reviewer`. Turn it on and people sign as themselves,
+    which is what a corpus with more than one reviewer needs.
     """
     return os.environ.get("DALIL_REQUIRE_AUTH", "0").lower() in ("1", "true", "yes")
 
 
-OPEN_REVIEWER = {"id": None, "email": "", "name": "Signed out", "role": "open"}
+# A stand-in address on the product's own domain, not anybody's real one.
+LOCAL_EMAIL = "admin@tawaazun.io"
+
+
+def default_reviewer(s):
+    """Who a review belongs to while sign-in is off.
+
+    A published row with no author was the alternative, and it makes the
+    module's one claim — that a named person checked this — false for exactly
+    the rows a reader would care about. So work is attributed to the standing
+    admin instead, which is both true and useful: turning sign-in on later
+    changes who signs new reviews, not whether old ones were signed.
+
+    The fallback account it creates on an empty table has a random password
+    nobody holds. It exists to own local reviews, not to be a way in.
+    """
+    row = (s.query(Reviewer)
+           .filter(Reviewer.disabled_at.is_(None))
+           .order_by((Reviewer.role != "admin"), Reviewer.id)
+           .first())
+    if row is None:
+        # The local account is a singleton, so a disabled one is revived rather
+        # than duplicated — the email is unique, and a second insert would fail.
+        row = s.query(Reviewer).filter(Reviewer.email == LOCAL_EMAIL).first()
+        if row is not None:
+            row.disabled_at = None
+        else:
+            row = Reviewer(email=LOCAL_EMAIL, name="Local reviewer", role="admin",
+                           password_hash=hash_password(secrets.token_urlsafe(32)))
+            s.add(row)
+        s.commit()
+    return row
+
+
+def as_dict(row, **extra) -> dict:
+    return {"id": row.id, "email": row.email, "name": row.name, "role": row.role, **extra}
 
 
 def require_reviewer(request: Request):
     """Applied once, on the router. Every research route is behind this."""
     if not auth_required():
-        return dict(OPEN_REVIEWER)
+        s = Session()
+        try:
+            return as_dict(default_reviewer(s), default=True)
+        finally:
+            s.close()
     s = Session()
     try:
         reviewer = resolve(s, request.cookies.get(COOKIE, ""))

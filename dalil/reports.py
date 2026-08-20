@@ -69,12 +69,28 @@ def contradictions(s) -> dict:
     return out
 
 
+def _module_from(value):
+    """A tool schema is guidance, not a guarantee.
+
+    Everything that comes back from the model is untrusted input, and a module
+    that arrives as a string or a list used to raise on `dict(value)` and take
+    the whole batch with it. It scores zero and says what it was instead — which
+    is the same treatment an unverifiable quote gets, for the same reason.
+    """
+    if isinstance(value, dict):
+        return dict(value)
+    return {"score": 0, "quote": "",
+            "note": f"the model returned {type(value).__name__}, not an object"}
+
+
 def _verify_modules(out: dict, text: str, passages) -> dict:
     """Attach a verdict to each module the model scored."""
     verified = {}
+    out = out if isinstance(out, dict) else {}
     for key in appraise.MODEL_MODULES:
-        got = dict(out.get(key) or {})
-        check = claims_mod.verify(text, got.get("quote", ""), passages)
+        got = _module_from(out.get(key))
+        quote = got.get("quote")
+        check = claims_mod.verify(text, quote if isinstance(quote, str) else "", passages)
         got.update(check)
         verified[key] = got
     return verified
@@ -118,8 +134,9 @@ def appraise_source(s, source: Source, vocabulary: dict, *, use_model: bool = Tr
     if use_model and text.strip():
         answer = (call or model_mod.appraise)(as_dict(source), known, labels, http=http)
         meta = {k: v for k, v in answer.items() if k != "out"}
-        verified = _verify_modules(answer["out"], text, passages)
-        narrative = answer["out"].get("narrative") or ""
+        verified = _verify_modules(answer.get("out"), text, passages)
+        said = answer.get("out") if isinstance(answer.get("out"), dict) else {}
+        narrative = said.get("narrative") if isinstance(said.get("narrative"), str) else ""
 
     scored = appraise.appraise(as_dict(source), model=verified,
                                cited_by=cited_by(s, source),
@@ -139,7 +156,7 @@ def appraise_source(s, source: Source, vocabulary: dict, *, use_model: bool = Tr
              "verdict": scored["verdict"]}
     if answer is not None:
         kept, dropped, contradicting = store_claims(
-            s, source, row, answer["out"].get("claims") or [], text, passages,
+            s, source, row, said.get("claims") or [], text, passages,
             known, contradictions(s))
         stats.update(kept=kept, dropped=dropped)
         if contradicting:
@@ -162,8 +179,12 @@ def store_claims(s, source: Source, report: Report, proposed_claims, text: str,
     kept = dropped = 0
     contradicting = set()
 
-    for item in proposed_claims:
-        check = claims_mod.verify(text, item.get("quote", ""), passages)
+    for item in (proposed_claims if isinstance(proposed_claims, list) else []):
+        if not isinstance(item, dict):
+            dropped += 1
+            continue
+        quote = item.get("quote")
+        check = claims_mod.verify(text, quote if isinstance(quote, str) else "", passages)
         if not check["verified"]:
             dropped += 1
             continue
