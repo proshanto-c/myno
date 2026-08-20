@@ -21,10 +21,18 @@ const bundle = process.argv[2];
 const SOURCES = [
   { id: 1, pmid: "29083730", nbk: "NBK459251", kind: "chapter",
     title: "Polyendocrine Metabolic Ovarian Syndrome", journal: "StatPearls",
-    year: 2025, isOa: false, licence: "CC BY-NC-ND", retracted: false, screenState: "included" },
+    year: 2025, isOa: false, licence: "CC BY-NC-ND", retracted: false, screenState: "included",
+    hasFulltext: false, flags: [], pubTypes: ["Study Guide"], authors: ["Shukla A"] },
   { id: 2, pmid: "27664216", kind: "article", title: "The prevalence and phenotypic features of PCOS",
-    journal: "Hum Reprod", year: 2016, isOa: true, licence: "CC BY", retracted: false, screenState: "new" },
+    journal: "Hum Reprod", year: 2016, isOa: true, licence: "CC BY", retracted: false,
+    screenState: "new", hasFulltext: true, flags: ["id_mismatch"], pubTypes: [], authors: [] },
 ];
+const SUMMARY = { total: 56, byState: { new: 53, excluded: 2, needs_text: 1 }, openAccess: 20,
+  fulltext: 20, retracted: 0, unchecked: 0, citations: 2299, unpromoted: 2135 };
+const QUERIES = [{ id: 3, name: "sleep", term: "…", informs: ["sleep", "brainFog"], enabled: true,
+  highWater: "2026/08/20", lastRun: { added: 12, fetched: 40 } }];
+const RUNS = [{ id: 7, queryId: 3, state: "done", total: 271, cap: 200, cursor: 200, fetched: 198,
+  added: 12, edatFrom: "", edatTo: "2026/08/20", startedAt: "2026-08-20T21:00:00" }];
 
 async function pass(name, { authRequired, signedIn }) {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',
@@ -41,7 +49,10 @@ async function pass(name, { authRequired, signedIn }) {
       u.includes("/auth/whoami") ? (signedIn
         ? { signedIn: true, authRequired, email: "ada@example.ac.uk", name: "Ada", role: "admin" }
         : { signedIn: false, authRequired })
-      : u.includes("/corpus") ? { sources: SOURCES }
+      : u.includes("/corpus") ? { sources: SOURCES, summary: SUMMARY }
+      : u.includes("/queries") ? { queries: QUERIES, seeded: 12 }
+      : u.includes("/runs") ? { runs: RUNS }
+      : u.includes("/jobs") ? { current: null, past: [] }
       : {};
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
   };
@@ -78,6 +89,12 @@ async function pass(name, { authRequired, signedIn }) {
     if (!html.includes("Corpus")) { console.log(`[${name}] the corpus never rendered`); return 3; }
     if (!html.includes("Polyendocrine")) { console.log(`[${name}] the rows never rendered`); return 3; }
     if (!loaded) { console.log(`[${name}] never asked for the corpus`); return 3; }
+    // the summary is the shape of the library, and the first thing read
+    if (!html.includes("2,299") && !html.includes("2299")) {
+      console.log(`[${name}] the summary never rendered`); return 3;
+    }
+    // a source carrying a flag has to say so in the row, not only in the panel
+    if (!html.includes("id mismatch")) { console.log(`[${name}] flags are not shown`); return 3; }
   }
   // the lockup has to name both products, in Arabic, with the mark between them
   if (!html.includes("دليل")) { console.log(`[${name}] no دليل wordmark`); return 3; }

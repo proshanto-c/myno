@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { LogOut, RefreshCw, AlertTriangle, Library, ListChecks, FlaskConical } from "lucide-react";
+import { LogOut, RefreshCw, AlertTriangle, Library, ListChecks, FlaskConical, Download } from "lucide-react";
 import { BrandMark, Brand } from "../brand.jsx";
 import { T, serif, sans, head, mono, figures } from "./theme";
 import { api, SignedOut } from "./api";
@@ -117,45 +117,100 @@ const th = { fontFamily: sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.
   textTransform: "uppercase", color: T.inkSoft, textAlign: "left", padding: "0 14px 8px", whiteSpace: "nowrap" };
 const td = { fontFamily: sans, fontSize: 13.5, color: T.ink, padding: "11px 14px",
   borderTop: `1px solid ${T.line}`, verticalAlign: "top" };
+const card = { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8 };
 
-function Corpus({ sources, loading, onRefresh }) {
+const H2 = ({ children, count }) => (
+  <header style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14 }}>
+    <h2 style={{ fontFamily: serif, fontSize: 24, fontWeight: 400, color: T.ink, margin: 0 }}>{children}</h2>
+    {count !== undefined && (
+      <span style={{ fontFamily: sans, fontSize: 13, color: T.inkSoft, ...figures }}>{count}</span>
+    )}
+  </header>
+);
+
+/** The corpus in six numbers. Density is the point: a researcher wants the
+    shape of the library before any one row of it. */
+function Summary({ s }) {
+  if (!s) return null;
+  const states = s.byState || {};
+  const cells = [
+    ["Sources", s.total, ""],
+    ["Open access", s.openAccess, `${s.fulltext || 0} with full text`],
+    ["Not yet checked", s.unchecked, s.unchecked ? "run Enrich" : "all checked"],
+    ["Needs text", states.needs_text || 0, "no abstract, no open text"],
+    ["Excluded", states.excluded || 0, `${s.retracted || 0} retracted`],
+    ["References held", s.citations, `${s.unpromoted || 0} not yet followed`],
+  ];
+  return (
+    <div style={{ display: "grid", gap: 10, marginBottom: 18,
+      gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+      {cells.map(([label, value, note]) => (
+        <div key={label} style={{ ...card, padding: "12px 14px" }}>
+          <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
+            textTransform: "uppercase", color: T.inkSoft }}>{label}</div>
+          <div style={{ fontFamily: sans, fontSize: 26, fontWeight: 700, color: T.ink,
+            lineHeight: 1.2, ...figures }}>{value ?? 0}</div>
+          {note && <div style={{ fontFamily: sans, fontSize: 11.5, color: T.inkSoft }}>{note}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const STATES = ["", "new", "needs_text", "included", "excluded", "appraised"];
+const stateLabel = (s) => (s === "" ? "All" : s.replace("_", " "));
+
+function Corpus({ data, loading, onRefresh, filter, setFilter, onOpen }) {
+  const sources = data.sources || [];
   return (
     <section>
-      <header style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 16 }}>
-        <h2 style={{ fontFamily: serif, fontSize: 24, fontWeight: 400, color: T.ink, margin: 0 }}>Corpus</h2>
-        <span style={{ fontFamily: sans, fontSize: 13, color: T.inkSoft, ...figures }}>
-          {sources.length} {sources.length === 1 ? "source" : "sources"}
-        </span>
+      <H2 count={`${sources.length} shown`}>Corpus</H2>
+      <Summary s={data.summary} />
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}>
+        {STATES.map((st) => {
+          const on = filter.state === st;
+          return (
+            <button key={st || "all"} onClick={() => setFilter({ ...filter, state: st })}
+              style={{ fontFamily: sans, fontSize: 12.5, fontWeight: on ? 700 : 500, cursor: "pointer",
+                padding: "6px 11px", borderRadius: 6, background: on ? T.accentSoft : T.surface,
+                color: on ? T.accent : T.inkMid, border: `1px solid ${on ? T.accent : T.line}` }}>
+              {stateLabel(st)}
+            </button>
+          );
+        })}
+        <input value={filter.q} placeholder="Search titles"
+          onChange={(e) => setFilter({ ...filter, q: e.target.value })}
+          style={{ ...input, width: 220, padding: "7px 11px", fontSize: 13 }} />
         <span style={{ marginLeft: "auto" }}>
           <Button kind="ghost" onClick={onRefresh} busy={loading}>
             <RefreshCw size={13} style={{ verticalAlign: "-2px", marginRight: 6 }} />Refresh
           </Button>
         </span>
-      </header>
+      </div>
 
       {sources.length === 0 ? (
-        <div style={{ background: T.surface, border: `1px dashed ${T.lineStrong}`, borderRadius: 8,
-          padding: 28, textAlign: "center" }}>
+        <div style={{ ...card, border: `1px dashed ${T.lineStrong}`, padding: 28, textAlign: "center" }}>
           <Library size={20} color={T.inkSoft} />
           <p style={{ fontFamily: sans, fontSize: 14, color: T.inkMid, lineHeight: 1.55, margin: "10px auto 0", maxWidth: 460 }}>
-            Nothing harvested yet. The first seed is the StatPearls chapter this condition is named
+            Nothing here yet. The first seed is the StatPearls chapter this condition is named
             after — <span style={{ fontFamily: mono, fontSize: 12.5 }}>NBK459251</span> — and the 55
-            papers it cites.
+            papers it cites. Run it from Harvest.
           </p>
         </div>
       ) : (
-        <div style={{ background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, overflow: "hidden" }}>
+        <div style={{ ...card, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr style={{ background: T.raised }}>
               <th style={{ ...th, paddingTop: 10 }}>Title</th>
               <th style={{ ...th, paddingTop: 10 }}>Source</th>
               <th style={{ ...th, paddingTop: 10 }}>Year</th>
-              <th style={{ ...th, paddingTop: 10 }}>Licence</th>
+              <th style={{ ...th, paddingTop: 10 }}>Text</th>
               <th style={{ ...th, paddingTop: 10 }}>State</th>
             </tr></thead>
             <tbody>
               {sources.map((s) => (
-                <tr key={s.id}>
+                <tr key={s.id} onClick={() => onOpen(s.id)} style={{ cursor: "pointer" }}>
                   <td style={{ ...td, maxWidth: 460 }}>
                     <div style={{ lineHeight: 1.45 }}>{s.title || "—"}</div>
                     <div style={{ fontFamily: mono, fontSize: 11.5, color: T.inkSoft, marginTop: 3 }}>
@@ -164,11 +219,16 @@ function Corpus({ sources, loading, onRefresh }) {
                   </td>
                   <td style={{ ...td, color: T.inkMid }}>{s.journal || "—"}</td>
                   <td style={{ ...td, ...figures }}>{s.year || "—"}</td>
-                  <td style={td}>{s.licence ? <Tag>{s.licence}</Tag> : <Tag>not open access</Tag>}</td>
                   <td style={td}>
-                    {s.retracted
-                      ? <Tag fg={T.bad} bg={T.badSoft}>retracted</Tag>
-                      : <Tag>{s.screenState}</Tag>}
+                    {s.hasFulltext ? <Tag fg={T.good} bg={T.goodSoft}>{s.licence || "full text"}</Tag>
+                      : s.licence ? <Tag>{s.licence}</Tag> : <Tag>abstract only</Tag>}
+                  </td>
+                  <td style={td}>
+                    {s.retracted ? <Tag fg={T.bad} bg={T.badSoft}>retracted</Tag>
+                      : <Tag>{stateLabel(s.screenState)}</Tag>}
+                    {(s.flags || []).map((f) => (
+                      <Tag key={f} fg={T.bad} bg={T.badSoft}>{f.replace("_", " ")}</Tag>
+                    ))}
                   </td>
                 </tr>
               ))}
@@ -176,6 +236,211 @@ function Corpus({ sources, loading, onRefresh }) {
           </table>
         </div>
       )}
+    </section>
+  );
+}
+
+/** One source, opened from the table. Everything held about it, including what
+    it cites — which is where the next round of harvesting comes from. */
+function SourcePanel({ source, onClose }) {
+  if (!source) return null;
+  const link = source.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${source.pmid}/`
+    : source.nbk ? `https://www.ncbi.nlm.nih.gov/books/${source.nbk}/` : null;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "#1e183055",
+      display: "flex", justifyContent: "flex-end", zIndex: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(620px, 100%)", background: T.bg,
+        height: "100%", overflowY: "auto", borderLeft: `1px solid ${T.lineStrong}`, padding: "22px 24px 60px" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+          <h3 style={{ fontFamily: serif, fontSize: 20, fontWeight: 400, color: T.ink,
+            margin: 0, lineHeight: 1.35, flex: 1 }}>{source.title}</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer",
+            color: T.inkSoft, fontFamily: sans, fontSize: 13 }}>Close</button>
+        </div>
+        <div style={{ fontFamily: sans, fontSize: 13, color: T.inkMid, margin: "8px 0 14px" }}>
+          {(source.authors || []).join(", ")}{source.authors?.length ? " · " : ""}
+          {source.journal || "—"} {source.year || ""}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+          {source.pmid && <Tag>PMID {source.pmid}</Tag>}
+          {source.pmcid && <Tag>{source.pmcid}</Tag>}
+          {source.nbk && <Tag>{source.nbk}</Tag>}
+          {source.licence && <Tag>{source.licence}</Tag>}
+          <Tag>{stateLabel(source.screenState)}</Tag>
+          {(source.pubTypes || []).map((p) => <Tag key={p}>{p}</Tag>)}
+          {source.retracted && <Tag fg={T.bad} bg={T.badSoft}>retracted</Tag>}
+        </div>
+        {source.screenReason && (
+          <p style={{ fontFamily: sans, fontSize: 13, color: T.inkMid, margin: "0 0 14px" }}>
+            {source.screenReason}
+          </p>
+        )}
+        {link && (
+          <p style={{ margin: "0 0 18px" }}>
+            <a href={link} target="_blank" rel="noreferrer"
+              style={{ fontFamily: sans, fontSize: 13.5, color: T.accent }}>Open at NCBI →</a>
+          </p>
+        )}
+
+        <Section title="Abstract">
+          <p style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.6, color: T.ink, margin: 0,
+            whiteSpace: "pre-wrap" }}>{source.abstract || "PubMed holds no abstract for this record."}</p>
+        </Section>
+
+        {source.fulltextChars > 0 && (
+          <Section title="Full text">
+            <p style={{ fontFamily: sans, fontSize: 13, color: T.inkMid, margin: 0, ...figures }}>
+              {source.fulltextChars.toLocaleString()} characters across {source.passages?.length || 0} passages
+              {" — "}{[...new Set((source.passages || []).map((p) => p.section))].join(", ").toLowerCase()}.
+            </p>
+          </Section>
+        )}
+
+        {(source.mesh || []).length > 0 && (
+          <Section title="MeSH">
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {source.mesh.map((m) => <Tag key={m}>{m}</Tag>)}
+            </div>
+          </Section>
+        )}
+
+        {(source.citations || []).length > 0 && (
+          <Section title={`References (${source.citations.length})`}>
+            <ol style={{ margin: 0, paddingLeft: 20 }}>
+              {source.citations.map((c, i) => (
+                <li key={i} style={{ fontFamily: sans, fontSize: 12.5, lineHeight: 1.5,
+                  color: c.promoted ? T.inkSoft : T.ink, marginBottom: 5 }}>
+                  {c.raw || c.pmid}
+                  {c.promoted && <span style={{ color: T.good }}> · in corpus</span>}
+                </li>
+              ))}
+            </ol>
+          </Section>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const Section = ({ title, children }) => (
+  <div style={{ ...card, padding: "14px 16px", marginBottom: 12 }}>
+    <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
+      textTransform: "uppercase", color: T.inkSoft, marginBottom: 8 }}>{title}</div>
+    {children}
+  </div>
+);
+
+/* ---- harvesting ----------------------------------------------------------- */
+function Harvest({ queries, runs, job, onRun, busy, onRefresh }) {
+  const actions = [
+    ["anchor", "Anchor + references", "NBK459251 and the 55 papers it cites — the highest-yield seed there is."],
+    ["seed", "Run a seed", "The next seed due, capped at 200 so a first look is never a bulk job."],
+    ["enrich", "Check licences", "Licence and retraction for each source; full text for the open-access subset only."],
+    ["sweep", "Retraction sweep", "Re-read retraction status, and un-publish anything a withdrawal costs."],
+  ];
+  return (
+    <section>
+      <H2>Harvest</H2>
+
+      <div style={{ display: "grid", gap: 10, marginBottom: 18,
+        gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))" }}>
+        {actions.map(([id, label, note]) => (
+          <div key={id} style={{ ...card, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontFamily: sans, fontSize: 14, fontWeight: 700, color: T.ink }}>{label}</div>
+            <p style={{ fontFamily: sans, fontSize: 12.5, lineHeight: 1.5, color: T.inkMid,
+              margin: 0, flex: 1 }}>{note}</p>
+            <Button onClick={() => onRun(id)} busy={busy}>Run</Button>
+          </div>
+        ))}
+      </div>
+
+      {job && (
+        <div style={{ ...card, padding: "12px 16px", marginBottom: 18,
+          borderLeft: `3px solid ${job.state === "failed" ? T.bad : job.state === "running" ? T.warn : T.good}` }}>
+          <div style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 700, color: T.ink }}>
+            {job.name}{job.detail ? ` · ${job.detail}` : ""} — {job.state}
+          </div>
+          {job.error && <div style={{ fontFamily: mono, fontSize: 12, color: T.bad, marginTop: 6 }}>{job.error}</div>}
+          {job.result && (
+            <pre style={{ fontFamily: mono, fontSize: 12, color: T.inkMid, margin: "6px 0 0",
+              whiteSpace: "pre-wrap" }}>{JSON.stringify(job.result)}</pre>
+          )}
+        </div>
+      )}
+
+      <H2 count={`${queries.length} seeds`}>Seeds</H2>
+      <div style={{ ...card, overflow: "hidden", marginBottom: 24 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: T.raised }}>
+            <th style={{ ...th, paddingTop: 10 }}>Seed</th>
+            <th style={{ ...th, paddingTop: 10 }}>Informs</th>
+            <th style={{ ...th, paddingTop: 10 }}>Covered to</th>
+            <th style={{ ...th, paddingTop: 10 }}>Last run</th>
+            <th style={{ ...th, paddingTop: 10 }} />
+          </tr></thead>
+          <tbody>
+            {queries.map((q) => (
+              <tr key={q.id}>
+                <td style={{ ...td, fontWeight: 600 }}>{q.name}</td>
+                <td style={td}>
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    {(q.informs || []).map((f) => <Tag key={f}>{f}</Tag>)}
+                  </div>
+                </td>
+                <td style={{ ...td, ...figures, color: q.highWater ? T.ink : T.inkSoft }}>
+                  {q.highWater || "never run"}
+                </td>
+                <td style={{ ...td, ...figures, color: T.inkMid }}>
+                  {q.lastRun ? `${q.lastRun.added} new of ${q.lastRun.fetched}` : "—"}
+                </td>
+                <td style={{ ...td, textAlign: "right" }}>
+                  <Button kind="ghost" busy={busy} onClick={() => onRun("seed", q.id)}>Run</Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <H2 count={`${runs.length}`}>Runs</H2>
+      <div style={{ ...card, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: T.raised }}>
+            <th style={{ ...th, paddingTop: 10 }}>Started</th>
+            <th style={{ ...th, paddingTop: 10 }}>State</th>
+            <th style={{ ...th, paddingTop: 10 }}>Progress</th>
+            <th style={{ ...th, paddingTop: 10 }}>Fetched</th>
+            <th style={{ ...th, paddingTop: 10 }}>New</th>
+            <th style={{ ...th, paddingTop: 10 }}>Window</th>
+          </tr></thead>
+          <tbody>
+            {runs.map((r) => (
+              <tr key={r.id}>
+                <td style={{ ...td, ...figures, color: T.inkMid }}>
+                  {(r.startedAt || "").replace("T", " ").slice(0, 16)}
+                </td>
+                <td style={td}>
+                  <Tag fg={r.state === "failed" ? T.bad : r.state === "done" ? T.good : T.warn}
+                    bg={r.state === "failed" ? T.badSoft : r.state === "done" ? T.goodSoft : T.warnSoft}>
+                    {r.state}
+                  </Tag>
+                </td>
+                <td style={{ ...td, ...figures }}>
+                  {r.cursor} / {r.cap && r.cap < r.total ? `${r.cap} of ${r.total}` : r.total}
+                </td>
+                <td style={{ ...td, ...figures }}>{r.fetched}</td>
+                <td style={{ ...td, ...figures }}>{r.added}</td>
+                <td style={{ ...td, ...figures, color: T.inkSoft, fontSize: 12 }}>
+                  {r.edatFrom ? `${r.edatFrom} → ${r.edatTo}` : "everything"}
+                </td>
+              </tr>
+            ))}
+            {runs.length === 0 && (
+              <tr><td style={{ ...td, color: T.inkSoft }} colSpan={6}>No runs yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -195,6 +460,7 @@ const Placeholder = ({ icon: Icon, title, children }) => (
 /* ---- the shell ------------------------------------------------------------ */
 const VIEWS = [
   ["corpus", "Corpus", Library],
+  ["harvest", "Harvest", Download],
   ["queue", "Queue", ListChecks],
   ["reports", "Reports", FlaskConical],
 ];
@@ -202,7 +468,12 @@ const VIEWS = [
 export default function Portal() {
   const [me, setMe] = useState(undefined);          // undefined = still asking
   const [view, setView] = useState(() => (window.location.hash || "#corpus").slice(1));
-  const [sources, setSources] = useState([]);
+  const [data, setData] = useState({ sources: [], summary: null });
+  const [queries, setQueries] = useState([]);
+  const [runs, setRuns] = useState([]);
+  const [job, setJob] = useState(null);
+  const [open, setOpen] = useState(null);           // the source in the panel
+  const [filter, setFilter] = useState({ state: "", q: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -215,18 +486,58 @@ export default function Portal() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  const mishap = useCallback((err) => {
+    if (err instanceof SignedOut) setMe(null); else setError(err.message);
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      setSources((await api.corpus()).sources || []);
+      const [corpus, seeds, ran] = await Promise.all([
+        api.corpus(filter), api.queries(), api.runs(),
+      ]);
+      setData({ sources: corpus.sources || [], summary: corpus.summary || null });
+      setQueries(seeds.queries || []);
+      setRuns(ran.runs || []);
     } catch (err) {
-      if (err instanceof SignedOut) setMe(null);
-      else setError(err.message);
+      mishap(err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filter, mishap]);
   useEffect(() => { if (me) load(); }, [me, load]);
+
+  // While a job runs, poll it — and reload once it stops, because what it did
+  // is visible in the corpus rather than in the job.
+  useEffect(() => {
+    if (!me || job?.state !== "running") return undefined;
+    const timer = setInterval(async () => {
+      try {
+        const status = await api.jobs();
+        const latest = status.current || status.past?.[0] || null;
+        setJob(latest);
+        if (latest && latest.state !== "running") load();
+      } catch (err) { mishap(err); }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [me, job?.state, load, mishap]);
+
+  const run = useCallback(async (which, queryId) => {
+    setError("");
+    try {
+      const call = { anchor: () => api.anchor(),
+                     seed: () => api.seed({ queryId: queryId ?? null, max: 200 }),
+                     enrich: () => api.enrich(60),
+                     sweep: () => api.sweep(200) }[which];
+      const out = await call();
+      if (out.started === false) setError(`Already running: ${out.busy?.name}. One job at a time.`);
+      setJob(out.job || out.busy || null);
+    } catch (err) { mishap(err); }
+  }, [mishap]);
+
+  const openSource = useCallback(async (id) => {
+    try { setOpen(await api.source(id)); } catch (err) { mishap(err); }
+  }, [mishap]);
 
   if (me === undefined) return <div style={{ minHeight: "100vh", background: T.bg }} />;
   if (me === null) return <SignIn onSignedIn={setMe} />;
@@ -274,7 +585,14 @@ export default function Portal() {
             <span style={{ fontFamily: sans, fontSize: 13, color: T.bad }}>{error}</span>
           </div>
         )}
-        {view === "corpus" && <Corpus sources={sources} loading={loading} onRefresh={load} />}
+        {view === "corpus" && (
+          <Corpus data={data} loading={loading} onRefresh={load} filter={filter}
+            setFilter={setFilter} onOpen={openSource} />
+        )}
+        {view === "harvest" && (
+          <Harvest queries={queries} runs={runs} job={job} onRun={run}
+            busy={job?.state === "running"} onRefresh={load} />
+        )}
         {view === "queue" && (
           <Placeholder icon={ListChecks} title="Queue">
             Claims waiting to be reviewed will appear here. Nothing reaches a patient until someone
@@ -288,6 +606,7 @@ export default function Portal() {
           </Placeholder>
         )}
       </main>
+      <SourcePanel source={open} onClose={() => setOpen(null)} />
     </div>
   );
 }

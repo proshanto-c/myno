@@ -27,10 +27,29 @@ async function request(path, { method = "GET", body } = {}) {
   return data;
 }
 
+const query = (params) => {
+  const q = Object.entries(params || {})
+    .filter(([, v]) => v !== "" && v !== undefined && v !== null)
+    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  return q ? `?${q}` : "";
+};
+
 export const api = {
   whoami: () => request("/auth/whoami"),
   login: (email, password) => request("/auth/login", { method: "POST", body: { email, password } }),
   logout: () => request("/auth/logout", { method: "POST" }),
-  corpus: () => request("/corpus"),
   health: () => request("/healthz"),
+
+  corpus: (params) => request(`/corpus${query(params)}`),
+  source: (id) => request(`/source/${id}`),
+  queries: () => request("/queries"),
+  runs: () => request("/runs"),
+  vocabulary: () => request("/vocabulary"),
+
+  // Long jobs answer immediately with a handle; the portal polls /jobs.
+  jobs: () => request("/jobs"),
+  anchor: () => request("/jobs/anchor", { method: "POST" }),
+  seed: (body) => request("/jobs/seed", { method: "POST", body }),
+  enrich: (limit) => request(`/jobs/enrich${query({ limit })}`, { method: "POST" }),
+  sweep: (limit) => request(`/jobs/sweep${query({ limit })}`, { method: "POST" }),
 };

@@ -9,6 +9,14 @@
  *   2. populated — an onboarded profile and a stubbed backend serving logs, a
  *                  summary and an assessment. Home, the cycle ring, the bar and
  *                  the calendar all have to render without a console error.
+ *   3. reel      — nobody at the keyboard. The sign-up drives itself with its
+ *                  own pointer, and half a minute later Sara has to be through
+ *                  it and into the app, with the simulation already talking:
+ *                  the real clicks and the real input events, on the real
+ *                  controls, in a real DOM. Slow on purpose — it runs at the
+ *                  speed the recording does.
+ *   4. tutorial  — the tour, on its own switch: it has to light parts of the
+ *                  interface up and say what they are, without touching them.
  *
  *   docker compose build frontend && docker compose up -d frontend
  *   rm -rf /tmp/dist && mkdir -p /tmp/dist
@@ -22,8 +30,9 @@
  * Run it from the directory holding node_modules — node resolves imports from
  * the script's own location, not the working directory.
  *
- * Exit 0 = both passes rendered, 2 = threw on import, 3 = rendered nothing,
- * 4 = rendered but logged a runtime error.
+ * Exit 0 = every pass rendered, 2 = threw on import, 3 = rendered nothing,
+ * 4 = rendered but logged a runtime error, 5 = rendered but a pass's own check
+ * failed (the sign-up never signed itself up).
  */
 import { JSDOM } from "jsdom";
 
@@ -61,7 +70,7 @@ function backend(url) {
   return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
 }
 
-async function pass(name, { stored, fetch: fetchImpl }) {
+async function pass(name, { stored, fetch: fetchImpl, waitMs = 1500, after }) {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',
     { url: "https://localhost/", pretendToBeVisual: true });
   for (const k of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "SVGElement",
@@ -87,17 +96,26 @@ async function pass(name, { stored, fetch: fetchImpl }) {
     realError(`[${name}] IMPORT THREW: ${e.message}`);
     return 2;
   }
-  await new Promise((r) => setTimeout(r, 1500));
+  await new Promise((r) => setTimeout(r, waitMs));
   console.error = realError;
 
   const html = dom.window.document.getElementById("root").innerHTML;
   console.log(`[${name}] DOM ${html.length} chars`);
-  if (errs.length) {
-    console.log(`[${name}] RUNTIME ERROR:\n${errs.slice(0, 2).join("\n---\n")}`);
-    return 4;
-  }
-  if (html.length < 500) return 3;
-  return 0;
+  const verdict = () => {
+    if (errs.length) {
+      console.log(`[${name}] RUNTIME ERROR:\n${errs.slice(0, 2).join("\n---\n")}`);
+      return 4;
+    }
+    if (html.length < 500) return 3;
+    const bad = after?.(dom, html);
+    if (bad) { console.log(`[${name}] ${bad}`); return 5; }
+    return 0;
+  };
+  const code = verdict();
+  // A pass owns its window. Closing it ends the sign-up reel this pass started,
+  // which would otherwise still be clicking — into the next pass's document.
+  dom.window.close();
+  return code;
 }
 
 let code = await pass("cold", { fetch: () => Promise.reject(new Error("offline")) });
@@ -105,10 +123,62 @@ if (code === 0) {
   code = await pass("populated", {
     stored: {
       profile: { onboarded: true, name: "Test", goals: ["manage"], conditions: [], mfg: {}, drugs: [] },
-      settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct" },
+      // the guided demo has its own pass; this one is about rendering
+      settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct",
+                  simulation: false, tutorial: false },
       logs: [],
     },
     fetch: backend,
+  });
+}
+if (code === 0) {
+  // The sign-up filling itself in: no stored profile, no backend, no hands. It
+  // is checked through what it left behind rather than what it looked like —
+  // the saved profile is the thing the rest of the app runs on.
+  code = await pass("reel", {
+    fetch: () => Promise.reject(new Error("offline")),
+    waitMs: 40000,
+    after: (dom, html) => {
+      const raw = dom.window.localStorage.getItem("myno:serene:v1");
+      if (!raw) return "nothing was saved: the reel never typed a thing";
+      const p = JSON.parse(raw).profile || {};
+      if (!p.onboarded) return `the reel stalled at: ${JSON.stringify(p)}`;
+      if (p.name !== "Sara") return `signed up as ${JSON.stringify(p.name)}, not Sara`;
+      for (const [k, want] of [["age", "28"], ["menarcheAge", "13"], ["heightCm", "166"], ["weightKg", "74"]])
+        if (String(p[k]) !== want) return `${k} came out ${JSON.stringify(p[k])}, not ${want}`;
+      if (!p.goals?.includes("whatswrong")) return `no goal was picked: ${JSON.stringify(p.goals)}`;
+      if (!p.familyHistory || !p.acne) return "the symptom chips were missed";
+      if (p.pmosDiagnosed !== null) return `the diagnosis answer came out ${JSON.stringify(p.pmosDiagnosed)}, not "Not sure"`;
+      if ((p.integrations || []).length !== 2) return `connected ${JSON.stringify(p.integrations)}`;
+      if (html.includes("Let's get to know you")) return "it never left the sign-up";
+      // ...and the simulation picked up where the sign-up left off
+      const settings = JSON.parse(raw).settings || {};
+      if (!settings.simulation) return "the simulation switched itself off without running";
+      if (!html.includes("demo-caption")) return "nothing is being said: the simulation never started";
+      return null;
+    },
+  });
+}
+if (code === 0) {
+  // The tutorial, on its own: simulation off, tour on, a profile already made.
+  // It has to be lighting something up and talking about it, and it must not
+  // have typed, tapped or changed a single thing on the way.
+  code = await pass("tutorial", {
+    stored: {
+      profile: { onboarded: true, name: "Sara", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
+      settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct",
+                  simulation: false, tutorial: true },
+      logs: [],
+    },
+    fetch: backend,
+    waitMs: 45000,
+    after: (dom, html) => {
+      if (!html.includes("demo-caption")) return "the tutorial never said anything";
+      if (!html.includes("demo-spot")) return "the tutorial never lit anything up";
+      const p = JSON.parse(dom.window.localStorage.getItem("myno:serene:v1")).profile || {};
+      if (p.name !== "Sara") return `the tutorial edited the profile: ${JSON.stringify(p.name)}`;
+      return null;
+    },
   });
 }
 console.log(code === 0 ? "OK" : `FAILED (${code})`);

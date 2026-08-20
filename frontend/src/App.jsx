@@ -7,7 +7,10 @@ import {
 } from "lucide-react";
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
-import { autoFill, isEmpty, pick } from "./demofill.js";
+// The sign-up signs itself up for a demo — beats, timings and the rule that a
+// person's form is left alone, all tested in demoreel.test.mjs.
+import { SARA, signUp, simulation, tutorial, runReel, isEmpty, firstPhase, afterPhase,
+         travelMs, sayMs, SCROLL_MS } from "./demoreel.js";
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
   cycleRuns, DAY_MS } from "./cycles.js";
@@ -80,8 +83,34 @@ const FONTS = `
 .halo{ animation:halo 2.8s ease-out infinite; }
 .breathe{ animation:breathe 4s ease-in-out infinite; }
 .fade-up{ animation:fadeUp .45s ease-out both; }
+/* THE GUIDED DEMO. Nothing here takes a pointer event: a person reaching past
+   it to take the app back is the one thing that has to keep working.
+   The pointer's duration is set per hop, so the transition here only fixes how
+   it accelerates and how it slows into a target. It sits above the sheets. */
+.demo-pointer{ position:fixed; left:0; top:0; z-index:130; pointer-events:none; will-change:transform;
+  transition:transform 300ms cubic-bezier(.34,.06,.22,1), opacity .5s ease;
+  filter:drop-shadow(0 3px 7px rgba(92,75,125,.4)); }
+.demo-ring{ position:fixed; z-index:129; pointer-events:none; width:36px; height:36px; margin:-18px 0 0 -18px;
+  border-radius:50%; border:2px solid ${C.plum}; background:rgba(92,75,125,.14);
+  animation:tapRing .55s cubic-bezier(.2,.8,.3,1) both; }
+@keyframes tapRing{ 0%{ transform:scale(.35); opacity:.9 } 100%{ transform:scale(1.6); opacity:0 } }
+/* the tutorial's spotlight: a ring around the thing being explained, and the
+   rest of the page dimmed by one enormous shadow rather than four panels */
+.demo-spot{ position:fixed; z-index:120; pointer-events:none; border-radius:18px;
+  border:2.5px solid ${C.plum}; box-shadow:0 0 0 9999px rgba(42,35,49,0.45);
+  transition:left .38s cubic-bezier(.34,.06,.22,1), top .38s cubic-bezier(.34,.06,.22,1),
+             width .38s ease, height .38s ease; }
+/* what is being said, for anyone watching with the sound off */
+.demo-caption{ position:fixed; z-index:125; left:50%; bottom:104px; transform:translateX(-50%);
+  pointer-events:none; max-width:min(560px, calc(100% - 32px)); text-align:center;
+  background:${C.plumDark}; color:#fff; border-radius:18px; padding:13px 20px;
+  box-shadow:0 10px 34px rgba(42,35,49,.35); font-family:${bodyf}; font-size:15px; line-height:1.45;
+  animation:fadeIn .3s ease both; }
 @media (prefers-reduced-motion: reduce){
-  .halo,.breathe,.fade-up,.spin,.spark,.bloom{ animation:none !important; opacity:0 !important }
+  .halo,.breathe,.fade-up,.spin,.spark,.bloom,.demo-ring{ animation:none !important; opacity:0 !important }
+  .demo-pointer{ transition:opacity .5s ease !important }
+  .demo-spot{ transition:none !important }
+  .demo-caption{ animation:none !important }
   .phase-wash{ animation:fadeIn 1ms both !important }
   .pop-in,.slide-in,.grow,.draw{ animation:none !important }
 }
@@ -156,10 +185,11 @@ function pickSoftVoice() {
 function useSpeaker(settings) {
   const [speaking, setSpeaking] = useState(false);
   const queueRef = useRef([]); const audioRef = useRef(null); const doneRef = useRef(null);
-  const stop = useCallback(() => { queueRef.current = []; doneRef.current = null; try { audioRef.current?.pause(); } catch (e) {} try { window.speechSynthesis?.cancel(); } catch (e) {} setSpeaking(false); }, []);
+  const playingRef = useRef(false);
+  const stop = useCallback(() => { queueRef.current = []; doneRef.current = null; playingRef.current = false; try { audioRef.current?.pause(); } catch (e) {} try { window.speechSynthesis?.cancel(); } catch (e) {} setSpeaking(false); }, []);
   const playNext = useCallback(async () => {
-    const q = queueRef.current; if (!q.length) { setSpeaking(false); const d = doneRef.current; doneRef.current = null; if (d) d(); return; }
-    setSpeaking(true); const text = q.shift(); const base = settings.backendUrl || "/api";
+    const q = queueRef.current; if (!q.length) { playingRef.current = false; setSpeaking(false); const d = doneRef.current; doneRef.current = null; if (d) d(); return; }
+    playingRef.current = true; setSpeaking(true); const text = q.shift(); const base = settings.backendUrl || "/api";
     if (base) { try {
       const res = await fetch(`${base.replace(/\/$/, "")}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
       const blob = await res.blob(); const a = new Audio(URL.createObjectURL(blob)); audioRef.current = a;
@@ -172,8 +202,8 @@ function useSpeaker(settings) {
     if (!settings.voice || !text) { onDone?.(); return; }
     doneRef.current = onDone || null;
     queueRef.current = (text.match(/[^.!?]+[.!?]*\s*/g) || [text]).map((s) => s.trim()).filter(Boolean);
-    if (!speaking) playNext();
-  }, [settings.voice, speaking, playNext]);
+    if (!playingRef.current) playNext();
+  }, [settings.voice, playNext]);
   useEffect(() => () => stop(), [stop]);
   return { speak, stop, speaking };
 }
@@ -439,8 +469,8 @@ function genSyntheticLogs() {
 const API = (settings) => (settings.backendUrl || "/api").replace(/\/$/, "");
 
 // ---- UI atoms --------------------------------------------------------------
-const Card = ({ children, style, onClick }) => (
-  <div onClick={onClick} style={{ background: C.surface, borderRadius: 20, padding: 20, boxShadow: SH_SM, ...style }}>{children}</div>
+const Card = ({ children, style, onClick, demo }) => (
+  <div onClick={onClick} data-demo={demo} style={{ background: C.surface, borderRadius: 20, padding: 20, boxShadow: SH_SM, ...style }}>{children}</div>
 );
 const Label = ({ children, color = C.plum }) => (
   <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color }}>{children}</div>
@@ -448,16 +478,16 @@ const Label = ({ children, color = C.plum }) => (
 const H = ({ children, size = 26, style }) => (
   <h1 style={{ fontFamily: head, fontWeight: 700, fontSize: size, lineHeight: 1.12, letterSpacing: "-0.01em", margin: 0, color: C.ink, ...style }}>{children}</h1>
 );
-function Pill({ children, onClick, variant = "filled", disabled, style }) {
+function Pill({ children, onClick, variant = "filled", disabled, style, demo }) {
   const v = { filled: { background: C.plum, color: "#fff", border: "none" },
     outline: { background: C.surface, color: C.plum, border: `1.5px solid ${C.plum}` },
     soft: { background: C.low, color: C.inkVar, border: "none" },
     rose: { background: C.roseFixed, color: C.roseOn, border: "none" } }[variant];
-  return (<button onClick={onClick} disabled={disabled} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 15, padding: "13px 22px", borderRadius: 9999,
+  return (<button onClick={onClick} disabled={disabled} data-demo={demo} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 15, padding: "13px 22px", borderRadius: 9999,
     cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, minHeight: 48, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, ...v, ...style }}>{children}</button>);
 }
-function Chip({ children, active, onClick, icon: Ico }) {
-  return (<button onClick={onClick} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "9px 16px", borderRadius: 9999, cursor: "pointer",
+function Chip({ children, active, onClick, icon: Ico, demo }) {
+  return (<button onClick={onClick} data-demo={demo} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "9px 16px", borderRadius: 9999, cursor: "pointer",
     display: "inline-flex", alignItems: "center", gap: 7, transition: "all .15s",
     background: active ? C.rose : C.surface, color: active ? C.roseOn : C.inkVar, border: `1.5px solid ${active ? C.rose : C.outlineVar}` }}>
     {Ico && <Ico size={15} />} {children}</button>);
@@ -468,9 +498,9 @@ const Field = ({ label, children }) => (
   <label style={{ display: "block" }}><div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 600, letterSpacing: "0.04em", color: C.inkVar, marginBottom: 6, textTransform: "uppercase" }}>{label}</div>{children}</label>
 );
 const input = { width: "100%", padding: "13px 15px", borderRadius: 12, border: `1.5px solid ${C.outlineVar}`, fontFamily: bodyf, fontSize: 16, color: C.ink, background: C.surface, outline: "none" };
-function Slider({ value, max, onChange }) {
+function Slider({ value, max, onChange, demo }) {
   const pct = (value / max) * 100;
-  return (<input type="range" className="slider" min={0} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))}
+  return (<input type="range" className="slider" data-demo={demo} min={0} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))}
     style={{ background: `linear-gradient(90deg, ${C.plum} ${pct}%, ${C.high} ${pct}%)` }} />);
 }
 
@@ -754,7 +784,7 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [profile, setProfile] = useState(BLANK);
   const [logs, setLogs] = useState([]);
-  const [settings, setSettings] = useState({ nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct" });
+  const [settings, setSettings] = useState({ nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", simulation: true, tutorial: true });
   const vw = useViewport();
   const wide = vw >= 1024;
   const schema = useRecordSchema(settings);
@@ -762,7 +792,7 @@ export default function App() {
   useEffect(() => { (async () => {
     const s = await loadState();
     const profile0 = s?.profile || BLANK;
-    const settings0 = { nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", ...(s?.settings || {}) };
+    const settings0 = { nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", simulation: true, tutorial: true, ...(s?.settings || {}) };
     setProfile(profile0); setSettings(settings0);
     // DB-backed logs: provision a patient, seed realistic history, load it.
     const base = (settings0.backendUrl || "/api").replace(/\/$/, "");
@@ -856,6 +886,13 @@ export default function App() {
     return () => clearTimeout(t);
   }, [settings.patientId, settings.backendUrl, logs, lab, labRules, synced]);
 
+  // The guided demo: a voice, a pointer, and the reels they play. It reads the
+  // app the way a person would and drives the same controls, so there is
+  // nothing here for the screens themselves to know about.
+  const narrator = useSpeaker(settings);
+  const say = useCallback((text) => { narrator.stop(); narrator.speak(text); }, [narrator]);
+  const demo = useDirector({ ready, profile, settings, setSettings, speak: say, silence: narrator.stop });
+
   const axes = assessment?.axes;
   const ctx = { profile, setProfile, logs, setLogs, settings, setSettings, ins, assessment, axes,
     derived, lab, setLab, rules, labRules, setLabRules, setTab, wide, schema };
@@ -879,6 +916,7 @@ export default function App() {
   if (!profile.onboarded) return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: bodyf, color: C.ink, display: "flex", justifyContent: "center", backgroundImage: GRAD }}>
       <style>{FONTS}</style>
+      <DemoLayer {...demo} />
       <div style={{ width: "100%", maxWidth: 560 }}><Onboarding profile={profile} setProfile={setProfile} /></div>
     </div>);
 
@@ -887,12 +925,14 @@ export default function App() {
   if (wide) return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: bodyf, color: C.ink, backgroundImage: GRAD }}>
       <style>{FONTS}</style>
+      <DemoLayer {...demo} />
       <TopNav tab={tab} setTab={setTab} profile={profile} />
       <main style={{ maxWidth: contentMax, margin: "0 auto", padding: "32px 40px 64px", animation: "rise .25s ease" }} key={tab}>{screen()}</main>
     </div>);
 
   // --- mobile ---
   return mobileShell(<>
+    <DemoLayer {...demo} />
     <Header profile={profile} onSettings={() => setTab("settings")} />
     <div style={{ padding: "0 20px", animation: "rise .25s ease" }} key={tab}>{screen()}</div>
     <BottomNav tab={tab} setTab={setTab} />
@@ -909,12 +949,14 @@ function TopNav({ tab, setTab, profile }) {
           <Mark ring={C.plum} size={32} /><span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 25, color: C.plum }}>توازن</span>
         </button>
         <nav style={{ display: "flex", gap: 2 }}>
+          {/* Advocacy is reached by name here and by a card on Home in the mobile
+              shell, so the reel asks for the route rather than for the button. */}
           {items.map(([id, label]) => { const on = tab === id; return (
-            <button key={id} onClick={() => setTab(id)} style={{ fontFamily: bodyf, fontSize: 15, fontWeight: on ? 600 : 500, padding: "9px 16px", borderRadius: 9999, cursor: "pointer", border: "none",
+            <button key={id} data-demo={id === "advocacy" ? "go:advocacy" : `nav:${id}`} onClick={() => setTab(id)} style={{ fontFamily: bodyf, fontSize: 15, fontWeight: on ? 600 : 500, padding: "9px 16px", borderRadius: 9999, cursor: "pointer", border: "none",
               background: on ? C.lilac : "transparent", color: on ? C.plumDark : C.inkVar }}>{label}</button>); })}
         </nav>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-          <button onClick={() => setTab("settings")} style={{ background: "none", border: "none", cursor: "pointer", color: tab === "settings" ? C.plum : C.inkVar, display: "grid", placeItems: "center" }}><Cog size={22} /></button>
+          <button data-demo="nav:settings" onClick={() => setTab("settings")} style={{ background: "none", border: "none", cursor: "pointer", color: tab === "settings" ? C.plum : C.inkVar, display: "grid", placeItems: "center" }}><Cog size={22} /></button>
           <span style={{ width: 34, height: 34, borderRadius: "50%", background: C.lilac, color: C.plumDark, display: "grid", placeItems: "center", fontFamily: head, fontWeight: 700, fontSize: 15 }}>{(profile.name || "Y")[0].toUpperCase()}</span>
         </div>
       </div>
@@ -937,7 +979,7 @@ function BottomNav({ tab, setTab }) {
   return (<div className="no-print" style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
     <div style={{ width: "100%", maxWidth: 460, background: "rgba(251,239,239,0.92)", backdropFilter: "blur(10px)", borderTop: `1px solid ${C.high}`, display: "flex", padding: "8px 6px 10px", pointerEvents: "auto" }}>
       {items.map(([id, label, Ico]) => { const on = tab === id; return (
-        <button key={id} onClick={() => setTab(id)} style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+        <button key={id} data-demo={`nav:${id}`} onClick={() => setTab(id)} style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
           <span style={{ padding: "5px 16px", borderRadius: 9999, background: on ? C.lilac : "transparent", display: "grid", placeItems: "center", transition: "all .15s" }}><Ico size={20} color={on ? C.plumDark : C.outline} /></span>
           <span style={{ fontFamily: bodyf, fontSize: 11, fontWeight: on ? 600 : 500, color: on ? C.plum : C.outline }}>{label}</span>
         </button>); })}
@@ -945,66 +987,217 @@ function BottomNav({ tab, setTab }) {
   </div>);
 }
 
+// ---- the guided demo -------------------------------------------------------
+// TAWAAZUN SHOWING ITSELF.
+//
+// Three reels play in order on a first visit, and none of them is a mock-up.
+// The sign-up types itself in; the simulation then walks every tab, narrating
+// in English and driving the real controls; the tutorial follows and explains
+// the interface without touching it. What the pointer does is what a pair of
+// hands would do — a press is the click a finger makes and a key is the input
+// event a keypress sends — so nothing downstream, from the profile to the
+// backend to the criteria, can tell that nobody was there.
+//
+// Whichever is playing stops the moment a real hand touches the machine, and
+// each mode switches itself off when it reaches its end, so a second visit is
+// the person's own. Both switches live in Settings.
+const centreOf = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+// React compares against the value it last wrote to the node, so assigning
+// `el.value` reads as no change at all. Write it the way the browser does —
+// through the prototype's setter — and the input event carries it into onChange.
+// The event is built in the element's own window: a document from somewhere
+// else will not accept one made here.
+function typeInto(el, value) {
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")?.set;
+  if (setter) setter.call(el, value); else el.value = value;
+  const view = el.ownerDocument?.defaultView || window;
+  el.dispatchEvent(new view.Event("input", { bubbles: true }));
+}
+const pressKey = (el, key) => {
+  const view = el.ownerDocument?.defaultView || window;
+  if (!view.KeyboardEvent) return;
+  el.dispatchEvent(new view.KeyboardEvent("keydown", { key, bubbles: true }));
+};
+
+const REELS = { signup: () => signUp(SARA), sim: simulation, tour: tutorial };
+
+/**
+ * Runs whichever reel is due, and hands the app back when it is done.
+ *
+ * `phase` is the whole state machine: null when nobody is being shown anything,
+ * otherwise the reel that is playing. Each one names its own successor, so the
+ * tutorial follows the simulation without either knowing about the other.
+ */
+function useDirector({ ready, profile, settings, setSettings, speak, silence }) {
+  const [phase, setPhase] = useState(null);
+  const [pointer, setPointer] = useState(null);   // { x, y, ms, gone }
+  const [ring, setRing] = useState(null);         // where a click landed: { x, y, n }
+  const [spot, setSpot] = useState(null);         // what is lit: { x, y, w, h }
+  const [caption, setCaption] = useState("");
+  // The reel outlives any one render, so what it needs from this one is kept
+  // where it can always read the latest: closures over props would go stale
+  // halfway through a two-minute tour.
+  const live = useRef({});
+  live.current = { profile, settings, setSettings, speak, silence };
+
+  // Which reel is due — the rule is in demoreel.js, with the tests.
+  useEffect(() => {
+    if (phase) return;
+    const due = firstPhase({ ready, onboarded: profile.onboarded, empty: isEmpty(profile), settings });
+    if (due) setPhase(due);
+  }, [ready, phase, profile.onboarded, settings.simulation, settings.tutorial]);
+
+  useEffect(() => {
+    if (!phase) return;
+    const reduced = typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // it walks on from below the fold, the way a hand arrives
+    let at = { x: window.innerWidth / 2 - 40, y: window.innerHeight + 60 };
+    let clicks = 0;
+    setPointer({ ...at, ms: 0 });
+    // The reel belongs to the page it started on. If that page is gone, so is
+    // it — a pointer clicking away at a document nobody is looking at is worse
+    // than no pointer at all.
+    const doc = document;
+    let stop = () => {};
+    const find = (t) => {
+      if (!doc.defaultView || doc.defaultView.closed) { stop(); return null; }
+      return doc.querySelector(`[data-demo="${t}"]`);
+    };
+    const io = {
+      // Something below the fold is scrolled to the middle first. The pointer
+      // holds its place on the screen and the page moves under it.
+      reveal: (t) => {
+        const el = find(t); if (!el) return 0;
+        const r = el.getBoundingClientRect();
+        if (r.top >= 96 && r.bottom <= window.innerHeight - 96) return 0;
+        el.scrollIntoView?.({ block: "center", behavior: reduced ? "auto" : "smooth" });
+        return reduced ? 0 : SCROLL_MS;
+      },
+      move: (t) => {
+        const el = find(t); if (!el) return 0;
+        const to = centreOf(el);
+        const ms = reduced ? 0 : travelMs(to.x - at.x, to.y - at.y);
+        at = to; setPointer({ ...to, ms });
+        return ms;
+      },
+      press: (t) => {
+        const el = find(t); if (!el) return;
+        setRing({ ...at, n: ++clicks });
+        setSpot(null);                       // a click means we have moved on from what was lit
+        if (el.tagName === "INPUT") el.focus?.({ preventScroll: true });
+        el.click();
+      },
+      key: (t, value) => { const el = find(t); if (el) typeInto(el, value); },
+      enter: (t) => { const el = find(t); if (el) pressKey(el, "Enter"); },
+      // Said out loud if the voice is on, and captioned either way — a demo
+      // watched with the sound off has to be followable too.
+      say: (text) => { setCaption(text); live.current.speak?.(text); return sayMs(text); },
+      spot: (t, text) => {
+        const el = find(t);
+        if (el) { const r = el.getBoundingClientRect(); setSpot({ x: r.left, y: r.top, w: r.width, h: r.height }); }
+        setCaption(text); live.current.speak?.(text);
+        return sayMs(text);
+      },
+      dim: () => { setSpot(null); setCaption(""); },
+      end: () => finish(false),
+    };
+
+    // The end of a reel, or a person cutting it short: what follows and which
+    // switch is spent are decided in demoreel.js, where they are tested.
+    const finish = (byHand) => {
+      const { setSettings: save, settings: now, silence: hush } = live.current;
+      hush?.();
+      setPointer((p) => p && { ...p, gone: true });
+      setSpot(null); setCaption("");
+      const { next, off } = afterPhase(phase, { byHand, settings: now });
+      if (off) save?.((s) => ({ ...s, [off]: false }));
+      setPhase(next);
+    };
+
+    const cancel = runReel(REELS[phase](), io);
+    stop = cancel;
+    // A hand on the machine ends it. Everything the reel does is untrusted,
+    // which is exactly how the browser marks an event it did not witness. The
+    // first moment is deaf on purpose: the click that switched a mode on in
+    // Settings must not be the one that switches it straight back off.
+    const armed = Date.now() + 800;
+    const handOver = (e) => {
+      if (!e.isTrusted || Date.now() < armed) return;
+      cancel(); setPointer(null); setRing(null); finish(true);
+    };
+    const EVENTS = ["pointerdown", "mousedown", "keydown", "touchstart"];
+    for (const ev of EVENTS) window.addEventListener(ev, handOver, true);
+    return () => { cancel(); live.current.silence?.(); for (const ev of EVENTS) window.removeEventListener(ev, handOver, true); };
+  }, [phase]);
+
+  return { pointer, ring, spot, caption, playing: !!phase };
+}
+
+// What the demo puts on the screen: the spotlight under everything, the caption
+// along the bottom, and the pointer over the lot. None of it takes a click —
+// a person reaching past it to take over is the point.
+function DemoLayer({ pointer, ring, spot, caption }) {
+  if (!pointer) return null;
+  return (<>
+    {spot && <div className="demo-spot" style={{ left: spot.x - 6, top: spot.y - 6, width: spot.w + 12, height: spot.h + 12 }} />}
+    {caption && <div className="demo-caption"><span>{caption}</span></div>}
+    {/* keyed by the click count, so every press draws its own ring where it landed */}
+    {ring && <span key={ring.n} className="demo-ring" style={{ left: ring.x, top: ring.y }} />}
+    <span className="demo-pointer" aria-hidden="true"
+      style={{ transform: `translate3d(${pointer.x}px, ${pointer.y}px, 0)`, opacity: pointer.gone ? 0 : 1,
+        transition: `transform ${pointer.ms}ms cubic-bezier(.34,.06,.22,1), opacity .45s ease` }}>
+      <svg width="21" height="28" viewBox="0 0 13.5 18.5" fill="none">
+        <path d="M0 0 L0 15.2 L4.1 11.4 L6.7 17.6 L9.4 16.4 L6.8 10.5 L12.2 10.1 Z"
+          fill={C.plum} stroke="#fff" strokeWidth="1.1" strokeLinejoin="round" />
+      </svg>
+    </span>
+  </>);
+}
+
 // ---- onboarding ------------------------------------------------------------
+// Three steps: what you're here for, the basics, and what a clinician has
+// already found. There was a fourth — a screen of wearables to connect — and it
+// asked for permissions before the app had earned any of them.
+const LAST_STEP = 2;
 function Onboarding({ profile, setProfile }) {
   const [step, setStep] = useState(0);
-  const typed = useRef(false);          // a real keystroke happened
-  const cancelFill = useRef(null);
   const pRef = useRef(profile);
   useEffect(() => { pRef.current = profile; });
 
   const set = (k, v) => setProfile({ ...pRef.current, [k]: v });
-  // A person touching the form owns it from then on.
-  const setByHand = (k, v) => { typed.current = true; cancelFill.current?.(); set(k, v); };
-
-  // The basics step fills itself in for recording: real setProfile calls, one
-  // per character, on an empty form only, cancelled by the first keystroke.
-  useEffect(() => {
-    if (step !== 1 || typed.current || !isEmpty(pRef.current)) return;
-    const person = pick();
-    cancelFill.current = autoFill(person, set, {
-      onDone: (who) => setProfile({ ...pRef.current, goals: who.goals,
-        ...Object.fromEntries(who.chips.map((c) => [c, true])) }),
-    });
-    return () => cancelFill.current?.();
-  }, [step]);
-
-  const tog = (k, v) => set(k, profile[k].includes(v) ? profile[k].filter((x) => x !== v) : [...profile[k], v]);
+  const tog = (k, v) => { const had = pRef.current[k] || []; set(k, had.includes(v) ? had.filter((x) => x !== v) : [...had, v]); };
   const GOALS = [["conceive", "Trying to conceive", Target], ["whatswrong", "Figure out what's wrong", Brain], ["manage", "Manage my symptoms", HeartPulse], ["prepare", "Prepare for an appointment", Stethoscope]];
-  const APPS = ["Apple Health", "Google Fit", "Oura", "Fitbit", "Clue / Flo"];
   return (<div style={{ padding: "60px 24px", minHeight: "100vh" }}>
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 30 }}><Mark ring={C.plum} /><span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 30, color: C.plum }}>توازن</span></div>
     <Card style={{ borderRadius: 24, padding: 24, boxShadow: SH }}>
-      {step === 0 && (<><Label>Welcome</Label><H size={26} style={{ margin: "10px 0 8px" }}>Let's build your digital twin</H>
+      {step === 0 && (<><Label>Welcome</Label><H size={26} style={{ margin: "10px 0 8px" }}>Let's get to know you</H>
         <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 20 }}><Word font={head} /> learns your patterns, helps you make sense of them, and gets you ready for the clinician. What brings you here?</p>
         <div style={{ display: "grid", gap: 10 }}>{GOALS.map(([id, l, Ico]) => { const on = profile.goals.includes(id); return (
-          <button key={id} onClick={() => tog("goals", id)} style={{ textAlign: "left", padding: 16, borderRadius: 16, cursor: "pointer", display: "flex", alignItems: "center", gap: 12, background: on ? C.lilac : C.low, border: `1.5px solid ${on ? C.plum : "transparent"}` }}>
+          <button key={id} data-demo={`goal:${id}`} onClick={() => tog("goals", id)} style={{ textAlign: "left", padding: 16, borderRadius: 16, cursor: "pointer", display: "flex", alignItems: "center", gap: 12, background: on ? C.lilac : C.low, border: `1.5px solid ${on ? C.plum : "transparent"}` }}>
             <Ico size={22} color={C.plum} /><span style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{l}</span>{on && <Check size={18} color={C.plum} style={{ marginLeft: "auto" }} />}</button>); })}</div></>)}
       {step === 1 && (<><Label>About you</Label><H size={24} style={{ margin: "10px 0 18px" }}>The basics</H>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Field label="First name"><input style={input} value={profile.name} onChange={(e) => setByHand("name", e.target.value)} placeholder="optional" /></Field>
-          <Field label="Age"><input style={input} type="number" value={profile.age} onChange={(e) => setByHand("age", e.target.value)} /></Field>
-          <Field label="Age at first period"><input style={input} type="number" value={profile.menarcheAge} onChange={(e) => setByHand("menarcheAge", e.target.value)} placeholder="e.g. 13" /></Field>
-          <Field label="Height (cm)"><input style={input} type="number" value={profile.heightCm} onChange={(e) => setByHand("heightCm", e.target.value)} /></Field>
-          <Field label="Weight (kg)"><input style={input} type="number" value={profile.weightKg} onChange={(e) => setByHand("weightKg", e.target.value)} /></Field>
+          <Field label="First name"><input data-demo="field:name" style={input} value={profile.name} onChange={(e) => set("name", e.target.value)} placeholder="optional" /></Field>
+          <Field label="Age"><input data-demo="field:age" style={input} type="number" value={profile.age} onChange={(e) => set("age", e.target.value)} /></Field>
+          <Field label="Age at first period"><input data-demo="field:menarcheAge" style={input} type="number" value={profile.menarcheAge} onChange={(e) => set("menarcheAge", e.target.value)} placeholder="e.g. 13" /></Field>
+          <Field label="Height (cm)"><input data-demo="field:heightCm" style={input} type="number" value={profile.heightCm} onChange={(e) => set("heightCm", e.target.value)} /></Field>
+          <Field label="Weight (kg)"><input data-demo="field:weightKg" style={input} type="number" value={profile.weightKg} onChange={(e) => set("weightKg", e.target.value)} /></Field>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
           {[["familyHistory", "Family history"], ["acne", "Persistent acne"], ["skinDarkening", "Skin darkening"], ["weightGain", "Weight gain"]].map(([k, l]) => (
-            <Chip key={k} active={profile[k]} onClick={() => set(k, !profile[k])}>{l}</Chip>))}</div></>)}
+            <Chip key={k} demo={`chip:${k}`} active={profile[k]} onClick={() => set(k, !profile[k])}>{l}</Chip>))}</div></>)}
       {step === 2 && (<><Label>Your health</Label><H size={24} style={{ margin: "10px 0 8px" }}>Anything already diagnosed?</H>
         <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 16 }}>Only what a clinician has told you. It changes how we read your tracking — and you can change it any time in Settings.</p>
         <div style={{ padding: 14, borderRadius: 16, background: C.low, marginBottom: 16 }}>
           <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15, marginBottom: 10 }}>Have you been diagnosed with PMOS?</div>
           <DiagnosisPanel profile={profile} setProfile={setProfile} />
         </div>
-        <ConditionsPanel profile={profile} setProfile={setProfile} compact /></>)}
-      {step === 3 && (<><Label>Connect your data</Label><H size={24} style={{ margin: "10px 0 8px" }}>Bring it together</H>
-        <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 16 }}>Fold in cycles, sleep, and activity you already log (demo connections).</p>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{APPS.map((a) => (<Chip key={a} active={profile.integrations.includes(a)} onClick={() => tog("integrations", a)}>{a}</Chip>))}</div>
-        <div style={{ marginTop: 16, padding: 14, background: C.lilac, borderRadius: 14, fontSize: 14, color: C.onLilac, lineHeight: 1.5 }}>We've pre-loaded three months of sample tracking so your twin has something to learn from right away.</div></>)}
+        <ConditionsPanel profile={profile} setProfile={setProfile} compact />
+        <div style={{ marginTop: 16, padding: 14, background: C.lilac, borderRadius: 14, fontSize: 14, color: C.onLilac, lineHeight: 1.5 }}>We've pre-loaded three months of sample tracking so <Word font={head} /> has something to learn from right away.</div></>)}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 24 }}>
-        <Pill variant="soft" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0} style={{ padding: "13px 18px" }}><ArrowLeft size={16} /> Back</Pill>
-        <Pill onClick={() => step < 3 ? setStep(step + 1) : set("onboarded", true)} disabled={step === 0 && profile.goals.length === 0}>{step < 3 ? "Continue" : <>Enter <Word font={head} /></>} <ArrowRight size={16} /></Pill>
+        <Pill demo="back" variant="soft" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0} style={{ padding: "13px 18px" }}><ArrowLeft size={16} /> Back</Pill>
+        <Pill demo="next" onClick={() => step < LAST_STEP ? setStep(step + 1) : set("onboarded", true)} disabled={step === 0 && profile.goals.length === 0}>{step < LAST_STEP ? "Continue" : <>Enter <Word font={head} /></>} <ArrowRight size={16} /></Pill>
       </div>
     </Card>
   </div>);
@@ -1232,7 +1425,7 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
     </div>);
   const drugCard = <DrugTherapy profile={profile} setProfile={setProfile} />;
   const phaseTiles = (
-    <Card style={{ padding: 20, boxShadow: SH_SM, position: "relative", overflow: "hidden" }}>
+    <Card demo="home:ring" style={{ padding: 20, boxShadow: SH_SM, position: "relative", overflow: "hidden" }}>
       <SparkleLayer burst={burst} />
       <Label>This cycle</Label>
       <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
@@ -1273,7 +1466,7 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   })();
   const late = !!nextUp.late;
 
-  const cycleFacts = (<Card style={{ padding: 20, boxShadow: SH_SM }}>
+  const cycleFacts = (<Card demo="home:next" style={{ padding: 20, boxShadow: SH_SM }}>
     <Label color={late ? C.roseOn : C.plum}>{late ? "Running late" : "Next period"}</Label>
     <div style={{ fontFamily: head, fontWeight: 700, fontSize: 26, lineHeight: 1.2, margin: "6px 0 4px",
       color: late ? C.roseOn : C.ink }}>{nextUp.big}</div>
@@ -1284,7 +1477,7 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
       Your periods have come {span[0]} to {span[1]} days apart, so this is a rough guide.</div>)}
   </Card>);
   const recordCTA = (
-    <button onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
+    <button data-demo="go:record" onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
       <span style={{ fontFamily: head, fontWeight: 700, fontSize: 22 }}>Record your day</span>
       <span style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.18)", display: "grid", placeItems: "center" }}><Plus size={20} color="#fff" /></span>
     </button>);
@@ -1294,7 +1487,7 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   // The verdict rides on the card that leads to it, so it is visible on landing.
   const rec = assessment?.recommendation, recTone = rec ? TONE[rec.tone] : TONE.muted;
   const prepareCard = (
-    <Card onClick={() => setTab("advocacy")} style={{ display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
+    <Card demo="go:advocacy" onClick={() => setTab("advocacy")} style={{ display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
       <span style={{ width: 42, height: 42, borderRadius: 12, background: recTone.bg, display: "grid", placeItems: "center", flexShrink: 0 }}>
         <recTone.Icon size={20} color={recTone.fg} /></span>
       <div style={{ flex: 1 }}>
@@ -1447,14 +1640,14 @@ function CycleCalendar({ logs, onSet, sound = true }) {
       <span style={{ flex: 1, textAlign: "center", fontFamily: head, fontWeight: 600, fontSize: 14, color: C.ink }}>
         {new Date(y, m, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}</span>
       {navBtn(1, ChevronRight)}
-      {onSet && <button onClick={() => { setRange((r) => !r); setAnchor(null); }}
+      {onSet && <button data-demo="cal:range" onClick={() => { setRange((r) => !r); setAnchor(null); }}
         style={{ fontFamily: bodyf, fontSize: 11.5, fontWeight: 600, padding: "5px 10px", borderRadius: 9999,
           cursor: "pointer", background: range ? C.plum : C.surface, color: range ? "#fff" : C.plum,
           border: `1.5px solid ${range ? C.plum : C.outlineVar}` }}>Range</button>}
     </div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", columnGap: 0, marginBottom: 6 }}>
       {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.inkVar }}>{d}</div>))}</div>
-    <div onPointerLeave={() => !drag && setHover(null)}
+    <div data-demo="cal:grid" onPointerLeave={() => !drag && setHover(null)}
       style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", columnGap: 0, rowGap: 2 }}>{cells.map((d, i) => {
       const isToday = d === todayD, isPeriod = d && shown(d), isFuture = d && future(d);
       const isDraft = d && isPeriod && inPreview(d) && !marked(d);
@@ -1471,7 +1664,7 @@ function CycleCalendar({ logs, onSet, sound = true }) {
           borderRadius: `${linkPrev ? 0 : 17}px ${linkNext ? 0 : 17}px ${linkNext ? 0 : 17}px ${linkPrev ? 0 : 17}px`,
           background: isDraft ? C.roseDeep : C.bleed,
           left: linkPrev ? -1 : "calc(50% - 17px)", right: linkNext ? -1 : "calc(50% - 17px)" }} />}
-        {d && <span onClick={() => tap(d)} className={onSet && !isFuture ? "cal-day" : undefined}
+        {d && <span data-demo={isToday ? "cal:today" : undefined} onClick={() => tap(d)} className={onSet && !isFuture ? "cal-day" : undefined}
           onPointerDown={startDrag(d)} onPointerEnter={() => !isFuture && setHover(d)}
           style={{ width: 34, height: 34, borderRadius: "50%", display: "grid",
             placeItems: "center", fontFamily: bodyf, fontSize: 14, fontWeight: isToday || isPeriod ? 700 : 500,
@@ -1508,12 +1701,12 @@ function PersonalityPicker({ value, onChange }) {
   useEffect(() => { const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   const cur = PERSONALITIES.find(([k]) => k === (value || "direct")) || PERSONALITIES[0];
   return (<div ref={ref} style={{ position: "relative", flexShrink: 0 }}>
-    <button onClick={() => setOpen((o) => !o)} title="Personality" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "0 14px", height: 48, borderRadius: 9999, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8, background: C.surface, color: C.plum, border: `1.5px solid ${C.plum}` }}>
+    <button data-demo="rec:personality" onClick={() => setOpen((o) => !o)} title="Personality" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "0 14px", height: 48, borderRadius: 9999, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8, background: C.surface, color: C.plum, border: `1.5px solid ${C.plum}` }}>
       <Sparkles size={15} /> {cur[1]} <ChevronRight size={15} style={{ transform: `rotate(${open ? -90 : 90}deg)`, transition: "transform .2s ease" }} />
     </button>
     {open && (<div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 40, background: C.surface, borderRadius: 16, boxShadow: SH, padding: 6, width: 220 }}>
       {PERSONALITIES.map(([k, lbl, desc]) => { const on = k === (value || "direct"); return (
-        <button key={k} onClick={() => { onChange(k); setOpen(false); }} style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 10, textAlign: "left", padding: "10px 12px", borderRadius: 12, border: "none", cursor: "pointer", background: on ? C.lilac : "transparent" }}>
+        <button key={k} data-demo={`pers:${k}`} onClick={() => { onChange(k); setOpen(false); }} style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 10, textAlign: "left", padding: "10px 12px", borderRadius: 12, border: "none", cursor: "pointer", background: on ? C.lilac : "transparent" }}>
           <span><div style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 14, color: on ? C.onLilac : C.ink }}>{lbl}</div><div style={{ fontFamily: bodyf, fontSize: 12, color: on ? C.plumDark : C.inkVar }}>{desc}</div></span>
           {on && <Check size={16} color={C.plum} style={{ flexShrink: 0 }} />}
         </button>); })}
@@ -1598,7 +1791,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       const max = f.max || SCALE_MAX; const disp = scaleDisplay(v ?? 0, max, f.words);
       return withHeading(<div key={f.key} style={wrap}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>{labelEl}<span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.plum }}>{disp}</span></div>
-        <Slider value={clampScale(v, 0, max)} max={max} onChange={(val) => set(f.key, clampScale(val, 0, max))} /></div>);
+        <Slider demo={`log:${f.key}`} value={clampScale(v, 0, max)} max={max} onChange={(val) => set(f.key, clampScale(val, 0, max))} /></div>);
     }
     const control = f.type === "bool" ? (<div style={{ display: "flex", gap: 6 }}>{[["No", false], ["Yes", true]].map(([lbl, val]) => <Chip key={lbl} active={v === val} onClick={() => set(f.key, v === val ? null : val)}>{lbl}</Chip>)}</div>)
       : f.type === "select" ? (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>{f.options.map((o) => <Chip key={o} active={v === o} onClick={() => set(f.key, v === o ? null : o)}>{o}</Chip>)}</div>)
@@ -1675,7 +1868,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
     <div style={{ background: C.plumC, borderRadius: 24, padding: 22, boxShadow: SH, textAlign: "center", color: "#fff" }}>
       <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 16, lineHeight: 1.4, marginBottom: 16, opacity: 0.95 }}>How has your body been today?</div>
       <div style={{ display: "grid", placeItems: "center", marginBottom: 12 }}>
-        <button onClick={micTap} disabled={busy} style={{ width: 96, height: 96, borderRadius: "50%", border: "none", cursor: busy ? "default" : "pointer", display: "grid", placeItems: "center", background: voice.listening ? C.roseOn : "#fff", color: voice.listening ? "#fff" : C.plum, boxShadow: voice.listening ? "0 0 0 6px rgba(255,255,255,0.3)" : SH, animation: voice.listening ? "pulse 1.5s infinite" : "none", opacity: busy ? 0.7 : 1 }}>
+        <button data-demo="rec:mic" onClick={micTap} disabled={busy} style={{ width: 96, height: 96, borderRadius: "50%", border: "none", cursor: busy ? "default" : "pointer", display: "grid", placeItems: "center", background: voice.listening ? C.roseOn : "#fff", color: voice.listening ? "#fff" : C.plum, boxShadow: voice.listening ? "0 0 0 6px rgba(255,255,255,0.3)" : SH, animation: voice.listening ? "pulse 1.5s infinite" : "none", opacity: busy ? 0.7 : 1 }}>
           {voice.listening ? <MicOff size={38} /> : <Mic size={38} />}</button></div>
       <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, letterSpacing: "0.06em", textTransform: "uppercase", minHeight: 18 }}>{busy ? <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Loader2 size={13} className="spin" /> {status}</span> : status}</div>
       <div style={{ minHeight: 24, marginTop: 10, fontSize: 15 }}>{partial ? <i style={{ opacity: 0.92 }}>{partial}…</i> : null}</div>
@@ -1686,9 +1879,9 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       </div>)}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 12 }}>{["Some pain today", "Tired and bloated", "Feeling good"].map((c) => (<button key={c} onClick={() => ingest(c)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "8px 14px", borderRadius: 9999, background: "rgba(255,255,255,0.16)", border: "1.5px solid rgba(255,255,255,0.35)", color: "#fff", cursor: "pointer" }}>{c}</button>))}</div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", background: "rgba(255,255,255,0.14)", borderRadius: 9999, padding: 5, marginTop: 12 }}>
-        <input value={text} onChange={(ev) => setText(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter" && text.trim()) { ingest(text.trim()); setText(""); } }} placeholder="…or type it" style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 15, padding: "8px 12px", background: "transparent", color: "#fff" }} />
+        <input data-demo="rec:type" value={text} onChange={(ev) => setText(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter" && text.trim()) { ingest(text.trim()); setText(""); } }} placeholder="…or type it" style={{ flex: 1, border: "none", outline: "none", fontFamily: bodyf, fontSize: 15, padding: "8px 12px", background: "transparent", color: "#fff" }} />
       </div>
-      <button onClick={endConvo} style={{ marginTop: 10, width: "100%", fontFamily: bodyf, fontWeight: 700, fontSize: 14, padding: "12px", borderRadius: 9999, background: "#fff", color: C.plum, border: "none", cursor: "pointer" }}>End conversation</button>
+      <button data-demo="rec:end" onClick={endConvo} style={{ marginTop: 10, width: "100%", fontFamily: bodyf, fontWeight: 700, fontSize: 14, padding: "12px", borderRadius: 9999, background: "#fff", color: C.plum, border: "none", cursor: "pointer" }}>End conversation</button>
       {voice.note && <p style={{ fontSize: 12, color: "#fff", marginTop: 10, opacity: 0.9 }}>{voice.note}</p>}
       {err && <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", marginTop: 12, padding: "10px 14px", borderRadius: 12, background: "rgba(255,255,255,0.16)", color: "#fff", fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0 }} /> {err}</div>}
     </div>);
@@ -1700,10 +1893,10 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   // as a category on the entry, so it flows into the tracker, trends and JSON.
 
   const dayBlock = (
-    <div>
+    <div data-demo="rec:tracker">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <Label color={C.inkVar}>Your day so far</Label>
-        <button onClick={() => setModal(true)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.plum, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}><SquarePen size={14} /> Details</button>
+        <button data-demo="rec:details" onClick={() => setModal(true)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.plum, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}><SquarePen size={14} /> Details</button>
       </div>
       {cats.length === 0 ? (
         <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.5 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;As you talk, <Word font={head} /> builds a tracker here — in your own words.</Card>
@@ -1742,7 +1935,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   // today's entry included, so a slider you just moved shows on the line
   const series = logs.slice(-30).concat([e]).map((l) => Number(l?.[mSel] ?? 0));
   const insightsPanel = (
-    <Card style={{ padding: 16, position: wide ? "sticky" : "static", top: 88, boxShadow: metricBlink ? `0 0 0 3px ${C.plum}` : SH_SM, transition: "box-shadow .3s ease" }}>
+    <Card demo="rec:insights" style={{ padding: 16, position: wide ? "sticky" : "static", top: 88, boxShadow: metricBlink ? `0 0 0 3px ${C.plum}` : SH_SM, transition: "box-shadow .3s ease" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Label color={C.inkVar}>Live trends</Label>{metricBlink && <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.plum, animation: "pulse 0.8s ease infinite" }} />}</span>
         {advising && <Loader2 size={13} className="spin" color={C.outline} />}
@@ -1771,7 +1964,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       <div onClick={(ev) => ev.stopPropagation()} style={{ background: C.surface, borderRadius: 24, boxShadow: SH, width: "100%", maxWidth: 520, maxHeight: "86vh", overflowY: "auto", padding: 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
           <H size={22}>Fill in your day</H>
-          <button onClick={() => setModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><X size={22} /></button>
+          <button data-demo="log:close" onClick={() => setModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><X size={22} /></button>
         </div>
         <p style={{ color: C.inkVar, fontSize: 14, marginBottom: 14 }}>Optional — add anything you didn't say out loud. You can keep talking after.</p>
         {schema.map((g) => (<div key={g.key || g.group} style={{ marginBottom: 14 }}>
@@ -1779,8 +1972,8 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
           <div style={{ marginTop: 4 }}>{g.fields.map(field)}</div>
         </div>))}
         <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-          <Pill variant="soft" onClick={() => setModal(false)} style={{ flex: 1 }}>Keep talking</Pill>
-          <Pill onClick={() => { persist(e); saveToDb(e); setSaved(true); setModal(false); if (setTab) setTab("home"); }} style={{ flex: 1 }}><Check size={16} /> {saved ? "Saved" : "Done"}</Pill>
+          <Pill demo="log:keep" variant="soft" onClick={() => setModal(false)} style={{ flex: 1 }}>Keep talking</Pill>
+          <Pill demo="log:done" onClick={() => { persist(e); saveToDb(e); setSaved(true); setModal(false); if (setTab) setTab("home"); }} style={{ flex: 1 }}><Check size={16} /> {saved ? "Saved" : "Done"}</Pill>
         </div>
       </div>
     </div>
@@ -1792,7 +1985,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       <H size={26}>Record your day</H>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
         <PersonalityPicker value={settings.personality} onChange={(p) => setSettings((s) => ({ ...s, personality: p }))} />
-        <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
+        <Pill demo="rec:trends" variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
       </div>
     </div>
     <p style={{ color: C.inkVar, marginBottom: 18 }}>Just talk — <Word font={head} /> listens, talks back, and builds your personal tracker as you go.</p>
@@ -1840,7 +2033,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   for (let i = off; i < logs.length; i++) { const x = logs[i - off][xMeta[0]], y = logs[i][yMeta[0]]; if (typeof x === "number" && typeof y === "number") exPoints.push({ x, y }); }
   const exR = (() => { const n = exPoints.length; if (n < 8) return null; const mx = exPoints.reduce((a, p) => a + p.x, 0) / n, my = exPoints.reduce((a, p) => a + p.y, 0) / n; const cov = exPoints.reduce((a, p) => a + (p.x - mx) * (p.y - my), 0); const vx = exPoints.reduce((a, p) => a + (p.x - mx) ** 2, 0), vy = exPoints.reduce((a, p) => a + (p.y - my) ** 2, 0); if (vx <= 0 || vy <= 0) return null; return cov / Math.sqrt(vx * vy); })();
   const exS = exR == null ? "" : (Math.abs(exR) >= 0.6 ? "strong" : Math.abs(exR) >= 0.4 ? "moderate" : Math.abs(exR) >= 0.2 ? "weak" : "negligible");
-  const exChip = (lbl, sel, on) => (<button key={lbl} onClick={on} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 10px", borderRadius: 9999, border: "none", cursor: "pointer", background: sel ? C.plum : C.container, color: sel ? "#fff" : C.inkVar }}>{lbl}</button>);
+  const exChip = (lbl, sel, on, demo) => (<button key={lbl} data-demo={demo} onClick={on} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 10px", borderRadius: 9999, border: "none", cursor: "pointer", background: sel ? C.plum : C.container, color: sel ? "#fff" : C.inkVar }}>{lbl}</button>);
 
   // Claude analysis + computed statistics over the DB logs
   const [analysis, setAnalysis] = useState(null); const [stats, setStats] = useState(null); const [loadingA, setLoadingA] = useState(false);
@@ -1874,7 +2067,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
     return () => { stop = true; };
   }, [settings.patientId]);
 
-  const summaryCard = (<Card>
+  const summaryCard = (<Card demo="ins:summary">
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: head, fontWeight: 600, fontSize: 17 }}><Sparkles size={18} color={C.roseOn} /> Analysis from <Word font={head} /></span>
       {loadingA && <Loader2 size={14} className="spin" color={C.outline} />}
@@ -1973,15 +2166,15 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   const exControls = (<div style={{ display: "grid", gap: 10 }}>
     <div>
       <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, color: C.inkVar, marginBottom: 6 }}>Compare</div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{NUM.map(([k, lbl]) => exChip(lbl, xKey === k, () => setXKey(k)))}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{NUM.map(([k, lbl]) => exChip(lbl, xKey === k, () => setXKey(k), `x:${k}`))}</div>
     </div>
     <div>
       <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, color: C.inkVar, marginBottom: 6 }}>against</div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{NUM.map(([k, lbl]) => exChip(lbl, yKey === k, () => setYKey(k)))}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{NUM.map(([k, lbl]) => exChip(lbl, yKey === k, () => setYKey(k), `y:${k}`))}</div>
     </div>
     <div>
       <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, color: C.inkVar, marginBottom: 6 }}>on</div>
-      <div style={{ display: "flex", gap: 6 }}>{exChip("the same day", !lagDay, () => setLagDay(false))}{exChip("the day after", lagDay, () => setLagDay(true))}</div>
+      <div style={{ display: "flex", gap: 6 }}>{exChip("the same day", !lagDay, () => setLagDay(false), "lag:same")}{exChip("the day after", lagDay, () => setLagDay(true), "lag:next")}</div>
     </div>
   </div>);
   const exAnswer = exR != null ? (
@@ -2050,7 +2243,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   </Card>);
 
   const chipsRow = (<div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6, marginBottom: 14 }}>{METRICS.map(([k, lbl]) => (
-    <button key={k} onClick={() => setMetric(k)} style={{ flexShrink: 0, fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "7px 14px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.plum : C.container, color: mSel === k ? "#fff" : C.inkVar }}>{lbl}</button>))}</div>);
+    <button key={k} data-demo={`metric:${k}`} onClick={() => setMetric(k)} style={{ flexShrink: 0, fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "7px 14px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.plum : C.container, color: mSel === k ? "#fff" : C.inkVar }}>{lbl}</button>))}</div>);
   const trendsCard = (<Card>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
       <div><div style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>Track one thing over time</div><div style={{ fontSize: 13, color: C.inkVar }}>{mLbl} · past 30 days · avg {sAvg.toFixed(1)}</div></div>
@@ -2068,7 +2261,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   const SUBVIEWS = [["insights", "Insights"], ["track", "What to track"]];
   const subNav = (<div style={{ display: "inline-flex", gap: 4, padding: 4, background: C.container, borderRadius: 9999, marginBottom: 18 }}>
     {SUBVIEWS.map(([id, lbl]) => { const on = view === id; return (
-      <button key={id} onClick={() => setView(id)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "8px 18px", borderRadius: 9999, cursor: "pointer", border: "none", background: on ? C.surface : "transparent", color: on ? C.plum : C.inkVar, boxShadow: on ? SH_SM : "none" }}>{lbl}</button>); })}
+      <button key={id} data-demo={`sub:${id}`} onClick={() => setView(id)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "8px 18px", borderRadius: 9999, cursor: "pointer", border: "none", background: on ? C.surface : "transparent", color: on ? C.plum : C.inkVar, boxShadow: on ? SH_SM : "none" }}>{lbl}</button>); })}
   </div>);
 
 
@@ -2095,7 +2288,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   // Folded away by default: the sections above answer the question someone came
   // with, and the charts are for when they want to go digging.
   const chartHeading = (
-    <button onClick={() => setChartsOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 10,
+    <button data-demo="charts" onClick={() => setChartsOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 10,
       margin: "26px 0 14px", width: "100%", cursor: "pointer", textAlign: "left", padding: "13px 16px",
       borderRadius: 16, background: chartsOpen ? C.lilac : C.surface,
       border: `1.5px solid ${chartsOpen ? C.plum : C.outlineVar}`, boxShadow: chartsOpen ? "none" : SH_SM,
@@ -2339,11 +2532,11 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
         visible in the criteria and the indicator right under it */}
     {labOpen && rules && <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules}
       labRules={labRules} setLabRules={setLabRules} open={labOpen} setOpen={setLabOpen} />}
-    <Card style={{ marginBottom: 14 }}>
+    <Card demo="adv:triad" style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Label>The three criteria</Label>
         <SourcesButton settings={settings} />
-        <button onClick={() => setLabOpen((o) => !o)} title="Experiment with the factors"
+        <button data-demo="adv:lab" onClick={() => setLabOpen((o) => !o)} title="Experiment with the factors"
           style={{ marginLeft: "auto", background: labOpen ? C.lilac : "none", border: "none", borderRadius: 9,
             width: 30, height: 30, display: "grid", placeItems: "center", cursor: "pointer", color: C.plum }}>
           <Cog size={17} /></button>
@@ -2380,12 +2573,12 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
         </div>))}
       </Collapsible>)}
     {rep?.documentation_request_text && <Card style={{ marginBottom: 14, background: C.lilac, boxShadow: "none" }}><Label color={C.plumDark}>Before you leave</Label><p style={{ fontSize: 14, lineHeight: 1.6, margin: "8px 0 0", color: C.onLilac }}>{rep.documentation_request_text}</p></Card>}
-    {rep && <div className="no-print"><Pill onClick={() => window.print()} style={{ width: "100%" }}><Printer size={16} /> Print to bring along</Pill></div>}
+    {rep && <div className="no-print"><Pill demo="adv:print" onClick={() => window.print()} style={{ width: "100%" }}><Printer size={16} /> Print to bring along</Pill></div>}
   </>);
 
   return (<div>
     <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "6px 0 16px" }}>
-      <button className="no-print" onClick={() => setTab("home")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><ArrowLeft size={22} /></button><H size={24}>Advocacy</H></div>
+      <button data-demo="back:home" className="no-print" onClick={() => setTab("home")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><ArrowLeft size={22} /></button><H size={24}>Advocacy</H></div>
     {meView}
   </div>);
 }
@@ -2459,7 +2652,7 @@ function FerrimanGallwey({ value, onChange, threshold = 4 }) {
           padding: "5px 8px", borderRadius: 10, background: on ? C.lilac : "transparent" }}>
           <span style={{ flex: 1, fontFamily: bodyf, fontSize: 13, color: on ? C.onLilac : C.inkVar }}>{label}</span>
           {Array.from({ length: FG_MAX + 1 }, (_, n) => (
-            <button key={n} onClick={() => { setFocus(k); set(k, n); }} title={FG_WORDS[n]}
+            <button key={n} data-demo={`fg:${k}:${n}`} onClick={() => { setFocus(k); set(k, n); }} title={FG_WORDS[n]}
               style={{ width: 26, height: 26, borderRadius: 8, cursor: "pointer", fontFamily: bodyf, fontSize: 12.5,
                 fontWeight: v === n ? 700 : 500, background: v === n ? C.plum : C.low,
                 color: v === n ? "#fff" : C.inkVar, border: `1px solid ${v === n ? C.plum : C.outlineVar}` }}>{n}</button>))}
@@ -2489,8 +2682,8 @@ function DiagnosisPanel({ profile, setProfile }) {
   const today = new Date().toISOString().slice(0, 10);
   return (<div>
     <div style={{ display: "flex", gap: 8 }}>
-      {[["Yes", true], ["No", false], ["Not sure", null]].map(([lbl, val]) => (
-        <button key={lbl} onClick={() => set(val)} style={{ flex: 1, padding: "11px 0", borderRadius: 12,
+      {[["Yes", true, "yes"], ["No", false, "no"], ["Not sure", null, "unsure"]].map(([lbl, val, key]) => (
+        <button key={lbl} data-demo={`dx:${key}`} onClick={() => set(val)} style={{ flex: 1, padding: "11px 0", borderRadius: 12,
           cursor: "pointer", fontFamily: bodyf, fontWeight: 600, fontSize: 14,
           background: said === val ? C.plum : C.low, color: said === val ? "#fff" : C.inkVar,
           border: `1.5px solid ${said === val ? C.plum : "transparent"}` }}>{lbl}</button>))}
@@ -2513,7 +2706,7 @@ function ConditionsPanel({ profile, setProfile, compact }) {
   return (<div style={{ display: "grid", gap: 8 }}>
     {CONDITIONS.map(([k, label, note]) => { const on = have.includes(k); return (
       <React.Fragment key={k}>
-        <button onClick={() => toggle(k)} style={{ textAlign: "left", padding: compact ? "11px 14px" : 14,
+        <button data-demo={`cond:${k}`} onClick={() => toggle(k)} style={{ textAlign: "left", padding: compact ? "11px 14px" : 14,
           borderRadius: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
           background: on ? C.lilac : C.low, border: `1.5px solid ${on ? C.plum : "transparent"}` }}>
           <span style={{ flex: 1 }}>
@@ -2590,18 +2783,37 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, s
     </Card>
     <Card style={{ marginBottom: 14 }}>
       <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 10 }}>
-        <input type="checkbox" checked={settings.sounds !== false} onChange={(e) => set("sounds", e.target.checked)}
+        <input data-demo="set:sounds" type="checkbox" checked={settings.sounds !== false} onChange={(e) => set("sounds", e.target.checked)}
           style={{ width: 18, height: 18, accentColor: C.plum }} />
         <span style={{ fontFamily: bodyf, fontSize: 15 }}>Tap sounds</span></label>
-      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.plum, width: 18, height: 18 }} /><span style={{ fontSize: 15 }}>Speak replies aloud</span></label>
+      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input data-demo="set:voice" type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.plum, width: 18, height: 18 }} /><span style={{ fontSize: 15 }}>Speak replies aloud</span></label>
     </Card>
-    <Card style={{ marginBottom: 14 }}>
+    {/* THE WAY OUT. Both modes are on for a first visit and switch themselves
+        off at the end of their own run, so nothing here ever hijacks a second
+        one — and touching the screen stops whichever is playing on the spot. */}
+    <Card demo="set:demo" style={{ marginBottom: 14 }}>
+      <Label color={C.inkVar}>Guided demo</Label>
+      <p style={{ fontSize: 12.5, color: C.inkVar, margin: "8px 0 12px", lineHeight: 1.5 }}>
+        <Word font={head} /> can show itself: the simulation drives every tab out loud, and the tutorial after it
+        points at each part of the interface. Both end on their own, and touching the screen ends them sooner.</p>
+      <label data-demo="set:sim" style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 12 }}>
+        <input type="checkbox" checked={settings.simulation !== false} onChange={(e) => set("simulation", e.target.checked)}
+          style={{ width: 18, height: 18, accentColor: C.plum, marginTop: 2 }} />
+        <span><span style={{ fontFamily: bodyf, fontSize: 15 }}>Simulation</span>
+          <span style={{ display: "block", fontSize: 12, color: C.inkVar }}>It walks through every tab and talks as it goes</span></span></label>
+      <label data-demo="set:tour" style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+        <input type="checkbox" checked={settings.tutorial !== false} onChange={(e) => set("tutorial", e.target.checked)}
+          style={{ width: 18, height: 18, accentColor: C.plum, marginTop: 2 }} />
+        <span><span style={{ fontFamily: bodyf, fontSize: 15 }}>Tutorial</span>
+          <span style={{ display: "block", fontSize: 12, color: C.inkVar }}>A guided tour of the interface, changing nothing</span></span></label>
+    </Card>
+    <Card demo="set:block" style={{ marginBottom: 14 }}>
       <Label color={C.inkVar}>Block topics — <Word font={head} /> won't ask about or use these</Label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>{Object.entries(FEATURES).map(([k, f]) => { const on = (settings.blacklist || []).includes(k); return (
-        <button key={k} onClick={() => set("blacklist", on ? settings.blacklist.filter((x) => x !== k) : [...(settings.blacklist || []), k])} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "9px 14px", borderRadius: 9999, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7, background: on ? C.rose : C.surface, color: on ? C.roseOn : C.inkVar, border: `1.5px solid ${on ? C.rose : C.outlineVar}` }}>{on ? <Lock size={13} /> : <Check size={13} color={C.outlineVar} />} {f.label}</button>); })}</div>
+        <button key={k} data-demo={`block:${k}`} onClick={() => set("blacklist", on ? settings.blacklist.filter((x) => x !== k) : [...(settings.blacklist || []), k])} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "9px 14px", borderRadius: 9999, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7, background: on ? C.rose : C.surface, color: on ? C.roseOn : C.inkVar, border: `1.5px solid ${on ? C.rose : C.outlineVar}` }}>{on ? <Lock size={13} /> : <Check size={13} color={C.outlineVar} />} {f.label}</button>); })}</div>
       <p style={{ fontSize: 11, color: C.inkVar, marginTop: 10 }}>Blocked topics vanish from your daily tracker and are never raised in conversation — enforced in-app and on the server.</p>
     </Card>
-    <Card onClick={() => setTab("advocacy")} style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
+    <Card demo="go:advocacy" onClick={() => setTab("advocacy")} style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
       <span style={{ width: 42, height: 42, borderRadius: 12, background: C.lilac, display: "grid", placeItems: "center" }}><Stethoscope size={20} color={C.plumDark} /></span>
       <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Advocacy &amp; appointment prep</div><div style={{ fontSize: 13, color: C.inkVar }}>Your talking points and the clinician view</div></div><ChevronRight size={20} color={C.outline} /></Card>
     <p style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, textAlign: "center", marginTop: 18 }}><Word font={head} /> · DECISION SUPPORT, NOT A DIAGNOSIS · PROTOTYPE</p>
