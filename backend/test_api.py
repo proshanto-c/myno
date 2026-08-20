@@ -100,6 +100,29 @@ def test_what_can_be_plotted_is_what_the_form_asks():
     assert "sexDrive" in record.extract_shape()
 
 @test
+def test_one_pooled_client_serves_every_upstream_call():
+    first = main.http()
+    assert main.http() is first, "a new client per call means a new TLS handshake per call"
+    assert first.is_closed is False
+
+@test
+def test_shutdown_closes_the_client_and_every_background_task():
+    # a fresh app instance so we can watch its whole lifecycle
+    with TestClient(main.app):
+        client_during = main.http()
+        assert client_during.is_closed is False
+    assert client_during.is_closed is True, "the pooled client outlived the app"
+    assert not main._tasks, f"background tasks left running: {main._tasks}"
+
+@test
+def test_background_work_is_tracked_so_it_can_be_stopped():
+    import inspect
+    src = inspect.getsource(main)
+    # every long-lived task goes through track(); a bare create_task is one
+    # nobody can cancel at shutdown
+    assert src.count("asyncio.create_task(") == 1, "only track() should create tasks"
+
+@test
 def test_healthz():
     body = client.get("/healthz").json()
     assert body["status"] == "ok" and "claude_cache" in body

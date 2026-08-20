@@ -1526,21 +1526,6 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const [flash, setFlash] = useState({}); const timers = useRef({});
   const [insOn, setInsOn] = useState(true); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
   const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false); const [spoken, setSpoken] = useState({});  // schema fields Tawazzun heard from speech
-  const [litOn, setLitOn] = useState(false); const [lit, setLit] = useState(null);  // opt-in literature-review insights
-  const insRef = useRef(false); useEffect(() => { insRef.current = insOn; }, [insOn]);
-  useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
-  // When the user turns Literature on, pull research-backed items (poll while generating).
-  useEffect(() => {
-    if (!litOn) return; const pid = settings.patientId; if (!pid) return;
-    let stop = false, tries = 0; const b = (settings.backendUrl || "/api").replace(/\/$/, "");
-    const load = async () => {
-      try { const r = await fetch(`${b}/patients/${pid}/suggestions`); if (!r.ok || stop) return; const j = await r.json();
-        if (stop) return; setLit(j.suggestions || []);
-        if ((j.refreshing || !(j.suggestions || []).length) && tries < 15) { tries++; setTimeout(load, 6000); }
-      } catch (e) { }
-    };
-    load(); return () => { stop = true; };
-  }, [litOn, settings.patientId]);
 
   // Live insights run in the BACKGROUND (mic stays enabled) — they can take a
   // while, so they never block the conversation.
@@ -1707,31 +1692,6 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const cats = e.categories || [];
   // Literature → form: research-backed trackers the user can add; each is saved
   // as a category on the entry, so it flows into the tracker, trends and JSON.
-  const EVL = { Strong: [C.lilac, C.onLilac], Emerging: [C.rose, C.roseOn], Early: [C.container, C.inkVar] };
-  const litKey = (s) => "lit_" + String(s.tracker || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  const catVal = (key) => { const c = (e.categories || []).find((x) => x.key === key); return c && c.scale ? c.scale.value : undefined; };
-  const setLitCat = (s, v) => {
-    const key = litKey(s); const cats = (eRef.current.categories || []).slice();
-    const cat = { key, label: s.tracker, value: `${v}/10`, scale: { value: v, max: 10 } };
-    const idx = cats.findIndex((c) => c.key === key); if (idx >= 0) cats[idx] = cat; else cats.push(cat);
-    const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
-  };
-
-  // Remove a single tracker category (literature-based or Tawazzun-built).
-  const removeCat = (key) => {
-    const cats = (eRef.current.categories || []).filter((c) => c.key !== key);
-    const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
-  };
-  // Toggling Literature off also clears the literature-based categories it added.
-  const toggleLit = () => {
-    const nv = !litOn; setLitOn(nv);
-    if (!nv) {
-      const cats = (eRef.current.categories || []).filter((c) => !String(c.key).startsWith("lit_"));
-      if (cats.length !== (eRef.current.categories || []).length) {
-        const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
-      }
-    }
-  };
 
   const dayBlock = (
     <div>
@@ -1812,19 +1772,6 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
           <Label color={C.inkVar}>{g.group}</Label>
           <div style={{ marginTop: 4 }}>{g.fields.map(field)}</div>
         </div>))}
-        {litOn && (<div style={{ marginBottom: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Microscope size={14} color={C.plum} /><Label color={C.inkVar}>From the literature · research-backed</Label></div>
-          {(lit === null || lit.length === 0) ? <p style={{ fontSize: 12, color: C.outline, marginTop: 6 }}>Scanning recent PMOS research…</p> : (
-            <div style={{ marginTop: 4 }}>{lit.slice(0, 8).map((s, i) => { const key = litKey(s); const v = catVal(key); const [bg, fg] = EVL[s.evidence] || [C.container, C.inkVar]; return (
-              <div key={i} style={{ padding: "10px 0", borderTop: i ? `1px solid ${C.high}` : "none" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: bodyf, fontSize: 14, color: C.ink }}>{s.tracker}<span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 9, padding: "2px 6px", borderRadius: 9999, background: bg, color: fg }}>{s.evidence}</span></span>
-                  <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: v == null ? C.outline : C.plum }}>{v == null ? "—" : `${v}/10`}</span>
-                </div>
-                <p style={{ fontSize: 11.5, color: C.outline, lineHeight: 1.45, margin: "3px 0 6px" }}>{s.explanation} <a href={s.read_more} target="_blank" rel="noopener noreferrer" style={{ color: C.plum, fontWeight: 600 }}>research →</a></p>
-                <Slider value={v ?? 0} max={10} onChange={(val) => setLitCat(s, val)} />
-              </div>); })}</div>)}
-        </div>)}
         <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
           <Pill variant="soft" onClick={() => setModal(false)} style={{ flex: 1 }}>Keep talking</Pill>
           <Pill onClick={() => { persist(e); saveToDb(e); setSaved(true); setModal(false); if (setTab) setTab("home"); }} style={{ flex: 1 }}><Check size={16} /> {saved ? "Saved" : "Done"}</Pill>
@@ -1840,7 +1787,6 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
         <PersonalityPicker value={settings.personality} onChange={(p) => setSettings((s) => ({ ...s, personality: p }))} />
         <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
-        <Pill variant={litOn ? "filled" : "outline"} onClick={toggleLit} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><Microscope size={15} /> Literature</Pill>
       </div>
     </div>
     <p style={{ color: C.inkVar, marginBottom: 18 }}>Just talk — <Brand /> listens, talks back, and builds your personal tracker as you go.</p>

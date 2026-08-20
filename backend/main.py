@@ -109,6 +109,31 @@ with engine.begin() as _conn:
 
 # ---------------------------------------------------------------- app
 app = FastAPI(title="Tawazzun backend")
+
+# ----- one client for everything upstream ------------------------------------
+# A client per request means a fresh TCP and TLS handshake to api.anthropic.com
+# every time, and a socket left in TIME_WAIT after each. One pooled client keeps
+# connections alive between calls and is closed on shutdown — along with any
+# request still in flight, so nothing outlives the process that started it.
+_http: "httpx.AsyncClient | None" = None
+_tasks: "set[asyncio.Task]" = set()
+
+def http() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10,
+                                keepalive_expiry=90.0),
+        )
+    return _http
+
+def track(coro) -> asyncio.Task:
+    """A background task the shutdown hook knows about."""
+    task = asyncio.create_task(coro)
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+    return task
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 FEATURES = {  # feature key -> human label + which log fields it governs
@@ -428,7 +453,20 @@ async def _suggestions_daily_loop():
 
 @app.on_event("startup")
 async def _startup():
-    asyncio.create_task(_suggestions_daily_loop())
+    track(_suggestions_daily_loop())
+
+@app.on_event("shutdown")
+async def _shutdown():
+    """Close what we opened: every background task, then the pooled client."""
+    for task in list(_tasks):
+        task.cancel()
+    if _tasks:
+        await asyncio.gather(*list(_tasks), return_exceptions=True)
+    _tasks.clear()
+    global _http
+    if _http is not None and not _http.is_closed:
+        await _http.aclose()
+    _http = None
 
 # ----- advocacy report ("GP visit prep"): match a curated advocacy bank against
 # the patient's DB-derived metrics, then have Claude personalize the framing.
@@ -619,7 +657,7 @@ async def get_suggestions(pid: int):
     sugg = p.suggestions or []; at = p.suggestions_at; s.close()
     stale = (at is None) or (dt.datetime.utcnow() - at > SUGG_TTL)
     if not sugg or stale:
-        asyncio.create_task(_refresh_suggestions(pid))
+        track(_refresh_suggestions(pid))
         return {"suggestions": sugg, "refreshing": True}
     return {"suggestions": sugg, "refreshing": False, "generatedAt": at.isoformat()}
 
@@ -716,15 +754,17 @@ async def claude(system: str, messages: list, max_tokens=900) -> str:
     _cache.pop(key, None)               # expired
 
     async def _ask() -> str:
-        async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
-            if r.status_code >= 400:
-                # Surface Claude's own reason (bad key, low credit balance, rate limit)
-                # instead of a bare status code — it lands in the log and in the UI.
-                try: why = r.json().get("error", {}).get("message", "")
-                except Exception: why = ""
-                raise HTTPException(502, f"Claude API {r.status_code}: {why or r.text[:200]}")
-            data = r.json()
+        try:
+            r = await http().post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Couldn't reach the Claude API: {e}")
+        if r.status_code >= 400:
+            # Surface Claude's own reason (bad key, low credit balance, rate limit)
+            # instead of a bare status code — it lands in the log and in the UI.
+            try: why = r.json().get("error", {}).get("message", "")
+            except Exception: why = ""
+            raise HTTPException(502, f"Claude API {r.status_code}: {why or r.text[:200]}")
+        data = r.json()
         text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
         # only successful replies are cached; errors stay retryable
         _cache[key] = (dt.datetime.utcnow() + CACHE_TTL, text)
@@ -733,14 +773,18 @@ async def claude(system: str, messages: list, max_tokens=900) -> str:
             _cache.popitem(last=False)
         return text
 
+    # One request per identical ask, however many callers are waiting. Shielded
+    # so a caller who navigates away doesn't cancel the answer the others are
+    # still waiting for; the task is tracked, so shutdown can end it.
     task = _inflight.get(key)
-    if task is None:
-        task = asyncio.create_task(_ask())
+    if task is None or task.done():
+        task = track(_ask())
         _inflight[key] = task
     try:
-        return await task
+        return await asyncio.shield(task)
     finally:
-        _inflight.pop(key, None)
+        if _inflight.get(key) is task and task.done():
+            _inflight.pop(key, None)
 
 # ----- voice → structured daily-log fields + a spoken reply (server-side model;
 # no key in the browser). Tawazzun talks back: acknowledges, and asks ONE clarifying
@@ -872,7 +916,10 @@ def _avg_cycle(s, pid):
 # ----- TTS proxy (single origin for the browser)
 @app.post("/tts")
 async def tts(body: dict):
-    async with httpx.AsyncClient(timeout=60) as c:
-        r = await c.post(f"{TTS_URL}/tts", json={"text": body.get("text", "")})
-        r.raise_for_status()
-        return Response(content=r.content, media_type="audio/wav")
+    try:
+        r = await http().post(f"{TTS_URL}/tts", json={"text": body.get("text", "")})
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Couldn't reach the speech server: {e}")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"Speech server {r.status_code}")
+    return Response(content=r.content, media_type="audio/wav")
