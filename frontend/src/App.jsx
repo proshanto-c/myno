@@ -969,63 +969,38 @@ function arcPath(cx, cy, rO, rI, a0, a1) {
   const [x0, y0] = pt(rO, a0), [x1, y1] = pt(rO, a1), [x2, y2] = pt(rI, a1), [x3, y3] = pt(rI, a0);
   return `M${x0.toFixed(2)},${y0.toFixed(2)} A${rO},${rO} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} L${x2.toFixed(2)},${y2.toFixed(2)} A${rI},${rI} 0 ${large} 0 ${x3.toFixed(2)},${y3.toFixed(2)} Z`;
 }
-const PHASE_COLORS = [["Menstrual", C.roseDeep], ["Follicular", C.lilacDim], ["Ovulatory", "#e6be8a"], ["Luteal", C.plumC]];
-function CyclePhaseRing({ dayN, cycleLen }) {
-  const day = dayN == null ? null : Math.max(1, Math.round(dayN));
-  // A cycle that has run past the average isn't back at the start: the ring
-  // stretches to hold it, rather than clamping the marker to twelve o'clock and
-  // reporting a day the person is not on.
-  const base = cycleLen && cycleLen > 0 ? Math.round(cycleLen) : 28;
-  // +2 so a late cycle's marker sits near the end of the ring instead of
-  // landing back on twelve o'clock, which reads as "you just started"
-  const cyc = Math.max(base, (day || 0) + 2);
-  const ovuMid = Math.max(8, cyc - 14);
-  const segs = [
-    { name: "Menstrual", a: 0, b: Math.min(5, cyc), color: C.roseDeep },
-    { name: "Follicular", a: Math.min(5, cyc), b: Math.max(6, ovuMid - 2), color: C.lilacDim },
-    { name: "Ovulatory", a: Math.max(6, ovuMid - 2), b: Math.min(cyc, ovuMid + 2), color: "#e6be8a" },
-    { name: "Luteal", a: Math.min(cyc, ovuMid + 2), b: cyc, color: C.plumC },
-  ].filter((s) => s.b > s.a);
-  const S = 196, cx = S / 2, cy = S / 2, rO = 86, rI = 62, gap = 0.03;
-  const ang = (d) => (d / cyc) * 2 * Math.PI;
-  const phase = day == null ? null : (segs.find((s) => day >= s.a && day < s.b) || segs[segs.length - 1]);
-  const mAng = day == null ? 0 : ang(day); const mr = (rO + rI) / 2;
-  const mx = cx + mr * Math.sin(mAng), my = cy - mr * Math.cos(mAng);
+// WHERE YOU ARE, ON YOUR OWN SCALE.
+//
+// The ring this replaces painted four named phases, placing ovulation at
+// cycle length minus fourteen. For cycles that run 24 to 41 days that is a
+// textbook assumption, not something these logs can support — and it was the
+// one claim on the screen the app couldn't stand behind.
+//
+// So the shaded arc is where THEIR periods have actually started. A regular
+// cycle draws a narrow band; an irregular one draws a wide one, and the width
+// is the finding rather than a number to read.
+function CycleWindowRing({ day, bleed, avg, lo, hi }) {
+  const S = 196, cx = S / 2, cy = S / 2, rO = 84, rI = 62;
+  const span = Math.max((hi || 0) + 3, (day || 0) + 2, (avg || 28) + 3);
+  const ang = (d) => (d / span) * 2 * Math.PI;
+  const arc = (a0, a1, ro, ri, fill, op) => (
+    <path d={arcPath(cx, cy, ro, ri, Math.max(0.001, a0), Math.min(2 * Math.PI - 0.001, a1))} fill={fill} fillOpacity={op} />);
+  const mr = (rO + rI) / 2;
+  const mx = cx + mr * Math.sin(ang(day || 0)), my = cy - mr * Math.cos(ang(day || 0));
   return (<svg viewBox={`0 0 ${S} ${S}`} width="100%" style={{ maxWidth: 216, display: "block" }}>
-    {segs.map((s, i) => { const active = phase && phase.name === s.name; return (
-      <path key={i} d={arcPath(cx, cy, rO, rI, ang(s.a) + gap, ang(s.b) - gap)} fill={s.color} fillOpacity={active ? 0.85 : 0.3} style={{ transition: "fill-opacity .5s ease" }} />); })}
-    {day != null && <circle cx={mx} cy={my} r={7} fill="#fff" stroke={C.plum} strokeWidth={3} />}
-    <text x={cx} y={cy - 5} textAnchor="middle" style={{ fontFamily: head, fontWeight: 700, fontSize: 30, fill: C.ink }}>{day == null ? "—" : `Day ${day}`}</text>
-    <text x={cx} y={cy + 16} textAnchor="middle" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, fill: C.inkVar }}>{phase ? phase.name : "Start tracking"}</text>
-  </svg>);
-}
-
-// The cycle you are in right now, as a single stretch of days: where day 1 was,
-// how much of it has been bleeding, where you are today, and where your own
-// average says the next one lands. The ghost past the marker is the part that
-// hasn't happened — it fills in as the days pass, and overshoots visibly when
-// a period is late, which is the thing worth noticing.
-function CurrentCycleBar({ cycle, avg, hi }) {
-  if (!cycle) return null;
-  const W = 300, H = 44, padL = 8, padR = 8, barY = 16, barH = 15;
-  const track = W - padL - padR;
-  const maxDays = Math.max(cycle.days + 3, (avg || 0) + 5, (hi || 35) + 3);
-  const x = (d) => padL + (d / maxDays) * track;
-  const day = cycle.days;
-  return (<svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
-    <rect x={padL} y={barY} width={track} height={barH} rx={barH / 2} fill={C.low} />
-    <rect x={padL} y={barY} width={Math.max(4, x(day) - padL)} height={barH} rx={barH / 2} fill={C.high} />
-    {/* past your own average the bar deepens: being late is something you see
-        happening, not a sentence you have to read */}
-    {avg > 0 && day > avg && <rect x={x(avg)} y={barY} width={x(day) - x(avg)} height={barH} fill={C.roseDeep} />}
-    <rect x={padL} y={barY} width={Math.max(5, x(cycle.bleed) - padL)} height={barH} rx={barH / 2} fill={C.roseOn} />
-    {avg > 0 && (<g>
-      <line x1={x(avg)} y1={barY - 6} x2={x(avg)} y2={barY + barH + 6} stroke={C.plum} strokeWidth={1.2} strokeDasharray="2 2.5" />
-      <text x={x(avg)} y={barY + barH + 13} textAnchor="middle" style={{ fontSize: 7, fill: C.plum }}>your average</text>
-    </g>)}
-    <circle cx={x(day)} cy={barY + barH / 2} r={6} fill="#fff" stroke={C.plum} strokeWidth={2.5} />
-    <text x={x(day)} y={barY - 7} textAnchor="middle" style={{ fontFamily: head, fontWeight: 700, fontSize: 9, fill: C.plum }}>day {day}</text>
-    <text x={padL} y={H - 2} style={{ fontSize: 7, fill: C.outline }}>day 1</text>
+    <circle cx={cx} cy={cy} r={(rO + rI) / 2} fill="none" stroke={C.low} strokeWidth={rO - rI} />
+    {lo != null && hi != null && hi > lo && arc(ang(lo), ang(hi), rO + 9, rO + 3, C.lilac, 0.85)}
+    {day > 0 && arc(0, ang(day), rO, rI, C.high, 1)}
+    {bleed > 0 && arc(0, ang(bleed), rO, rI, C.roseOn, 1)}
+    {/* the average sits outside the ring: a tick, not a line through the middle */}
+    {avg > 0 && (<line x1={cx + (rO + 1) * Math.sin(ang(avg))} y1={cy - (rO + 1) * Math.cos(ang(avg))}
+      x2={cx + (rO + 11) * Math.sin(ang(avg))} y2={cy - (rO + 11) * Math.cos(ang(avg))}
+      stroke={C.plum} strokeWidth={1.5} strokeDasharray="2 2.5" />)}
+    <circle cx={mx} cy={my} r={7} fill="#fff" stroke={C.plum} strokeWidth={3} />
+    <text x={cx} y={cy - 2} textAnchor="middle" style={{ fontFamily: head, fontWeight: 700, fontSize: 32, fill: C.ink }}>
+      {day == null ? "—" : `Day ${day}`}</text>
+    <text x={cx} y={cy + 18} textAnchor="middle" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12.5, fill: C.inkVar }}>
+      {avg ? `of about ${avg}` : "start tracking"}</text>
   </svg>);
 }
 
@@ -1070,6 +1045,9 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   const cycles = cyclesFrom(logs);
   const current = cycles.length ? cycles[cycles.length - 1] : null;
   const avg = ins.avgCycleDays ? Math.round(ins.avgCycleDays) : null;
+  // the arc: the shortest and longest cycle they have actually had
+  const past = cycles.filter((c) => !c.open).map((c) => c.days);
+  const span = past.length >= 2 ? [Math.min(...past), Math.max(...past)] : [null, null];
   const cband = assessment?.cycles?.band;
   const cycleNote = (() => {
     if (!current) return "Mark a period on the calendar and this fills in.";
@@ -1087,15 +1065,20 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
     <Card style={{ padding: 20, boxShadow: SH_SM }}>
       <Label>This cycle</Label>
       {/* the ring, the bar and the note all read the same current cycle */}
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}><CyclePhaseRing dayN={current?.days} cycleLen={avg} /></div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 4 }}>
-        {PHASE_COLORS.map(([n, col]) => (<span key={n} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: col, opacity: 0.65 }} /> {n}</span>))}
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}>
+        <CycleWindowRing day={current?.days} bleed={current?.bleed} avg={avg} lo={span[0]} hi={span[1]} /></div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 6 }}>
+        {[["bleeding", C.roseOn], ["so far", C.high], ["when yours have started", C.lilac]].map(([n, col]) => (
+          <span key={n} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: col }} /> {n}</span>))}
       </div>
       {current && (<div style={{ marginTop: 14 }}>
         <CurrentCycleBar cycle={current} avg={avg} hi={cband?.longDays} />
       </div>)}
       <div style={{ textAlign: "center", fontSize: 12.5, lineHeight: 1.5, marginTop: 8,
         color: late ? C.roseOn : C.inkVar }}>{cycleNote}</div>
+      {span[0] != null && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 4 }}>
+        Your last {past.length} started between day {span[0]} and day {span[1]}.</div>}
     </Card>);
   const recordCTA = (
     <button onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
@@ -1926,8 +1909,6 @@ function InsightsScreen({ ins, logs, settings, wide, assessment }) {
       <div style={{ background: C.surface, borderRadius: 14, padding: 16 }}><Microscope size={18} color={C.plum} /><div style={{ fontFamily: head, fontWeight: 700, fontSize: 24, marginTop: 8 }}>{ins.daysSinceSeverePain} days</div><div style={{ fontSize: 12, color: C.inkVar }}>since last high-pain episode</div></div>
       <div style={{ background: C.surface, borderRadius: 14, padding: 16 }}><Heart size={18} color={C.roseOn} /><div style={{ fontFamily: head, fontWeight: 700, fontSize: 24, marginTop: 8 }}>{ins.loggedDays} days</div><div style={{ fontSize: 12, color: C.inkVar }}>consistent logging</div></div>
     </div></Card>);
-  const disclaimer = (<div style={{ padding: 14, background: C.surface, borderRadius: 14, fontSize: 12, color: C.inkVar, lineHeight: 1.5, display: "flex", gap: 8 }}>
-    <Info size={15} color={C.plum} style={{ flexShrink: 0, marginTop: 2 }} />These are associations from your own logs, not certainties — and a roadmap feature uses federated learning to sharpen them across the community while your raw data stays on your device.</div>);
   const SUBVIEWS = [["insights", "Insights"], ["track", "What to track"]];
   const subNav = (<div style={{ display: "inline-flex", gap: 4, padding: 4, background: C.container, borderRadius: 9999, marginBottom: 18 }}>
     {SUBVIEWS.map(([id, lbl]) => { const on = view === id; return (
@@ -1962,28 +1943,25 @@ function InsightsScreen({ ins, logs, settings, wide, assessment }) {
   if (wide) return (<div>
     <H size={28} style={{ marginBottom: 16 }}>Insights</H>{subNav}
     {view === "track" ? (
-      <div style={{ maxWidth: 760 }}>{suggestionsCard}<div style={{ marginTop: 20 }}>{disclaimer}</div></div>
+      <div style={{ maxWidth: 760 }}>{suggestionsCard}</div>
     ) : (<>
       {stack([summaryCard, statsLoading && loadingCard, highlights], 18)}
       {packed(readCards)}
       {chartHeading}
       {stack([explorerCard], 18)}
       {grid([trendsCard], "1fr")}
-      <div style={{ marginTop: 20 }}>{disclaimer}</div>
-    </>)}
+          </>)}
   </div>);
 
   return (<div>
     <H size={28} style={{ margin: "8px 0 14px" }}>Insights</H>{subNav}
     {view === "track" ? (<>
       {suggestionsCard}
-      <div style={{ marginTop: 16 }}>{disclaimer}</div>
-    </>) : (<>
+          </>) : (<>
       {stack([summaryCard, statsLoading && loadingCard, highlights, ...readCards], 18)}
       {chartHeading}
       {stack(chartCards, 18)}
-      <div style={{ marginTop: 16 }}>{disclaimer}</div>
-    </>)}
+          </>)}
   </div>);
 }
 function Sparkline({ series }) {
