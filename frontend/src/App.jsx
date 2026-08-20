@@ -1706,6 +1706,10 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
 
   const [labOpen, setLabOpen] = useState(false);
   const standCard = (<>
+    {/* opened from the cog below — it leads, so the effect of an edit is
+        visible in the criteria and the indicator right under it */}
+    {labOpen && rules && <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules}
+      labRules={labRules} setLabRules={setLabRules} open={labOpen} setOpen={setLabOpen} />}
     <Card style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Label>The three criteria</Label>
@@ -1720,8 +1724,6 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
       ? <DoctorIndicator assessment={assessment} />
       : <Card style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center", color: C.inkVar, fontSize: 14 }}>
           <Loader2 size={15} className="spin" color={C.outline} /> Checking your tracked data against the criteria…</Card>}
-    {labOpen && rules && <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules}
-      labRules={labRules} setLabRules={setLabRules} open={labOpen} setOpen={setLabOpen} />}
   </>);
 
   // FOR ME — the advocacy report (data-driven talking points)
