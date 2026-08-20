@@ -57,7 +57,7 @@ class Patient(Base):
     blacklist = Column(JSON, default=list)          # blocked feature keys
     adapt_state = Column(JSON, default=dict)        # inferred prefs (tone, length, distress)
     pmos_diagnosed = Column(Boolean, default=False)  # a clinician has named it
-    pmos_diagnosed_year = Column(Integer, nullable=True)
+    pmos_diagnosed_on = Column(String, default="")   # ISO date a clinician named it
     conditions = Column(JSON, default=list)         # already-diagnosed conditions (settings)
     mfg = Column(JSON, default=dict)                # modified Ferriman-Gallwey, per body area
     drugs = Column(JSON, default=list)              # current drug therapy (home)
@@ -112,7 +112,7 @@ with engine.begin() as _conn:
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions JSON DEFAULT '[]'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions_at TIMESTAMP"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS pmos_diagnosed BOOLEAN DEFAULT FALSE"))
-    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS pmos_diagnosed_year INTEGER"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS pmos_diagnosed_on VARCHAR DEFAULT ''"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS conditions JSON DEFAULT '[]'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS mfg JSON DEFAULT '{}'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS drugs JSON DEFAULT '[]'::json"))
@@ -142,7 +142,7 @@ class PatientIn(BaseModel):
     family_history: bool = False; acne: bool = False; skin_darkening: bool = False
     weight_gain: bool = False; goals: list = []; integrations: list = []
     conditions: list = []; mfg: dict = {}; drugs: list = []
-    pmos_diagnosed: bool = False; pmos_diagnosed_year: int | None = None
+    pmos_diagnosed: bool = False; pmos_diagnosed_on: str = ""
 
 def patient_dict(p: Patient):
     return {c.name: getattr(p, c.name) for c in p.__table__.columns}

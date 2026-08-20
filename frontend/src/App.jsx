@@ -707,7 +707,7 @@ function Triad({ axes }) {
 // ============================================================================
 //  APP
 // ============================================================================
-const BLANK = { onboarded: false, name: "", age: "", menarcheAge: "", heightCm: "", weightKg: "", familyHistory: false, acne: false, skinDarkening: false, weightGain: false, goals: [], integrations: [], conditions: [], mfg: {}, drugs: [], pmosDiagnosed: null, pmosDiagnosedYear: "" };
+const BLANK = { onboarded: false, name: "", age: "", menarcheAge: "", heightCm: "", weightKg: "", familyHistory: false, acne: false, skinDarkening: false, weightGain: false, goals: [], integrations: [], conditions: [], mfg: {}, drugs: [], pmosDiagnosed: null, pmosDiagnosedOn: "" };
 
 function useViewport() {
   const [w, setW] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
@@ -761,7 +761,7 @@ export default function App() {
       skin_darkening: !!profile.skinDarkening, weight_gain: !!profile.weightGain,
       goals: profile.goals || [], integrations: profile.integrations || [],
       conditions: profile.conditions || [], mfg: profile.mfg || {}, drugs: profile.drugs || [],
-      pmos_diagnosed: profile.pmosDiagnosed === true, pmos_diagnosed_year: num(profile.pmosDiagnosedYear),
+      pmos_diagnosed: profile.pmosDiagnosed === true, pmos_diagnosed_on: profile.pmosDiagnosedOn || "",
     };
     let stale = false;
     const t = setTimeout(() => {
@@ -1093,14 +1093,20 @@ function CycleCalendar({ logs, onSet }) {
   const todayD = isThisMonth ? now.getDate() : null;
   const periodSet = new Set(logs.filter((l) => l.period).map((l) => l.date));
   const marked = (d) => periodSet.has(iso(d));
-  const step = (n) => { setAnchor(null); setMonth(({ y: yy, m: mm }) => {
-    const d = new Date(yy, mm + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; }); };
+  // There is nothing to log in the future, so the calendar stops at this month.
+  const step = (n) => {
+    if (n > 0 && isThisMonth) return;
+    setAnchor(null);
+    setMonth(({ y: yy, m: mm }) => { const d = new Date(yy, mm + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+  };
+  const future = (d) => isThisMonth && d > todayD;
   const span = (a, b) => {
-    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    const cap = (d) => (isThisMonth ? Math.min(d, todayD) : d);
+    const [lo, hi] = a <= b ? [cap(a), cap(b)] : [cap(b), cap(a)];
     return Array.from({ length: hi - lo + 1 }, (_, i) => iso(lo + i));
   };
   const tap = (d) => {
-    if (!onSet) return;
+    if (!onSet || future(d)) return;
     if (skipClick.current) { skipClick.current = false; return; }
     if (!range) return onSet([iso(d)], !periodSet.has(iso(d)));
     if (!anchor) return setAnchor(d);
@@ -1112,7 +1118,7 @@ function CycleCalendar({ logs, onSet }) {
   // flows under the cursor as you go rather than appearing a day at a time.
   // Mouse only: claiming touch drags here would stop the page scrolling.
   const startDrag = (d) => (ev) => {
-    if (!onSet || range || ev.pointerType !== "mouse") return;
+    if (!onSet || range || future(d) || ev.pointerType !== "mouse") return;
     setDrag({ from: d, value: !periodSet.has(iso(d)) });
     setHover(d);
   };
@@ -1169,9 +1175,10 @@ function CycleCalendar({ logs, onSet }) {
       : `Last period ${n > 1 ? `${pretty(a)} – ${pretty(b)}` : pretty(a)} · ${n} day${n > 1 ? "s" : ""}`;
     return gapDays ? `${head} · ${gapDays} days after the one before` : head;
   })();
-  const navBtn = (dir, Ico) => (
-    <button onClick={() => step(dir)} style={{ background: "none", border: "none", cursor: "pointer", color: C.plum,
-      display: "grid", placeItems: "center", padding: 4 }}><Ico size={16} /></button>);
+  const navBtn = (dir, Ico) => { const off = dir > 0 && isThisMonth; return (
+    <button onClick={() => step(dir)} disabled={off} title={off ? "This is the current month" : undefined}
+      style={{ background: "none", border: "none", cursor: off ? "default" : "pointer",
+        color: off ? C.outlineVar : C.plum, display: "grid", placeItems: "center", padding: 4 }}><Ico size={16} /></button>); };
   return (<div>
     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
       {navBtn(-1, ChevronLeft)}
@@ -1187,7 +1194,7 @@ function CycleCalendar({ logs, onSet }) {
       {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.inkVar }}>{d}</div>))}</div>
     <div onPointerLeave={() => !drag && setHover(null)}
       style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", columnGap: 0, rowGap: 2 }}>{cells.map((d, i) => {
-      const isToday = d === todayD, isPeriod = d && shown(d);
+      const isToday = d === todayD, isPeriod = d && shown(d), isFuture = d && future(d);
       const isDraft = d && isPeriod && inPreview(d) && !marked(d);
       // One bleed is drawn as one capsule: days that touch are joined, so the
       // rounded ends are where it started and where it stopped. A lone day is
@@ -1202,15 +1209,16 @@ function CycleCalendar({ logs, onSet }) {
           borderRadius: `${linkPrev ? 0 : 17}px ${linkNext ? 0 : 17}px ${linkNext ? 0 : 17}px ${linkPrev ? 0 : 17}px`,
           background: isDraft ? C.roseDeep : C.roseOn,
           left: linkPrev ? -1 : "calc(50% - 17px)", right: linkNext ? -1 : "calc(50% - 17px)" }} />}
-        {d && <span onClick={() => tap(d)} className={onSet ? "cal-day" : undefined}
-          onPointerDown={startDrag(d)} onPointerEnter={() => setHover(d)}
+        {d && <span onClick={() => tap(d)} className={onSet && !isFuture ? "cal-day" : undefined}
+          onPointerDown={startDrag(d)} onPointerEnter={() => !isFuture && setHover(d)}
           style={{ width: 34, height: 34, borderRadius: "50%", display: "grid",
             placeItems: "center", fontFamily: bodyf, fontSize: 14, fontWeight: isToday || isPeriod ? 700 : 500,
-            cursor: onSet ? "pointer" : "default", userSelect: "none", position: "relative",
-            background: isPeriod ? "transparent" : C.surface,
+            cursor: onSet && !isFuture ? "pointer" : "default", userSelect: "none", position: "relative",
+            background: isPeriod ? "transparent" : isFuture ? "transparent" : C.surface,
             border: isToday ? `2px solid ${isPeriod ? "#fff" : C.plum}`
-                            : isPeriod ? "2px solid transparent" : `1px solid ${C.outlineVar}`,
-            color: isPeriod ? "#fff" : isToday ? C.plum : C.ink }}>{d}</span>}
+                            : isPeriod ? "2px solid transparent"
+                            : isFuture ? "1px dashed rgba(217,199,220,0.7)" : `1px solid ${C.outlineVar}`,
+            color: isPeriod ? "#fff" : isToday ? C.plum : isFuture ? C.outlineVar : C.ink }}>{d}</span>}
         {startsRun && <span title="cycle starts" style={{ position: "absolute", top: "calc(50% + 9px)", left: "50%",
           transform: "translateX(-50%)", width: 5, height: 5, borderRadius: 9999,
           background: "rgba(255,255,255,0.95)", pointerEvents: "none" }} />}
@@ -2190,7 +2198,8 @@ function FerrimanGallwey({ value, onChange, threshold = 4 }) {
 // is set, the indicator stops screening and starts helping them prepare.
 function DiagnosisPanel({ profile, setProfile }) {
   const said = profile.pmosDiagnosed;
-  const set = (v) => setProfile({ ...profile, pmosDiagnosed: v, ...(v ? {} : { pmosDiagnosedYear: "" }) });
+  const set = (v) => setProfile({ ...profile, pmosDiagnosed: v, ...(v ? {} : { pmosDiagnosedOn: "" }) });
+  const today = new Date().toISOString().slice(0, 10);
   return (<div>
     <div style={{ display: "flex", gap: 8 }}>
       {[["Yes", true], ["No", false], ["Not sure", null]].map(([lbl, val]) => (
@@ -2199,11 +2208,11 @@ function DiagnosisPanel({ profile, setProfile }) {
           background: said === val ? C.plum : C.low, color: said === val ? "#fff" : C.inkVar,
           border: `1.5px solid ${said === val ? C.plum : "transparent"}` }}>{lbl}</button>))}
     </div>
-    {said === true && (<div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
-      <span style={{ fontFamily: bodyf, fontSize: 13.5, color: C.inkVar }}>What year?</span>
-      <input type="number" placeholder="e.g. 2021" value={profile.pmosDiagnosedYear || ""}
-        onChange={(e) => setProfile({ ...profile, pmosDiagnosedYear: e.target.value })}
-        style={{ ...input, width: 120, padding: "9px 11px", fontSize: 14 }} />
+    {said === true && (<div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+      <span style={{ fontFamily: bodyf, fontSize: 13.5, color: C.inkVar }}>When were you diagnosed?</span>
+      <input type="date" max={today} value={profile.pmosDiagnosedOn || ""}
+        onChange={(e) => setProfile({ ...profile, pmosDiagnosedOn: e.target.value })}
+        style={{ ...input, width: 170, padding: "9px 11px", fontSize: 14 }} />
     </div>)}
     {said === true && <p style={{ fontFamily: bodyf, fontSize: 12, color: C.outline, lineHeight: 1.5, marginTop: 10 }}>
       Then the app stops asking whether to get checked. Your tracking becomes what a review appointment

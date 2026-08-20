@@ -9,8 +9,11 @@
  *   docker compose build frontend
  *   BUNDLE=$(curl -sk https://localhost/ | grep -o '/assets/[^"]*\.js' | head -1)
  *   curl -sk "https://localhost$BUNDLE" -o /tmp/app-bundle.mjs
- *   docker run --rm -v /tmp:/t -v "$PWD":/w -w /t node:20-alpine \
- *     sh -c "npm i --silent jsdom && node /w/smoke.mjs /t/app-bundle.mjs"
+ *   cp smoke.mjs /tmp/ && docker run --rm -v /tmp:/t -w /t node:20-alpine \
+ *     sh -c "npm i --silent jsdom && node /t/smoke.mjs /t/app-bundle.mjs"
+ *
+ * Run it from the directory holding node_modules — node resolves imports from
+ * the script's own location, not the working directory.
  *
  * Exit 0 = it mounted, 2 = it threw on import, 3 = it rendered nothing.
  */
