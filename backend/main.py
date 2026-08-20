@@ -26,6 +26,8 @@ from sqlalchemy import (create_engine, Column, Integer, String, Boolean, Float,
                         Date, DateTime, ForeignKey, JSON, text)
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
+import criteria
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg2://myno:myno@db:5432/myno")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 TTS_URL = os.environ.get("TTS_URL", "http://tts:8001")
@@ -285,7 +287,7 @@ def _slope_per_week(ys):
         return None
     return round(sum((i - mx) * (y - my) for i, y in pts) / den * 7, 2)
 
-def _insight_summary(logs):
+def _insight_summary(logs, patient=None):
     def col(k): return [l.get(k) for l in logs if isinstance(l.get(k), (int, float))]
     hi, lo = [], []
     for i in range(1, len(logs)):
@@ -335,10 +337,11 @@ def _insight_summary(logs):
     cycle = None
     if len(gaps) >= 2:
         m = statistics.mean(gaps); sd = statistics.pstdev(gaps)
-        reg = (21 <= m <= 35 and sd <= 4)
+        # "Regular" is not decided here: criteria.py owns that word, so this
+        # label, the doctor indicator and the advocacy report always agree.
         cycle = {"meanDays": round(m, 1), "sdDays": round(sd, 1), "cv": round(sd / m * 100, 1) if m else None,
-                 "min": min(gaps), "max": max(gaps), "cycles": len(gaps) + 1, "regular": reg,
-                 "label": ("Regular" if reg else ("Long / irregular" if m > 35 else "Variable"))}
+                 "min": min(gaps), "max": max(gaps), "cycles": len(gaps) + 1,
+                 "regular": None, "label": "Cycle length recorded"}
 
     # --- linear trends (units/week) for the standard metrics ---
     trends = []
@@ -347,17 +350,24 @@ def _insight_summary(logs):
         if pw is not None and abs(pw) >= 0.05:
             trends.append({"key": k, "label": lbl, "perWeek": pw, "direction": "up" if pw > 0 else "down"})
 
-    return {
+    out = {
         "loggedDays": len(logs),
         "avgPain": _mean(col("pain")), "avgMood": _mean(col("mood")), "avgEnergy": _mean(col("energy")),
         "avgSleep": _mean(col("sleep")), "avgBrainFog": _mean(col("brainFog")), "avgSugar": _mean(col("sugar")),
         "painAfterHighSugar": _mean(hi), "painAfterLowSugar": _mean(lo),
         "painWithBloating": _mean(bloat), "painWithoutBloating": _mean(nobloat),
         "avgCycleDays": _mean(gaps), "cycleMin": (min(gaps) if gaps else None), "cycleMax": (max(gaps) if gaps else None),
+        "cycleCount": len(gaps),
         "correlations": corrs, "cycle": cycle, "trends": trends,
         "categoryTrends": cats,
         "recent": {k: [l.get(k) for l in logs[-30:]] for k in ["pain", "mood", "energy", "sleep", "brainFog"]},
     }
+    if cycle is not None:
+        verdict = criteria.assess(criteria.derive_inputs(patient, logs, out))["cycles"]
+        cycle["regular"] = None if verdict["state"] == "unknown" else verdict["state"] != "met"
+        cycle["label"] = {"met": "Irregular", "clear": "Regular", "unknown": "Not assessable"}[verdict["state"]]
+        cycle["why"] = verdict["reasons"]
+    return out
 
 @app.post("/patients/{pid}/insights")
 async def patient_insights(pid: int):
@@ -493,7 +503,7 @@ ADVOCACY_BANK = [
      "clinical_framing": "I have severe pain on {pain_severe_days_per_cycle} days during most cycles, mainly around days 1-3, and it interferes with work and daily activities.",
      "keywords_phrases": ["This level of pain is affecting my quality of life.", "I'd like this pain documented in my notes.", "I'd like to discuss pain management options beyond over-the-counter medication."],
      "questions_to_ask": ["Given this pain pattern, could we explore whether further investigation (e.g. an ultrasound) is appropriate?", "What pain management options are suitable given my other PMOS symptoms?"]},
-    {"id": "cycle_irregularity", "category": "cycle_regularity", "trigger_conditions": {"type": "threshold", "metric": "cycle_length_std_dev", "operator": ">=", "value": 7},
+    {"id": "cycle_irregularity", "category": "cycle_regularity", "trigger_conditions": {"type": "boolean", "metric": "cycles_irregular", "value": True},
      "clinical_framing": "My cycle length has varied by roughly {cycle_length_std_dev} days over the last {period_days} days, ranging from {cycle_length_min} to {cycle_length_max} days.",
      "keywords_phrases": ["I'd like this irregularity recorded as part of my history.", "This pattern has been consistent over several months, not a one-off."],
      "questions_to_ask": ["Given this irregularity, would it be appropriate to check hormone levels (e.g. LH, FSH, testosterone) or have an ultrasound?", "Could this pattern be related to PMOS, and if so, what would the next step be?"]},
@@ -597,6 +607,9 @@ def _advocacy_metrics(logs, patient):
     goals = (patient.goals or []) if patient else []
     return {
         "period_days": days,
+        # the same verdict the indicator shows, so talking points can't disagree
+        "cycles_irregular": criteria.assess(criteria.derive_inputs(
+            patient, logs, _insight_summary(logs, patient)))["cycles"]["state"] == "met",
         "cycle_length_avg": round(statistics.mean(gaps), 1) if gaps else None,
         "cycle_length_std_dev": round(statistics.pstdev(gaps), 1) if len(gaps) >= 2 else 0,
         "cycle_length_min": min(gaps) if gaps else None,
@@ -668,6 +681,35 @@ async def get_suggestions(pid: int):
         asyncio.create_task(_refresh_suggestions(pid))
         return {"suggestions": sugg, "refreshing": True}
     return {"suggestions": sugg, "refreshing": False, "generatedAt": at.isoformat()}
+
+# ----- diagnostic criteria (rules live in criteria.py; nothing here diagnoses)
+@app.get("/criteria/rules")
+def criteria_rules():
+    """The thresholds the rules read — the experiment panel renders these."""
+    return criteria.RULES
+
+@app.get("/patients/{pid}/assessment")
+def patient_assessment(pid: int):
+    """The real verdict for this patient, derived from their own logs."""
+    s = Session()
+    p = s.get(Patient, pid)
+    if not p:
+        s.close(); raise HTTPException(404, "no such patient")
+    rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
+    logs = [_log_dict(r) for r in rows]; s.close()
+    inputs = criteria.derive_inputs(p, logs, _insight_summary(logs, p))
+    return criteria.assess(inputs)
+
+class AssessIn(BaseModel):
+    inputs: dict
+    rules: Optional[dict] = None
+
+@app.post("/assess")
+def assess_hypothetical(body: AssessIn):
+    """Stateless: hand it any inputs and thresholds, get the verdict back.
+    Nothing is read from or written to the database — this drives the
+    experiment panel, where the point is to see the rules bend."""
+    return criteria.assess(body.inputs, criteria.merge_rules(body.rules))
 
 # ----- blacklist (feature blocking)
 @app.get("/patients/{pid}/blacklist")

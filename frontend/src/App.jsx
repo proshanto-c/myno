@@ -365,151 +365,11 @@ function computeInsights(logs) {
     painHi, painLo, bloatPain, noBloatPain, hairGrowthRate: mean(logs.map((l) => l.hairGrowth ? 1 : 0)), hairLossRate: mean(logs.map((l) => l.hairLoss ? 1 : 0)),
     avgPain: mean(logs.map((l) => l.pain)), avgMood: mean(logs.map((l) => l.mood)), periodsLogged: starts.length, dayN, highPainGap, loggedDays: logs.length };
 }
-// ============================================================================
-//  DIAGNOSTIC CRITERIA — rules in, a recommendation out. Never a diagnosis.
-// ============================================================================
-// Of the criteria a clinician weighs, only two can be approached from what
-// somebody tracks themselves — and one of those only as a screening signal:
-//
-//   Irregular cycles    ASSESSABLE   logged period dates + age at menarche
-//   Clinical HA         SCREENING    self-scored hirsutism, hair loss, acne
-//   Biochemical HA      CLINIC ONLY  total & free testosterone, A4, DHEAS
-//   Ovarian morphology  CLINIC ONLY  ultrasound follicle count, or serum AMH
-//
-// A diagnosis needs two of three AND thyroid, prolactin, CAH and Cushing's
-// ruled out — none of which can happen here. So nothing below concludes
-// anything about a condition. It answers one question: is this worth a visit?
-
-const RULES = {
-  // Cycle-length limits by years since menarche. Year one is deliberately
-  // absent: erratic cycles are the expected pubertal transition, not a finding.
-  cycleBands: [
-    { fromYear: 1, toYear: 3, shortDays: 21, longDays: 45, label: "1–3 years after menarche" },
-    { fromYear: 3, toYear: Infinity, shortDays: 21, longDays: 35, label: "3+ years after menarche" },
-  ],
-  singleCycleDays: 90,   // any one cycle this long stands on its own
-  minCyclesPerYear: 8,   // fewer than this in a year reads as irregular (3y+)
-  amenorrheaAge: 15,     // no first period by this age
-  mfgHirsutism: 4,       // modified Ferriman–Gallwey, self-scored 0–36
-  hirsutismDaysPct: 25,  // no mFG score? fall back to % of days hair was flagged
-  hairLossDaysPct: 10,
-  minCyclesToJudge: 2,   // below this, say "not enough yet" instead of guessing
-};
-const ADULT_BAND = RULES.cycleBands[RULES.cycleBands.length - 1];
-const bandFor = (years, R) => years == null ? null
-  : R.cycleBands.find((b) => years >= b.fromYear && years < b.toYear) || null;
-
-// ---- criterion 1 — irregular cycles ----------------------------------------
-// state: "met" (irregular by the guideline) | "clear" | "unknown" (can't judge).
-// alerts are findings that warrant a visit on their own merit, whatever the
-// rest of the picture looks like.
-function assessCycles(x, R = RULES) {
-  const reasons = [], alerts = [];
-
-  if (!x.hasMenarche) {
-    if (x.age != null && x.age >= R.amenorrheaAge)
-      alerts.push(`No first period by ${x.age} — that is assessed in its own right.`);
-    return { state: "unknown", reasons: ["No periods logged yet."], alerts };
-  }
-  // A withdrawal bleed is scheduled by the method, not by ovulation: regular by
-  // construction, and silent about the thing this criterion actually measures.
-  if (x.onContraception)
-    return { state: "unknown", alerts, reasons: ["Cycles can't be read on hormonal contraception — the bleed is scheduled by the method, not by ovulation."] };
-  if (x.yearsPostMenarche != null && x.yearsPostMenarche < 1)
-    return { state: "unknown", alerts, reasons: ["Within the first year after menarche, irregular cycles are expected."] };
-  if (!x.cyclesObserved || x.cyclesObserved < R.minCyclesToJudge)
-    return { state: "unknown", alerts, reasons: [`Only ${x.cyclesObserved || 0} full cycle(s) logged — ${R.minCyclesToJudge} are needed.`] };
-
-  // One very long cycle counts whatever the average says.
-  if (x.maxCycle != null && x.maxCycle > R.singleCycleDays)
-    alerts.push(`A ${x.maxCycle}-day cycle — anything over ${R.singleCycleDays} days is worth raising by itself.`);
-
-  const band = bandFor(x.yearsPostMenarche, R) || ADULT_BAND;
-  const notes = x.yearsPostMenarche == null ? ["Age at first period not set — using adult limits."] : [];
-
-  // Only these three count towards the criterion; notes above are context.
-  if (x.minCycle != null && x.minCycle < band.shortDays)
-    reasons.push(`Shortest cycle ${x.minCycle} days — under ${band.shortDays} (${band.label}).`);
-  if (x.maxCycle != null && x.maxCycle > band.longDays)
-    reasons.push(`Longest cycle ${x.maxCycle} days — over ${band.longDays} (${band.label}).`);
-  if (band.fromYear >= 3 && x.cyclesPerYear != null && x.cyclesPerYear < R.minCyclesPerYear)
-    reasons.push(`${x.cyclesPerYear} cycles in the past year — fewer than ${R.minCyclesPerYear}.`);
-
-  const met = reasons.length > 0;
-  return { state: met ? "met" : "clear", band, alerts,
-    reasons: [...(met ? reasons : [`Cycles ${x.minCycle}–${x.maxCycle} days sit inside ${band.shortDays}–${band.longDays} (${band.label}).`]), ...notes] };
-}
-
-// ---- criterion 2 — clinical hyperandrogenism -------------------------------
-// Self-report, so this is a screening signal and never more than that: a
-// clinician scores hirsutism by examination and confirms with bloods.
-function assessAndrogen(x, R = RULES) {
-  const reasons = [];
-  const byScore = x.mfgScore != null;
-  const hirsute = byScore ? x.mfgScore >= R.mfgHirsutism : (x.hirsutismDaysPct || 0) >= R.hirsutismDaysPct;
-  if (hirsute) reasons.push(byScore
-    ? `Self-scored hirsutism ${x.mfgScore}/36 — at or over ${R.mfgHirsutism}.`
-    : `Coarse hair growth on ${Math.round(x.hirsutismDaysPct)}% of logged days.`);
-  if ((x.hairLossDaysPct || 0) >= R.hairLossDaysPct)
-    reasons.push(`Scalp hair thinning on ${Math.round(x.hairLossDaysPct)}% of logged days.`);
-  if (x.persistentAcne) reasons.push("Persistent acne.");
-  return { state: reasons.length ? "met" : "clear", alerts: [],
-    reasons: reasons.length ? reasons : ["No hair or skin signs standing out."] };
-}
-
-// ---- the indicator ---------------------------------------------------------
-// Blunt on purpose. Alerts outrank everything; then it comes down to how many
-// of the two assessable criteria are met — and which one, since cycles are
-// measured while hair and skin signs are self-reported.
-const ADVICE = {
-  soon:    { headline: "Worth booking an appointment soon", tone: "urgent" },
-  book:    { headline: "Worth booking an appointment", tone: "elevated" },
-  mention: { headline: "Worth mentioning at your next visit", tone: "mild" },
-  none:    { headline: "Nothing here says you need an appointment", tone: "calm" },
-  unknown: { headline: "Not enough tracked yet to say", tone: "muted" },
-};
-function recommend(cycles, androgen) {
-  const alerts = [...cycles.alerts, ...androgen.alerts];
-  const met = [cycles, androgen].filter((c) => c.state === "met");
-  const why = met.flatMap((c) => c.reasons);
-  if (alerts.length) return { key: "soon", ...ADVICE.soon, why: alerts, met: met.length };
-  if (met.length === 2) return { key: "book", ...ADVICE.book, why, met: 2 };
-  if (cycles.state === "met") return { key: "book", ...ADVICE.book, why, met: 1 };
-  if (androgen.state === "met") return { key: "mention", ...ADVICE.mention, why, met: 1 };
-  if (cycles.state === "unknown") return { key: "unknown", ...ADVICE.unknown, why: cycles.reasons, met: 0 };
-  return { key: "none", ...ADVICE.none, why: [...cycles.reasons, ...androgen.reasons], met: 0 };
-}
-
-function assess(x, R = RULES) {
-  const cycles = assessCycles(x, R), androgen = assessAndrogen(x, R);
-  return { cycles, androgen, recommendation: recommend(cycles, androgen), inputs: x };
-}
-
-// What the app measured, before the lab is allowed to play with it.
-function deriveInputs(p, ins, logs = []) {
-  const age = Number(p.age) || null, menarche = Number(p.menarcheAge) || null;
-  const bc = String(logs.length ? (logs[logs.length - 1].birthControl || "") : "").trim().toLowerCase();
-  return {
-    age, hasMenarche: !!menarche,
-    yearsPostMenarche: age && menarche ? age - menarche : null,
-    onContraception: !!bc && !["none", "no", "n/a", "-"].includes(bc),
-    cyclesObserved: ins.gaps ? ins.gaps.length : 0,
-    minCycle: ins.minGap, maxCycle: ins.maxGap, avgCycle: ins.avgGap,
-    // "cycles per year" only means anything with about a year of logs behind it
-    cyclesPerYear: ins.loggedDays >= 330 ? ins.periodsLogged : null,
-    mfgScore: p.mfgScore == null || p.mfgScore === "" ? null : Number(p.mfgScore),
-    hirsutismDaysPct: (ins.hairGrowthRate || 0) * 100,
-    hairLossDaysPct: (ins.hairLossRate || 0) * 100,
-    persistentAcne: !!p.acne,
-  };
-}
-
-// The triad drawing keeps its third circle locked: morphology is not ours.
-const triadAxes = (a) => ({
-  ovulatory: { met: a.cycles.state === "met", note: a.cycles.reasons[0] || "" },
-  androgen: { met: a.androgen.state === "met", note: a.androgen.reasons[0] || "" },
-  morphology: { met: null, note: "Ultrasound or AMH — a clinician only" },
-});
+// ---- diagnostic criteria ---------------------------------------------------
+// The rules live in backend/criteria.py — thresholds, bands, the lot — so the
+// indicator, the cycle labels and the advocacy talking points cannot drift
+// apart, and the rules can be unit-tested. The client only renders verdicts.
+const API = (settings) => (settings.backendUrl || "/api").replace(/\/$/, "");
 
 // ---- UI atoms --------------------------------------------------------------
 const Card = ({ children, style, onClick }) => (
@@ -640,14 +500,18 @@ function LabToggle({ label, value, onChange, edited }) {
   </button>);
 }
 
-function CriteriaLab({ derived, lab, setLab, rules, setRules }) {
+function CriteriaLab({ derived, lab, setLab, rules, labRules, setLabRules }) {
   const [open, setOpen] = useState(false);
   const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", gap: 10, marginTop: 10 };
   const val = (k) => (k in lab ? lab[k] : derived[k]);
   const set = (k) => (v) => setLab({ ...lab, [k]: v });
-  const setRule = (k) => (v) => setRules({ ...rules, [k]: v });
-  const setBand = (i, k) => (v) => setRules({ ...rules,
-    cycleBands: rules.cycleBands.map((b, j) => (j === i ? { ...b, [k]: v } : b)) });
+  // thresholds are the server's defaults with the panel's overrides on top
+  const rule = (k) => (k in labRules ? labRules[k] : rules[k]);
+  const setRule = (k) => (v) => setLabRules({ ...labRules, [k]: v });
+  const band = (i, k) => (labRules.cycleBands?.[i]?.[k] ?? rules.cycleBands[i][k]);
+  const setBand = (i, k) => (v) => setLabRules({ ...labRules,
+    cycleBands: rules.cycleBands.map((b, j) => ({ ...(labRules.cycleBands?.[j] || {}), ...(j === i ? { [k]: v } : {}) })) });
+  if (!rules) return null;
 
   return (<Card style={{ marginBottom: 14 }}>
     <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", padding: 0, width: "100%",
@@ -655,7 +519,7 @@ function CriteriaLab({ derived, lab, setLab, rules, setRules }) {
       <Microscope size={16} color={C.plum} />
       <span style={{ fontFamily: head, fontWeight: 600, fontSize: 15 }}>Experiment with the factors</span>
       <span style={{ marginLeft: "auto", fontSize: 12, color: C.outline }}>
-        {Object.keys(lab).length ? `${Object.keys(lab).length} overridden` : "prototype"}</span>
+        {Object.keys(lab).length + Object.keys(labRules).length ? `${Object.keys(lab).length + Object.keys(labRules).length} overridden` : "prototype"}</span>
       <ChevronRight size={18} color={C.outline} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
     </button>
     {open && (<div style={{ marginTop: 6 }}>
@@ -684,20 +548,20 @@ function CriteriaLab({ derived, lab, setLab, rules, setRules }) {
       <div style={{ marginTop: 16 }}><Label color={C.inkVar}>Rule thresholds</Label></div>
       <div style={grid}>
         {rules.cycleBands.map((b, i) => (<React.Fragment key={i}>
-          <LabNumber label={`${b.label} — short`} suffix="days" value={b.shortDays} onChange={setBand(i, "shortDays")} />
-          <LabNumber label={`${b.label} — long`} suffix="days" value={b.longDays} onChange={setBand(i, "longDays")} />
+          <LabNumber label={`${b.label} — short`} suffix="days" value={band(i, "shortDays")} onChange={setBand(i, "shortDays")} edited={labRules.cycleBands?.[i]?.shortDays != null} />
+          <LabNumber label={`${b.label} — long`} suffix="days" value={band(i, "longDays")} onChange={setBand(i, "longDays")} edited={labRules.cycleBands?.[i]?.longDays != null} />
         </React.Fragment>))}
-        <LabNumber label="Single-cycle alert" suffix="days" value={rules.singleCycleDays} onChange={setRule("singleCycleDays")} />
-        <LabNumber label="Min cycles per year" value={rules.minCyclesPerYear} onChange={setRule("minCyclesPerYear")} />
-        <LabNumber label="No menarche by age" value={rules.amenorrheaAge} onChange={setRule("amenorrheaAge")} />
-        <LabNumber label="mFG hirsutism cut-off" value={rules.mfgHirsutism} onChange={setRule("mfgHirsutism")} />
-        <LabNumber label="Hair growth days cut-off" suffix="%" value={rules.hirsutismDaysPct} onChange={setRule("hirsutismDaysPct")} />
-        <LabNumber label="Cycles needed to judge" value={rules.minCyclesToJudge} onChange={setRule("minCyclesToJudge")} />
+        <LabNumber label="Single-cycle alert" suffix="days" value={rule("singleCycleDays")} onChange={setRule("singleCycleDays")} edited={"singleCycleDays" in labRules} />
+        <LabNumber label="Min cycles per year" value={rule("minCyclesPerYear")} onChange={setRule("minCyclesPerYear")} edited={"minCyclesPerYear" in labRules} />
+        <LabNumber label="No menarche by age" value={rule("amenorrheaAge")} onChange={setRule("amenorrheaAge")} edited={"amenorrheaAge" in labRules} />
+        <LabNumber label="mFG hirsutism cut-off" value={rule("mfgHirsutism")} onChange={setRule("mfgHirsutism")} edited={"mfgHirsutism" in labRules} />
+        <LabNumber label="Hair growth days cut-off" suffix="%" value={rule("hirsutismDaysPct")} onChange={setRule("hirsutismDaysPct")} edited={"hirsutismDaysPct" in labRules} />
+        <LabNumber label="Cycles needed to judge" value={rule("minCyclesToJudge")} onChange={setRule("minCyclesToJudge")} edited={"minCyclesToJudge" in labRules} />
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
         <Pill variant="outline" onClick={() => setLab({})}>Reset to my data</Pill>
-        <Pill variant="outline" onClick={() => setRules(RULES)}>Reset thresholds</Pill>
+        <Pill variant="outline" onClick={() => setLabRules({})}>Reset thresholds</Pill>
       </div>
     </div>)}
   </Card>);
@@ -759,16 +623,46 @@ export default function App() {
   useEffect(() => { if (ready) saveState({ profile, logs, settings }); }, [profile, logs, settings, ready]);
 
   const ins = useMemo(() => computeInsights(logs), [logs]);
-  // Everything the criteria see arrives through here: what we measured, with
-  // the lab's overrides laid on top so the indicator can be driven by hand.
-  const derived = useMemo(() => deriveInputs(profile, ins, logs), [profile, ins, logs]);
+  // The verdict is the backend's to give. `lab` holds hypothetical inputs and
+  // thresholds; when it is non-empty we ask /assess instead of the patient's
+  // own assessment, so the panel can bend the rules without touching the logs.
+  const [assessment, setAssessment] = useState(null);
+  const [derived, setDerived] = useState({});
+  const [rules, setRules] = useState(null);
   const [lab, setLab] = useState({});
-  const [rules, setRules] = useState(RULES);
-  const inputs = useMemo(() => ({ ...derived, ...lab }), [derived, lab]);
-  const assessment = useMemo(() => assess(inputs, rules), [inputs, rules]);
-  const axes = useMemo(() => triadAxes(assessment), [assessment]);
+  const [labRules, setLabRules] = useState({});
+
+  useEffect(() => { (async () => {
+    try {
+      const r = await fetch(`${API(settings)}/criteria/rules`);
+      if (r.ok) setRules(await r.json());
+    } catch (e) { /* the panel just stays closed */ }
+  })(); }, [settings.backendUrl]);
+
+  useEffect(() => {
+    const pid = settings.patientId; if (!pid) return;
+    const base = API(settings);
+    const hypothetical = Object.keys(lab).length || Object.keys(labRules).length;
+    const go = async () => {
+      try {
+        const r = hypothetical
+          ? await fetch(`${base}/assess`, { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ inputs: { ...derived, ...lab }, rules: labRules }) })
+          : await fetch(`${base}/patients/${pid}/assessment`);
+        if (!r.ok) return;
+        const a = await r.json();
+        setAssessment(a);
+        if (!hypothetical) setDerived(a.inputs);   // the measured baseline the lab starts from
+      } catch (e) { /* indicator stays as it was */ }
+    };
+    // debounced so typing in the lab doesn't fire a request per keystroke
+    const t = setTimeout(go, hypothetical ? 150 : 0);
+    return () => clearTimeout(t);
+  }, [settings.patientId, settings.backendUrl, logs, lab, labRules]);
+
+  const axes = assessment?.axes;
   const ctx = { profile, setProfile, logs, setLogs, settings, setSettings, ins, assessment, axes,
-    derived, lab, setLab, rules, setRules, setTab, wide };
+    derived, lab, setLab, rules, labRules, setLabRules, setTab, wide };
 
   const screen = () => (<>
     {tab === "home" && <HomeScreen {...ctx} />}
@@ -974,14 +868,14 @@ function HomeScreen({ profile, logs, setLogs, ins, assessment, setTab, wide, set
     <div><Label color={C.inkVar}>Tracked today</Label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>{chips.map((c) => (<span key={c} style={{ fontFamily: bodyf, fontSize: 13, fontWeight: 500, padding: "8px 14px", borderRadius: 9999, background: C.surface, border: `1px solid ${C.outlineVar}`, color: C.inkVar }}>{c}</span>))}</div></div>);
   // The verdict rides on the card that leads to it, so it is visible on landing.
-  const rec = assessment.recommendation, recTone = TONE[rec.tone];
+  const rec = assessment?.recommendation, recTone = rec ? TONE[rec.tone] : TONE.muted;
   const prepareCard = (
     <Card onClick={() => setTab("advocacy")} style={{ display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
       <span style={{ width: 42, height: 42, borderRadius: 12, background: recTone.bg, display: "grid", placeItems: "center", flexShrink: 0 }}>
         <recTone.Icon size={20} color={recTone.fg} /></span>
       <div style={{ flex: 1 }}>
-        <div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{rec.headline}</div>
-        <div style={{ fontSize: 13, color: C.inkVar }}>{rec.met ? `${rec.met} of 2 trackable criteria met — see what's behind it` : "See what's behind it, and prepare for a visit"}</div>
+        <div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{rec ? rec.headline : "Prepare for your appointment"}</div>
+        <div style={{ fontSize: 13, color: C.inkVar }}>{rec?.met ? `${rec.met} of 2 trackable criteria met — see what's behind it` : "See what's behind it, and prepare for a visit"}</div>
       </div>
       <ChevronRight size={20} color={C.outline} />
     </Card>);
@@ -1709,7 +1603,7 @@ function ChatScreen({ profile, settings }) {
 
 // ---- PREPARE ---------------------------------------------------------------
 // ---- ADVOCACY (Prepare + Clinician merged) ---------------------------------
-function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, rules, setRules, settings, setTab }) {
+function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, rules, labRules, setLabRules, settings, setTab }) {
   const [rep, setRep] = useState(null); const [loadingR, setLoadingR] = useState(false);
   useEffect(() => { (async () => {
     const pid = settings.patientId; if (!pid) return; setLoadingR(true);
@@ -1718,8 +1612,11 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
   })(); }, [settings.patientId]);
 
   const standCard = (<>
-    <DoctorIndicator assessment={assessment} />
-    <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules} setRules={setRules} />
+    {assessment
+      ? <DoctorIndicator assessment={assessment} />
+      : <Card style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center", color: C.inkVar, fontSize: 14 }}>
+          <Loader2 size={15} className="spin" color={C.outline} /> Checking your tracked data against the criteria…</Card>}
+    {rules && <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules} labRules={labRules} setLabRules={setLabRules} />}
     <Card style={{ marginBottom: 14 }}>
       <Label>The three criteria</Label>
       <div style={{ display: "flex", justifyContent: "center", margin: "8px 0" }}><Triad axes={axes} /></div>
