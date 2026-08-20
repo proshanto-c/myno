@@ -40,20 +40,19 @@ const Tag = ({ children, fg = T.inkMid, bg = T.raised }) => (
    Same mark as the patient app, drawn in Dalīl's ink rather than the app's
    plum, with the relationship said out loud. Someone arriving here from
    Tawaazun should recognise where they are before reading a word. */
-function Lockup({ size = 34, compact = false }) {
+function Lockup({ size = 34 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <BrandMark size={size} ring={T.accent} fill="#fff" />
-      <div style={{ lineHeight: 1.15 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
-          <span dir="rtl" style={{ fontFamily: head, fontWeight: 700,
-            fontSize: size * 0.62, color: T.ink }}>دليل</span>
-          <span style={{ fontFamily: serif, fontSize: size * 0.48, color: T.inkMid }}>Dalīl</span>
+      <div style={{ lineHeight: 1 }}>
+        <div dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: size * 0.74,
+          color: T.ink, display: "inline-block" }}>دليل</div>
+        {/* Kept small and always present: the attribution is a subscript, not a
+            second wordmark competing with the first. */}
+        <div style={{ fontFamily: sans, fontSize: Math.max(9.5, size * 0.26), color: T.inkSoft,
+          marginTop: size * 0.06, letterSpacing: "0.01em" }}>
+          by <Brand font={head} style={{ fontSize: Math.max(10, size * 0.29), color: T.inkMid }} />
         </div>
-        {!compact && (
-          <div style={{ fontFamily: sans, fontSize: size * 0.3, color: T.inkSoft, marginTop: 3 }}>
-            by Tawaazun
-          </div>)}
       </div>
     </div>
   );
@@ -237,7 +236,7 @@ export default function Portal() {
       <header style={{ background: T.surface, borderBottom: `1px solid ${T.line}`,
         padding: "0 24px", position: "sticky", top: 0, zIndex: 5 }}>
         <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", alignItems: "center", gap: 22, height: 58 }}>
-          <Lockup size={28} compact />
+          <Lockup size={26} />
           <nav style={{ display: "flex", gap: 2 }}>
             {VIEWS.map(([id, label, Icon]) => {
               const on = view === id;

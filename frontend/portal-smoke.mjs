@@ -79,7 +79,11 @@ async function pass(name, { authRequired, signedIn }) {
     if (!html.includes("Polyendocrine")) { console.log(`[${name}] the rows never rendered`); return 3; }
     if (!loaded) { console.log(`[${name}] never asked for the corpus`); return 3; }
   }
-  // the patient app's palette must not leak into the portal
+  // the lockup has to name both products, in Arabic, with the mark between them
+  if (!html.includes("دليل")) { console.log(`[${name}] no دليل wordmark`); return 3; }
+  if (!html.includes("توازن")) { console.log(`[${name}] the attribution to توازن is missing`); return 3; }
+  if (!html.includes("M53.33,76.42")) { console.log(`[${name}] the shared mark is not drawn`); return 3; }
+  // ...but the patient app's palette must not come with it
   if (/ffe2e2|9e4f5e|5c4b7d/i.test(html)) { console.log(`[${name}] patient tokens leaked in`); return 3; }
   return 0;
 }
