@@ -2214,10 +2214,10 @@ function DiagnosisPanel({ profile, setProfile }) {
 function ConditionsPanel({ profile, setProfile, compact }) {
   const have = profile.conditions || [];
   const toggle = (k) => setProfile({ ...profile, conditions: have.includes(k) ? have.filter((x) => x !== k) : [...have, k] });
-  return (<div>
-    <div style={{ display: "grid", gap: 8 }}>
-      {CONDITIONS.map(([k, label, note]) => { const on = have.includes(k); return (
-        <button key={k} onClick={() => toggle(k)} style={{ textAlign: "left", padding: compact ? "11px 14px" : 14,
+  return (<div style={{ display: "grid", gap: 8 }}>
+    {CONDITIONS.map(([k, label, note]) => { const on = have.includes(k); return (
+      <React.Fragment key={k}>
+        <button onClick={() => toggle(k)} style={{ textAlign: "left", padding: compact ? "11px 14px" : 14,
           borderRadius: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
           background: on ? C.lilac : C.low, border: `1.5px solid ${on ? C.plum : "transparent"}` }}>
           <span style={{ flex: 1 }}>
@@ -2225,13 +2225,14 @@ function ConditionsPanel({ profile, setProfile, compact }) {
             {note && <div style={{ fontFamily: bodyf, fontSize: 12, color: on ? C.plumDark : C.inkVar }}>{note}</div>}
           </span>
           {on && <Check size={17} color={C.plum} />}
-        </button>); })}
-    </div>
-    {have.includes("hirsutism") && (
-      <div style={{ marginTop: 14, padding: 14, borderRadius: 16, border: `1.5px solid ${C.outlineVar}` }}>
-        <Label>Ferriman-Gallwey score</Label>
-        <FerrimanGallwey value={profile.mfg} onChange={(mfg) => setProfile({ ...profile, mfg })} />
-      </div>)}
+        </button>
+        {/* the sheet scores the condition above it, so it belongs under that row */}
+        {k === "hirsutism" && on && (
+          <div style={{ padding: 14, borderRadius: 16, border: `1.5px solid ${C.outlineVar}` }}>
+            <Label>Ferriman-Gallwey score</Label>
+            <FerrimanGallwey value={profile.mfg} onChange={(mfg) => setProfile({ ...profile, mfg })} />
+          </div>)}
+      </React.Fragment>); })}
   </div>);
 }
 
