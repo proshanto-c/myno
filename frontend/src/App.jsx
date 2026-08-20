@@ -1154,10 +1154,10 @@ function CycleCalendar({ logs, onSet }) {
           cursor: "pointer", background: range ? C.plum : C.surface, color: range ? "#fff" : C.plum,
           border: `1.5px solid ${range ? C.plum : C.outlineVar}` }}>Range</button>}
     </div>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 6 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", columnGap: 0, marginBottom: 6 }}>
       {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.inkVar }}>{d}</div>))}</div>
     <div onPointerLeave={() => !drag && setHover(null)}
-      style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>{cells.map((d, i) => {
+      style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", columnGap: 0, rowGap: 2 }}>{cells.map((d, i) => {
       const isToday = d === todayD, isPeriod = d && shown(d);
       const isDraft = d && isPeriod && inPreview(d) && !marked(d);
       // One bleed is drawn as one capsule: days that touch are joined, so the
@@ -1167,7 +1167,10 @@ function CycleCalendar({ logs, onSet }) {
       const linkPrev = isPeriod && shown(d - 1), linkNext = isPeriod && shown(d + 1);
       return (<div key={i} style={{ position: "relative", aspectRatio: "1", display: "grid", placeItems: "center" }}>
         {isPeriod && <span style={{ position: "absolute", top: "50%", height: 34, transform: "translateY(-50%)",
-          borderRadius: 9999, background: isDraft ? C.roseDeep : C.roseOn,
+          // only the outer ends of a run are rounded; a joined end is square, or
+          // the two rounded caps meet in a pinch and the bar looks scalloped
+          borderRadius: `${linkPrev ? 0 : 17}px ${linkNext ? 0 : 17}px ${linkNext ? 0 : 17}px ${linkPrev ? 0 : 17}px`,
+          background: isDraft ? C.roseDeep : C.roseOn,
           left: linkPrev ? -1 : "calc(50% - 17px)", right: linkNext ? -1 : "calc(50% - 17px)" }} />}
         {d && <span onClick={() => tap(d)} className={onSet ? "cal-day" : undefined}
           onPointerDown={startDrag(d)} onPointerEnter={() => setHover(d)}
