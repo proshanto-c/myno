@@ -797,41 +797,26 @@ def _normalize_extract_payload(payload):
     for key in _SCALE_10_FIELDS:
         if key in out and out[key] is not None:
             out[key] = _clamp_10(out[key])
-    if isinstance(out.get("categories"), list):
-        cats = []
-        for cat in out["categories"][:6]:
-            if not isinstance(cat, dict):
-                continue
-            clean = dict(cat)
-            scale = _normalize_category_scale(clean.get("scale"))
-            if scale:
-                clean["scale"] = scale
-            else:
-                clean.pop("scale", None)
-            cats.append(clean)
-        out["categories"] = cats
+    # The form is the vocabulary: anything the model invented is dropped rather
+    # than becoming a tracker nobody asked for and nobody can review.
+    out.pop("categories", None)
     return out
 
 def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
     block_line = ", ".join(blocked) if blocked else "none"
     return (
         "You are Tawazzun, a warm voice companion helping someone log their PMOS day just by talking. "
-        "From the WHOLE conversation so far and what they just said, do three things: reply out loud, "
-        "maintain a personalized tracker, and update the standard analytics fields.\n"
+        "From the WHOLE conversation so far and what they just said, do two things: reply out loud, "
+        "and fill in the tracking fields the form asks for.\n"
         f"- 'say' TONE: {_style(personality)} INFER any ratings/severities yourself — never ask for numbers, scores, or 1-to-10 ratings. Ask a short clarifying question only when genuinely needed (never about numbers), otherwise just acknowledge. Spoken aloud — under ~28 words. Never diagnose.\n"
-        "- 'categories': a SMALL evolving set (max 6) of the things THIS person actually talks about, in THEIR words "
-        "(e.g. {\"key\":\"brain_fog\",\"label\":\"Brain fog\",\"value\":\"heavy this morning\"}). Reuse the same key when updating an existing one; add a new category when they raise something new; drop nothing unless clearly resolved. "
-        "'value' is a short human phrase in their language. Build on the categories provided; keep keys stable (lower_snake_case).\n"
-        "- When a category is naturally a rating, severity, intensity, amount, or frequency, ALSO include "
-        "\"scale\":{\"value\":int,\"max\":10}: infer the current value as an integer from 0 to 10. "
-        "Omit 'scale' for purely qualitative categories. IMPORTANT: a category may already carry a user-set scale value — KEEP that value unless they clearly state a new one in speech.\n"
-        f"- NEVER create a category for, ask about, or volunteer anything in this blocked list: {block_line}.\n"
+        f"- NEVER ask about or volunteer anything in this blocked list: {block_line}.\n"
+        "- Invent nothing. The fields below are the whole vocabulary; if what they said does not fit one, it goes in no field.\n"
         "- Also fill any standard tracking fields ONLY when clearly implied by what they said; otherwise use null/false. Never force a value.\n"
         "- 'painAreas': ONLY where they said it hurts, using the exact names listed; [] if they did not say. Never guess a location from a pain rating alone.\n"
         "Return ONLY JSON, no prose, no code fences: "
         "{" + record.extract_shape() +
-        ',"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. ' 
-        "Use null/false for fields not mentioned; omit 'scale' where it doesn't fit."
+        ',"say":str}. ' 
+        "Use null/false for fields not mentioned."
     )
 
 @app.post("/extract")

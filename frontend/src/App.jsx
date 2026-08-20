@@ -264,6 +264,15 @@ const FALLBACK_SCHEMA = [
 ];
 const SCHEMA_CACHE = "myno:record-schema:v2";
 
+// What can be plotted over time: the form's own numeric questions, in the order
+// the form asks them. Nothing else — a tracker nobody put in the form is a
+// tracker nobody can review, and the model no longer invents them.
+const trendMetrics = (schema, settings) => (schema || [])
+  .flatMap((g) => g.fields)
+  .filter((f) => ["scale", "emoji", "number"].includes(f.type))
+  .filter((f) => !fieldBlocked(settings, f.key))
+  .map((f) => [f.key, f.label, f.max || SCALE_MAX]);
+
 // One fetch at boot, remembered between visits so a slow or missing backend
 // never leaves the Record screen blank.
 function useRecordSchema(settings) {
@@ -1763,24 +1772,12 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   // OPT-IN — live trends, correlations & advice from history + this conversation
   const toggleIns = () => { const nv = !insOn; setInsOn(nv); if (nv) runAdvise(); };
   // Trend metrics = the standard analytics fields PLUS any personalized
-  // categories that carry a slider value (they earn their own line as the days
-  // of logging accumulate; today reflects live slider edits and speech).
-  const STD_KEYS = new Set(["pain", "mood", "energy", "sugar"]);
-  const seenCats = {};  // keyed by category key → last label wins (no key dupes)
-  logs.slice(-30).concat([e]).forEach((l) => (l?.categories || []).forEach((c) => { if (c && normalizedScale(c.scale) && c.key && !STD_KEYS.has(c.key)) seenCats[c.key] = c.label || c.key; }));
-  const usedLabels = new Set(["pain", "mood", "energy", "sugar"]);  // also dedupe by display label
-  const catEntries = [];
-  for (const [k, l] of Object.entries(seenCats)) { const n = String(l).trim().toLowerCase(); if (usedLabels.has(n)) continue; usedLabels.add(n); catEntries.push([k, l, true]); }
-  const METRICS = [["pain", "Pain"], ["mood", "Mood"], ["energy", "Energy"], ["sugar", "Sugar"]]
-    .filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet")))
-    .map(([k, l]) => [k, l, false])
-    .concat(catEntries.slice(0, 4));
-  const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", false];
-  const mSel = mEntry[0]; const mIsCat = mEntry[2];
+  const METRICS = trendMetrics(schema, settings);
+  const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", SCALE_MAX];
+  const mSel = mEntry[0];
   useEffect(() => { METRICS.forEach(([k]) => seenKeys.current.add(k)); });
-  const series = mIsCat
-    ? (() => { let last = 0; return logs.slice(-30).map((l) => { const c = (l.categories || []).find((x) => x.key === mSel); const scale = normalizedScale(c?.scale); if (scale) last = scale.value; return last; }); })()
-    : logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
+  // today's entry included, so a slider you just moved shows on the line
+  const series = logs.slice(-30).concat([e]).map((l) => Number(l?.[mSel] ?? 0));
   const insightsPanel = (
     <Card style={{ padding: 16, position: wide ? "sticky" : "static", top: 88, boxShadow: metricBlink ? `0 0 0 3px ${C.plum}` : SH_SM, transition: "box-shadow .3s ease" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -1869,42 +1866,25 @@ function MicBtn({ listening, onClick, size = 46 }) {
 }
 
 // ---- INSIGHTS (twin) -------------------------------------------------------
-function InsightsScreen({ ins, logs, settings, wide, assessment }) {
-  // metric list = standard fields + personalized categories that carry a slider
-  const STD = [["pain", "Pain"], ["mood", "Mood"], ["energy", "Energy"], ["sleep", "Sleep"], ["brainFog", "Brain fog"], ["sugar", "Sugar"]]
-    .filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet"))).map(([k, l]) => [k, l, false]);
-  const seen = {}; logs.forEach((l) => (l.categories || []).forEach((c) => { if (c && c.scale && typeof c.scale.value === "number" && c.key) seen[c.key] = c.label || c.key; }));
-  const used = new Set([...STD.map(([k]) => k), ...STD.map(([, l]) => l.toLowerCase())]);
-  // "Pain & cramps" is the pain slider under another name. A self-named tracker
-  // that shares a word with a standard metric is the same thing said twice, so
-  // it doesn't earn a second chip — exact-label matching alone missed these.
-  const stdWords = new Set(STD.flatMap(([k, l]) => [k.toLowerCase(), ...l.toLowerCase().split(/[^a-z]+/)]).filter(Boolean));
-  const catList = [];
-  for (const [k, l] of Object.entries(seen)) {
-    const n = String(l).toLowerCase();
-    if (used.has(n) || n.split(/[^a-z]+/).filter(Boolean).some((w) => stdWords.has(w))) continue;
-    used.add(n); catList.push([k, l, true]);
-  }
-  const METRICS = STD.concat(catList.slice(0, 5));
+function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
+  // the same list the Record screen plots, from the same form
+  const METRICS = trendMetrics(schema, settings);
   const [metric, setMetric] = useState("pain");
   const [view, setView] = useState("insights"); // sub-view within Insights: "insights" | "track"
   const [cycleView, setCycleView] = useState("ribbon");
   const [xKey, setXKey] = useState("sugar"); const [yKey, setYKey] = useState("pain"); const [lagDay, setLagDay] = useState(true);
-  const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", false];
-  const mSel = mEntry[0], mLbl = mEntry[1], mIsCat = mEntry[2];
-  const series = mIsCat
-    ? (() => { let last = 0; return logs.slice(-30).map((l) => { const c = (l.categories || []).find((x) => x.key === mSel); if (c && c.scale && typeof c.scale.value === "number") last = c.scale.value; return last; }); })()
-    : logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
+  const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", SCALE_MAX];
+  const mSel = mEntry[0], mLbl = mEntry[1], mMax = mEntry[2];
+  const series = logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
   const sAvg = series.length ? series.reduce((a, b) => a + b, 0) / series.length : 0;
   // chart data
-  const heatVal = (l) => mIsCat ? (() => { const c = (l.categories || []).find((x) => x.key === mSel); return c && c.scale ? c.scale.value : null; })() : (typeof l[mSel] === "number" ? l[mSel] : null);
-  const heatMax = mIsCat ? 10 : (mSel === "pain" ? 10 : 4);
+  const heatVal = (l) => (typeof l[mSel] === "number" ? l[mSel] : null);
+  const heatMax = mMax;
   const heatDays = logs.slice(-84);
   const periodDates = logs.filter((l) => l.period).map((l) => l.date);
   const gaps = []; for (let i = 1; i < periodDates.length; i++) { const g = daysBetween(periodDates[i - 1], periodDates[i]); if (g > 10) gaps.push(g); }
   // relationship explorer: pick X, Y and same/next-day → scatter + live Pearson r
-  const NUM = [["sugar", "Sugar", 4], ["pain", "Pain", 10], ["mood", "Mood", 4], ["energy", "Energy", 4], ["sleep", "Sleep", 4], ["brainFog", "Brain fog", 4]]
-    .filter(([k]) => !(k === "sugar" && isBlocked(settings, "diet")) && !(k === "mood" && isBlocked(settings, "mood")));
+  const NUM = METRICS;
   const xMeta = NUM.find(([k]) => k === xKey) || NUM[0]; const yMeta = NUM.find(([k]) => k === yKey) || NUM[0];
   const off = lagDay ? 1 : 0; const exPoints = [];
   for (let i = off; i < logs.length; i++) { const x = logs[i - off][xMeta[0]], y = logs[i][yMeta[0]]; if (typeof x === "number" && typeof y === "number") exPoints.push({ x, y }); }

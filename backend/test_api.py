@@ -80,6 +80,21 @@ def test_sources_name_where_each_number_came_from():
     assert str(rules["cycleBands"][-1]["longDays"]) in text
 
 @test
+def test_the_extractor_is_told_to_invent_nothing():
+    sys_prompt = main._extract_sys([])
+    assert "Invent nothing" in sys_prompt
+    assert "categories" not in sys_prompt          # no personal tracker to build
+    dropped = main._normalize_extract_payload({"categories": [{"key": "tinnitus", "label": "Ringing"}], "pain": 4})
+    assert "categories" not in dropped and dropped["pain"] == 4
+
+@test
+def test_what_can_be_plotted_is_what_the_form_asks():
+    import record
+    plottable = [f["key"] for f in record.EXTRACTABLE if f["type"] in ("scale", "emoji", "number")]
+    assert plottable == ["mood", "energy", "sleep", "brainFog", "pain", "morningWeight",
+                         "sugar", "foodDrive", "sexDrive"]
+
+@test
 def test_healthz():
     body = client.get("/healthz").json()
     assert body["status"] == "ok" and "claude_cache" in body
