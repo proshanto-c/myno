@@ -10,13 +10,14 @@
  *                  summary and an assessment. Home, the cycle ring, the bar and
  *                  the calendar all have to render without a console error.
  *   3. reel      — nobody at the keyboard. The sign-up drives itself with its
- *                  own pointer, and half a minute later Sara has to be through
- *                  it and into the app, with the simulation already talking:
- *                  the real clicks and the real input events, on the real
- *                  controls, in a real DOM. Slow on purpose — it runs at the
- *                  speed the recording does.
- *   4. tutorial  — the tour, on its own switch: it has to light parts of the
- *                  interface up and say what they are, without touching them.
+ *                  own pointer, and twenty seconds later Sara has to be through
+ *                  it and into the app, with the tour already talking: real
+ *                  clicks and real input events, on the real controls, in a
+ *                  real DOM. Slow on purpose — it runs at the speed a recording
+ *                  of it does.
+ *   4. guide     — the tour on its own, for someone already signed up: it has
+ *                  to be lighting parts of the interface up and talking about
+ *                  them, without editing the profile it was given.
  *
  *   docker compose build frontend && docker compose up -d frontend
  *   rm -rf /tmp/dist && mkdir -p /tmp/dist
@@ -125,7 +126,7 @@ if (code === 0) {
       profile: { onboarded: true, name: "Test", goals: ["manage"], conditions: [], mfg: {}, drugs: [] },
       // the guided demo has its own pass; this one is about rendering
       settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct",
-                  simulation: false, tutorial: false },
+                  guide: false },
       logs: [],
     },
     fetch: backend,
@@ -149,12 +150,12 @@ if (code === 0) {
       if (!p.goals?.includes("whatswrong")) return `no goal was picked: ${JSON.stringify(p.goals)}`;
       if (!p.familyHistory || !p.acne) return "the symptom chips were missed";
       if (p.pmosDiagnosed !== null) return `the diagnosis answer came out ${JSON.stringify(p.pmosDiagnosed)}, not "Not sure"`;
-      if ((p.integrations || []).length !== 2) return `connected ${JSON.stringify(p.integrations)}`;
+      if ((p.integrations || []).length) return `a wearables screen crept back in: ${JSON.stringify(p.integrations)}`;
       if (html.includes("Let's get to know you")) return "it never left the sign-up";
-      // ...and the simulation picked up where the sign-up left off
+      // ...and the tour picked up where the sign-up left off
       const settings = JSON.parse(raw).settings || {};
-      if (!settings.simulation) return "the simulation switched itself off without running";
-      if (!html.includes("demo-caption")) return "nothing is being said: the simulation never started";
+      if (!settings.guide) return "the guide switched itself off without showing anything";
+      if (!html.includes("demo-caption")) return "nothing is being said: the tour never started";
       return null;
     },
   });
@@ -163,20 +164,20 @@ if (code === 0) {
   // The tutorial, on its own: simulation off, tour on, a profile already made.
   // It has to be lighting something up and talking about it, and it must not
   // have typed, tapped or changed a single thing on the way.
-  code = await pass("tutorial", {
+  code = await pass("guide", {
     stored: {
       profile: { onboarded: true, name: "Sara", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
-      settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct",
-                  simulation: false, tutorial: true },
+      settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct", guide: true },
       logs: [],
     },
     fetch: backend,
-    waitMs: 45000,
+    waitMs: 35000,
     after: (dom, html) => {
-      if (!html.includes("demo-caption")) return "the tutorial never said anything";
-      if (!html.includes("demo-spot")) return "the tutorial never lit anything up";
+      if (!html.includes("demo-caption")) return "the tour never said anything";
+      if (!html.includes("demo-spot")) return "the tour never lit anything up";
+      if (!html.includes("demo-shield")) return "the tour left the screen open to a stray tap";
       const p = JSON.parse(dom.window.localStorage.getItem("myno:serene:v1")).profile || {};
-      if (p.name !== "Sara") return `the tutorial edited the profile: ${JSON.stringify(p.name)}`;
+      if (p.name !== "Sara") return `the tour rewrote the profile: ${JSON.stringify(p.name)}`;
       return null;
     },
   });

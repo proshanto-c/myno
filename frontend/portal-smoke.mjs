@@ -33,10 +33,33 @@ const QUERIES = [{ id: 3, name: "sleep", term: "…", informs: ["sleep", "brainF
   highWater: "2026/08/20", lastRun: { added: 12, fetched: 40 } }];
 const RUNS = [{ id: 7, queryId: 3, state: "done", total: 271, cap: 200, cursor: 200, fetched: 198,
   added: 12, edatFrom: "", edatTo: "2026/08/20", startedAt: "2026-08-20T21:00:00" }];
+// One module that verified and one that did not: the report has to show the
+// difference, because a score with no findable sentence behind it is the thing
+// the module exists to replace.
+const REPORTS = [{ id: 4, sourceId: 2, score: 56, verdict: "considerations",
+  title: "The prevalence and phenotypic features of PCOS", pmid: "27664216",
+  journal: "Hum Reprod", year: 2016, flags: ["quote_unverified"], narrative: "A survey.",
+  rubricVersion: "1", promptVersion: "1", model: "claude-sonnet-4-6",
+  tokensIn: 12000, tokensOut: 900, createdAt: "2026-08-20T22:00:00",
+  verified: { of: 5, found: 4 },
+  modules: [
+    { key: "design", label: "Study design", weight: 16, basis: "deterministic", score: 6,
+      note: "cross-sectional", quote: "", offset: -1, section: "" },
+    { key: "effect", label: "Effect clarity", weight: 10, basis: "model", score: 7,
+      note: "a number and a direction", quote: "prevalence was 11.9%", offset: 400, section: "RESULTS" },
+    { key: "daily", label: "Daily-tracking applicability", weight: 10, basis: "model", score: 0,
+      note: "no quote that could be found in the text", quote: "invented sentence", offset: -1, section: "" },
+  ]}];
+const CLAIMS = [{ id: 9, sourceId: 2, state: "extracted", claimText: "Shorter sleep goes with more brain fog",
+  relation: "associated_with", direction: "-", population: "women with PCOS", certainty: "low",
+  effect: { measure: "r", value: -0.31, p: 0.001 }, quote: "shorter sleep was associated with fog",
+  quoteSection: "RESULTS", quoteOffset: 512, quoteVerified: true, displayText: "",
+  fields: [{ key: "sleep", role: "exposure", proposed: false },
+           { key: "brainFog", role: "outcome", proposed: false }] }];
 
-async function pass(name, { authRequired, signedIn }) {
+async function pass(name, { authRequired, signedIn, hash = "", check }) {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',
-    { url: "https://localhost/research/", pretendToBeVisual: true });
+    { url: `https://localhost/dalil/${hash}`, pretendToBeVisual: true });
   for (const k of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "SVGElement",
                    "localStorage", "getComputedStyle", "requestAnimationFrame",
                    "cancelAnimationFrame", "MutationObserver"]) globalThis[k] = dom.window[k];
@@ -52,6 +75,8 @@ async function pass(name, { authRequired, signedIn }) {
       : u.includes("/corpus") ? { sources: SOURCES, summary: SUMMARY }
       : u.includes("/queries") ? { queries: QUERIES, seeded: 12 }
       : u.includes("/runs") ? { runs: RUNS }
+      : u.includes("/reports") ? { reports: REPORTS }
+      : u.includes("/report/") ? { source: SOURCES[1], report: REPORTS[0], claims: CLAIMS, citedBy: 4 }
       : u.includes("/jobs") ? { current: null, past: [] }
       : {};
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
@@ -74,7 +99,7 @@ async function pass(name, { authRequired, signedIn }) {
   await new Promise((r) => setTimeout(r, 900));
   console.error = realError;
 
-  const html = dom.window.document.getElementById("root").innerHTML;
+  let html = dom.window.document.getElementById("root").innerHTML;
   const asked = seen.some((c) => c.includes("/dalil/api/auth/whoami"));
   const loaded = seen.some((c) => c.includes("/dalil/api/corpus"));
   console.log(`[${name}] DOM ${html.length} chars · asked whoami: ${asked} · fetched corpus: ${loaded}`);
@@ -82,9 +107,21 @@ async function pass(name, { authRequired, signedIn }) {
   if (errs.length) { console.log(`[${name}] RUNTIME ERROR:\n${errs[0]}`); return 4; }
   if (html.length < 300) return 3;
 
+  if (check) {
+    const problem = await check(dom);
+    if (problem) { console.log(`[${name}] ${problem}`); return 3; }
+    html = dom.window.document.getElementById("root").innerHTML;
+  }
+
   // the checks that actually mean something
   if (authRequired && !signedIn) {
     if (!html.includes("Sign in")) { console.log(`[${name}] no sign-in form behind the gate`); return 3; }
+  } else if (hash === "#reports") {
+    for (const want of ["Verdict", "Considerations", "Study design", "prevalence was 11.9%",
+                        "not found in the text", "Shorter sleep goes with more brain fog",
+                        "rubric 1", "exposure: sleep"]) {
+      if (!html.includes(want)) { console.log(`[${name}] the report omits ${JSON.stringify(want)}`); return 3; }
+    }
   } else {
     if (!html.includes("Corpus")) { console.log(`[${name}] the corpus never rendered`); return 3; }
     if (!html.includes("Polyendocrine")) { console.log(`[${name}] the rows never rendered`); return 3; }
@@ -105,8 +142,19 @@ async function pass(name, { authRequired, signedIn }) {
   return 0;
 }
 
+/** Open the first report in the list, the way a person would. */
+const openFirstReport = async (dom) => {
+  const row = dom.window.document.querySelector("tbody tr");
+  if (!row) return "no report rows to open";
+  row.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 700));
+  return null;
+};
+
 let code = await pass("open", { authRequired: false, signedIn: true });
 if (code === 0) code = await pass("gated", { authRequired: true, signedIn: false });
 if (code === 0) code = await pass("signed-in", { authRequired: true, signedIn: true });
+if (code === 0) code = await pass("report", { authRequired: false, signedIn: true,
+                                              hash: "#reports", check: openFirstReport });
 console.log(code === 0 ? "OK" : `FAILED (${code})`);
 process.exit(code);

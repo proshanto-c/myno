@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { LogOut, RefreshCw, AlertTriangle, Library, ListChecks, FlaskConical, Download } from "lucide-react";
 import { BrandMark, Brand } from "../brand.jsx";
-import { T, serif, sans, head, mono, figures } from "./theme";
+import { T, serif, sans, head, mono, figures, verdictTone } from "./theme";
 import { api, SignedOut } from "./api";
 
 /* ---- small atoms ---------------------------------------------------------- */
@@ -242,7 +242,7 @@ function Corpus({ data, loading, onRefresh, filter, setFilter, onOpen }) {
 
 /** One source, opened from the table. Everything held about it, including what
     it cites — which is where the next round of harvesting comes from. */
-function SourcePanel({ source, onClose }) {
+function SourcePanel({ source, onClose, onReport }) {
   if (!source) return null;
   const link = source.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${source.pmid}/`
     : source.nbk ? `https://www.ncbi.nlm.nih.gov/books/${source.nbk}/` : null;
@@ -275,12 +275,15 @@ function SourcePanel({ source, onClose }) {
             {source.screenReason}
           </p>
         )}
-        {link && (
-          <p style={{ margin: "0 0 18px" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", margin: "0 0 18px" }}>
+          <Button onClick={() => onReport(source.id)}>
+            {source.screenState === "appraised" ? "Read the report" : "Appraise"}
+          </Button>
+          {link && (
             <a href={link} target="_blank" rel="noreferrer"
               style={{ fontFamily: sans, fontSize: 13.5, color: T.accent }}>Open at NCBI →</a>
-          </p>
-        )}
+          )}
+        </div>
 
         <Section title="Abstract">
           <p style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.6, color: T.ink, margin: 0,
@@ -329,6 +332,266 @@ const Section = ({ title, children }) => (
     {children}
   </div>
 );
+
+/* ---- the report ------------------------------------------------------------
+   A document, not a dashboard: verdict first, then what was found, then the
+   evidence behind each line, then the flags, then where it all came from. The
+   quote under every model-scored module is the point — a score with no sentence
+   behind it is the thing this module exists to replace. */
+function Verdict({ report }) {
+  const tone = verdictTone(report.verdict);
+  const found = report.verified || {};
+  return (
+    <div style={{ ...card, padding: "18px 20px", marginBottom: 14,
+      borderLeft: `4px solid ${tone.fg}`, display: "flex", gap: 26, alignItems: "center",
+      flexWrap: "wrap" }}>
+      <div>
+        <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
+          textTransform: "uppercase", color: T.inkSoft }}>Verdict</div>
+        <div style={{ fontFamily: serif, fontSize: 26, color: tone.fg }}>{tone.label}</div>
+      </div>
+      <div>
+        <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
+          textTransform: "uppercase", color: T.inkSoft }}>Score</div>
+        <div style={{ fontFamily: sans, fontSize: 26, fontWeight: 700, color: T.ink, ...figures }}>
+          {report.score}<span style={{ fontSize: 15, color: T.inkSoft }}>/100</span>
+        </div>
+      </div>
+      <div>
+        <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
+          textTransform: "uppercase", color: T.inkSoft }}>Findings verified</div>
+        <div style={{ fontFamily: sans, fontSize: 26, fontWeight: 700, ...figures,
+          color: found.found === found.of ? T.good : T.warn }}>
+          {found.found ?? 0}<span style={{ fontSize: 15, color: T.inkSoft }}>/{found.of ?? 0}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const basisTone = (basis) => ({
+  deterministic: { fg: T.inkMid, bg: T.raised, label: "from the record" },
+  gate: { fg: T.bad, bg: T.badSoft, label: "gate" },
+  model: { fg: T.accent, bg: T.accentSoft, label: "read from the text" },
+}[basis] || { fg: T.inkSoft, bg: T.raised, label: basis });
+
+function ModuleRows({ modules }) {
+  return (
+    <div style={{ ...card, overflow: "hidden", marginBottom: 14 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr style={{ background: T.raised }}>
+          <th style={{ ...th, paddingTop: 10 }}>Module</th>
+          <th style={{ ...th, paddingTop: 10, textAlign: "right" }}>Score</th>
+          <th style={{ ...th, paddingTop: 10 }}>Basis</th>
+          <th style={{ ...th, paddingTop: 10 }}>What it says</th>
+        </tr></thead>
+        <tbody>
+          {modules.map((m) => {
+            const tone = basisTone(m.basis);
+            const share = m.weight ? m.score / m.weight : 0;
+            return (
+              <tr key={m.key}>
+                <td style={{ ...td, fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</td>
+                <td style={{ ...td, textAlign: "right", ...figures, whiteSpace: "nowrap" }}>
+                  <span style={{ fontWeight: 700,
+                    color: share >= 0.75 ? T.good : share >= 0.4 ? T.ink : T.bad }}>{m.score}</span>
+                  <span style={{ color: T.inkSoft }}>/{m.weight}</span>
+                </td>
+                <td style={td}><Tag fg={tone.fg} bg={tone.bg}>{tone.label}</Tag></td>
+                <td style={{ ...td, maxWidth: 520 }}>
+                  <div style={{ lineHeight: 1.5 }}>{m.note || "—"}</div>
+                  {m.quote && (
+                    <blockquote style={{ margin: "8px 0 0", paddingLeft: 11,
+                      borderLeft: `2px solid ${m.offset >= 0 ? T.lineStrong : T.bad}`,
+                      fontFamily: serif, fontSize: 13, lineHeight: 1.55,
+                      color: m.offset >= 0 ? T.inkMid : T.bad }}>
+                      {m.offset >= 0 ? "" : "not found in the text — scored zero: "}
+                      “{m.quote}”
+                      {m.offset >= 0 && (
+                        <span style={{ fontFamily: mono, fontSize: 11, color: T.inkSoft,
+                          display: "block", marginTop: 4 }}>
+                          {(m.section || "text").toLowerCase()} · character {m.offset.toLocaleString()}
+                        </span>
+                      )}
+                    </blockquote>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const arrow = { "+": "↑", "-": "↓", "0": "→" };
+
+function ClaimCard({ claim }) {
+  const bound = claim.fields || [];
+  return (
+    <div style={{ ...card, padding: "14px 16px", marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+        <span style={{ fontFamily: sans, fontSize: 15, fontWeight: 600, color: T.ink, flex: 1,
+          lineHeight: 1.45 }}>{claim.claimText}</span>
+        <Tag>{claim.state}</Tag>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "10px 0" }}>
+        {bound.map((f) => (
+          <Tag key={f.key + f.role} fg={f.proposed ? T.warn : T.accent}
+            bg={f.proposed ? T.warnSoft : T.accentSoft}>
+            {f.role}: {f.key}{f.proposed ? " (proposed)" : ""}
+          </Tag>
+        ))}
+        <Tag>{arrow[claim.direction] || claim.direction} {claim.relation?.replace("_", " ")}</Tag>
+        <Tag>certainty {claim.certainty}</Tag>
+        {claim.effect?.measure && (
+          <Tag>{claim.effect.measure}{claim.effect.value != null ? ` ${claim.effect.value}` : ""}
+            {claim.effect.p != null ? `, p ${claim.effect.p}` : ""}</Tag>
+        )}
+      </div>
+      {claim.population && (
+        <div style={{ fontFamily: sans, fontSize: 12.5, color: T.inkSoft, marginBottom: 8 }}>
+          in {claim.population}
+        </div>
+      )}
+      <blockquote style={{ margin: 0, paddingLeft: 11, borderLeft: `2px solid ${T.lineStrong}`,
+        fontFamily: serif, fontSize: 13.5, lineHeight: 1.6, color: T.inkMid }}>
+        “{claim.quote}”
+        <span style={{ fontFamily: mono, fontSize: 11, color: T.inkSoft, display: "block", marginTop: 4 }}>
+          {(claim.quoteSection || "text").toLowerCase()} · character {claim.quoteOffset?.toLocaleString()}
+          {claim.quoteVerified ? " · found in the stored text" : " · UNVERIFIED"}
+        </span>
+      </blockquote>
+    </div>
+  );
+}
+
+function ReportView({ data, onBack, onAppraise, busy }) {
+  const { source, report, claims = [], citedBy } = data;
+  const link = source.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${source.pmid}/`
+    : source.nbk ? `https://www.ncbi.nlm.nih.gov/books/${source.nbk}/` : null;
+  return (
+    <section>
+      <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer",
+        color: T.accent, fontFamily: sans, fontSize: 13.5, padding: 0, marginBottom: 12 }}>
+        ← All reports
+      </button>
+      <h2 style={{ fontFamily: serif, fontSize: 25, fontWeight: 400, color: T.ink,
+        margin: "0 0 6px", lineHeight: 1.3 }}>{source.title}</h2>
+      <div style={{ fontFamily: sans, fontSize: 13.5, color: T.inkMid, marginBottom: 16 }}>
+        {source.journal || "—"} {source.year || ""} · cited by {citedBy} in this corpus
+        {link && <> · <a href={link} target="_blank" rel="noreferrer"
+          style={{ color: T.accent }}>NCBI</a></>}
+      </div>
+
+      {!report ? (
+        <div style={{ ...card, border: `1px dashed ${T.lineStrong}`, padding: 26, textAlign: "center" }}>
+          <p style={{ fontFamily: sans, fontSize: 14, color: T.inkMid, margin: "0 0 14px" }}>
+            Not appraised yet.
+          </p>
+          <Button busy={busy} onClick={() => onAppraise(source.id)}>Appraise this one</Button>
+        </div>
+      ) : (
+        <>
+          <Verdict report={report} />
+          {report.narrative && (
+            <p style={{ ...card, padding: "14px 18px", fontFamily: serif, fontSize: 15.5,
+              lineHeight: 1.6, color: T.ink, margin: "0 0 14px" }}>{report.narrative}</p>
+          )}
+          {(report.flags || []).length > 0 && (
+            <div style={{ ...card, padding: "12px 16px", marginBottom: 14,
+              background: T.badSoft, border: `1px solid ${T.bad}33` }}>
+              <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
+                textTransform: "uppercase", color: T.bad, marginBottom: 7 }}>Flags</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {report.flags.map((f) => (
+                  <Tag key={f} fg={T.bad} bg="#fff">{f.replace(/_/g, " ").replace(":", ": ")}</Tag>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <ModuleRows modules={report.modules || []} />
+
+          <H2 count={`${claims.length}`}>Claims</H2>
+          {claims.length === 0
+            ? <p style={{ ...card, padding: "14px 16px", fontFamily: sans, fontSize: 13.5,
+                color: T.inkMid, margin: "0 0 14px" }}>
+                No claim survived verification. Every finding the model offered either quoted a
+                sentence that is not in the stored text, or bound to something the app does not record.
+              </p>
+            : claims.map((c) => <ClaimCard key={c.id} claim={c} />)}
+
+          <Section title="Provenance">
+            <div style={{ fontFamily: mono, fontSize: 12, color: T.inkMid, lineHeight: 1.7 }}>
+              rubric {report.rubricVersion} · prompt {report.promptVersion} · {report.model || "no model"}<br />
+              {(report.tokensIn || 0).toLocaleString()} tokens in, {(report.tokensOut || 0).toLocaleString()} out
+              · {(report.createdAt || "").replace("T", " ").slice(0, 16)}
+            </div>
+          </Section>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ReportList({ rows, onOpen, onAppraise, busy }) {
+  return (
+    <section>
+      <H2 count={`${rows.length}`}>Reports</H2>
+      <div style={{ marginBottom: 14 }}>
+        <Button busy={busy} onClick={() => onAppraise(null)}>Appraise the next five</Button>
+        <span style={{ fontFamily: sans, fontSize: 12.5, color: T.inkSoft, marginLeft: 10 }}>
+          Harvesting is automatic; appraising costs money, so it is asked for.
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ ...card, border: `1px dashed ${T.lineStrong}`, padding: 26, textAlign: "center" }}>
+          <FlaskConical size={20} color={T.inkSoft} />
+          <p style={{ fontFamily: sans, fontSize: 14, color: T.inkMid, lineHeight: 1.55,
+            margin: "10px auto 0", maxWidth: 460 }}>
+            Nothing appraised yet. Each report scores ten modules and carries the sentence behind
+            every one of them.
+          </p>
+        </div>
+      ) : (
+        <div style={{ ...card, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ background: T.raised }}>
+              <th style={{ ...th, paddingTop: 10 }}>Paper</th>
+              <th style={{ ...th, paddingTop: 10, textAlign: "right" }}>Score</th>
+              <th style={{ ...th, paddingTop: 10 }}>Verdict</th>
+              <th style={{ ...th, paddingTop: 10 }}>Flags</th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r) => {
+                const tone = verdictTone(r.verdict);
+                return (
+                  <tr key={r.id} onClick={() => onOpen(r.sourceId)} style={{ cursor: "pointer" }}>
+                    <td style={{ ...td, maxWidth: 520 }}>
+                      <div style={{ lineHeight: 1.45 }}>{r.title || `Source ${r.sourceId}`}</div>
+                      <div style={{ fontFamily: mono, fontSize: 11.5, color: T.inkSoft, marginTop: 3 }}>
+                        {r.journal} {r.year} {r.pmid ? `· PMID ${r.pmid}` : ""}
+                      </div>
+                    </td>
+                    <td style={{ ...td, textAlign: "right", ...figures, fontWeight: 700 }}>{r.score}</td>
+                    <td style={td}><Tag fg={tone.fg} bg={tone.bg}>{tone.label}</Tag></td>
+                    <td style={td}>
+                      {(r.flags || []).slice(0, 3).map((f) => (
+                        <Tag key={f} fg={T.bad} bg={T.badSoft}>{f.split(":")[0].replace(/_/g, " ")}</Tag>
+                      ))}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
 
 /* ---- harvesting ----------------------------------------------------------- */
 function Harvest({ queries, runs, job, onRun, busy, onRefresh }) {
@@ -472,6 +735,8 @@ export default function Portal() {
   const [queries, setQueries] = useState([]);
   const [runs, setRuns] = useState([]);
   const [job, setJob] = useState(null);
+  const [reportRows, setReportRows] = useState([]);
+  const [report, setReport] = useState(null);       // one source's full report
   const [open, setOpen] = useState(null);           // the source in the panel
   const [filter, setFilter] = useState({ state: "", q: "" });
   const [loading, setLoading] = useState(false);
@@ -493,12 +758,13 @@ export default function Portal() {
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [corpus, seeds, ran] = await Promise.all([
-        api.corpus(filter), api.queries(), api.runs(),
+      const [corpus, seeds, ran, made] = await Promise.all([
+        api.corpus(filter), api.queries(), api.runs(), api.reports(),
       ]);
       setData({ sources: corpus.sources || [], summary: corpus.summary || null });
       setQueries(seeds.queries || []);
       setRuns(ran.runs || []);
+      setReportRows(made.reports || []);
     } catch (err) {
       mishap(err);
     } finally {
@@ -528,7 +794,8 @@ export default function Portal() {
       const call = { anchor: () => api.anchor(),
                      seed: () => api.seed({ queryId: queryId ?? null, max: 200 }),
                      enrich: () => api.enrich(60),
-                     sweep: () => api.sweep(200) }[which];
+                     sweep: () => api.sweep(200),
+                     appraise: () => api.appraise({ sourceId: queryId ?? null, limit: 5 }) }[which];
       const out = await call();
       if (out.started === false) setError(`Already running: ${out.busy?.name}. One job at a time.`);
       setJob(out.job || out.busy || null);
@@ -538,6 +805,22 @@ export default function Portal() {
   const openSource = useCallback(async (id) => {
     try { setOpen(await api.source(id)); } catch (err) { mishap(err); }
   }, [mishap]);
+
+  const openReport = useCallback(async (sourceId) => {
+    try {
+      setReport(await api.report(sourceId));
+      setOpen(null);
+      window.location.hash = "#reports";
+    } catch (err) { mishap(err); }
+  }, [mishap]);
+
+  // A finished appraisal should refresh the report you are looking at, not just
+  // the list behind it.
+  useEffect(() => {
+    if (job?.state === "done" && job.name === "appraise" && report?.source?.id) {
+      openReport(report.source.id);
+    }
+  }, [job?.state, job?.name]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (me === undefined) return <div style={{ minHeight: "100vh", background: T.bg }} />;
   if (me === null) return <SignIn onSignedIn={setMe} />;
@@ -599,14 +882,14 @@ export default function Portal() {
             signs it off.
           </Placeholder>
         )}
-        {view === "reports" && (
-          <Placeholder icon={FlaskConical} title="Reports">
-            One appraisal per source: the modules, what scored what, and the quote behind every
-            finding.
-          </Placeholder>
+        {view === "reports" && (report
+          ? <ReportView data={report} onBack={() => setReport(null)}
+              onAppraise={(id) => run("appraise", id)} busy={job?.state === "running"} />
+          : <ReportList rows={reportRows} onOpen={openReport}
+              onAppraise={() => run("appraise")} busy={job?.state === "running"} />
         )}
       </main>
-      <SourcePanel source={open} onClose={() => setOpen(null)} />
+      <SourcePanel source={open} onClose={() => setOpen(null)} onReport={openReport} />
     </div>
   );
 }

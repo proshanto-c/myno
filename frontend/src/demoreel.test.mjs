@@ -7,7 +7,7 @@
  * minutes of pointer animation and narration are checked in no time at all,
  * without a real timer, a real element, a real click or a real utterance.
  */
-import { SARA, FIELDS, signUp, simulation, tutorial, runReel, keystrokes, isEmpty,
+import { SARA, FIELDS, signUp, showcase, runReel, keystrokes, isEmpty,
          firstPhase, afterPhase, travelMs, sayMs, TYPE_MS, FIELD_GAP_MS, PRESS_MS, BEAT_MS,
          TRAVEL_MIN, TRAVEL_MAX, SAY_MIN_MS, SAY_MAX_MS } from "./demoreel.js";
 
@@ -61,7 +61,7 @@ function fakeBrowser({ missing = [], moveMs = 300, revealMs = 0, sayEvery = null
   return b;
 }
 
-const REELS = [["sign-up", signUp(SARA)], ["simulation", simulation()], ["tutorial", tutorial()]];
+const REELS = [["sign-up", signUp(SARA)], ["showcase", showcase()]];
 const kinds = (list, kind) => list.filter((x) => x.do === kind);
 const targets = (list, kind) => kinds(list, kind).map((b) => b.target);
 const count = (list, kind, target) => targets(list, kind).filter((t) => t === target).length;
@@ -162,15 +162,26 @@ test("there is a pause between fields and a quicker beat within one", () => {
   eq(betweenFields >= FIELD_GAP_MS + PRESS_MS, true, `moved on too fast (${betweenFields}ms): `);
 });
 
-// ---- the simulation --------------------------------------------------------
-test("the simulation visits every tab", () => {
-  const clicked = targets(simulation(), "press");
+// ---- the showcase ----------------------------------------------------------
+test("the showcase visits every tab", () => {
+  const clicked = targets(showcase(), "press");
   for (const tab of ["nav:home", "go:record", "nav:insights", "go:advocacy", "nav:settings"])
     eq(clicked.includes(tab), true, `never went to ${tab}: `);
 });
 
-test("everything the simulation changes, it changes back", () => {
-  const list = simulation();
+test("the showcase drives and explains in the same pass", () => {
+  const list = showcase();
+  eq(kinds(list, "spot").length >= 5, true, "it never lights anything up: ");
+  eq(kinds(list, "press").length >= 10, true, "it never actually uses the app: ");
+  // whatever it lights up it is also hovering — the shared invariant above
+  // checks the pointer is on the target of every spot
+  const lastSpot = list.map((b) => b.do).lastIndexOf("spot");
+  const lastDim = list.map((b) => b.do).lastIndexOf("dim");
+  eq(lastDim > lastSpot, true, "it ends with the lights still on: ");
+});
+
+test("everything the showcase changes, it changes back", () => {
+  const list = showcase();
   for (const t of ["cal:today", "cal:range", "block:mood", "adv:lab", "cond:hirsutism"])
     eq(count(list, "press", t) % 2, 0, `${t} was left toggled: `);
   // a Ferriman-Gallwey score left behind would go on settling a criterion long
@@ -179,57 +190,46 @@ test("everything the simulation changes, it changes back", () => {
     eq(count(list, "press", t) % 2, 0, `${t} was left scored: `);
 });
 
-test("the simulation shows what hirsutism settles, and where it shows up", () => {
-  const list = simulation();
+test("the showcase shows what hirsutism settles, and where it shows up", () => {
+  const list = showcase();
   const clicks = targets(list, "press");
   eq(clicks.includes("cond:hirsutism"), true, "the sheet is never opened: ");
-  eq(clicks.filter((t) => t.startsWith("fg:")).length >= 8, true, "too little of the sheet is scored: ");
+  // two areas scored, and the same two tapped again to clear them
+  eq(new Set(clicks.filter((t) => t.startsWith("fg:"))).size >= 2, true, "too little of the sheet is scored: ");
   // scoring it has to be followed by the screen where it changes the verdict
   const scored = clicks.findIndex((t) => t.startsWith("fg:"));
   eq(clicks.indexOf("go:advocacy", scored) > scored, true, "it scores the sheet and never shows the effect: ");
 });
 
-test("the simulation never touches what it has no business touching", () => {
+test("the showcase never touches what it has no business touching", () => {
   // the microphone asks the browser for permission, printing opens a dialog,
   // and switching the voice off mid-sentence would silence the narrator
-  const off = ["rec:mic", "rec:end", "adv:print", "set:voice", "set:sounds", "set:tour", "set:sim", "log:done"];
-  for (const t of targets(simulation(), "press"))
+  const off = ["rec:mic", "rec:end", "adv:print", "set:voice", "set:sounds", "set:guide", "log:done"];
+  for (const t of targets(showcase(), "press"))
     eq(off.includes(t), false, `pressed ${t}: `);
 });
 
-test("the simulation holds a conversation by typing, and submits it", () => {
-  const list = simulation();
+test("the showcase holds a conversation by typing, and submits it", () => {
+  const list = showcase();
   const typed = kinds(list, "key").filter((b) => b.target === "rec:type");
   eq(typed.length > 10, true, "nothing was said to the Record screen: ");
   eq(targets(list, "enter"), ["rec:type"]);
   // the last keystroke is the whole line, and the return key follows it
   eq(typed[typed.length - 1].value.endsWith("slept"), true, `line came out ${typed[typed.length - 1].value}: `);
+  eq(typed.length < 60, true, "the typed line is too long to sit through: ");
 });
 
-test("the simulation talks the whole way through", () => {
-  const spoken = kinds(simulation(), "say");
-  eq(spoken.length >= 15, true, `only ${spoken.length} lines: `);
-  eq(spoken.some((b) => b.hold === false), true, "nothing is ever said while it moves: ");
+test("the showcase talks the whole way through", () => {
+  const list = showcase();
+  const spoken = [...kinds(list, "say"), ...kinds(list, "spot")];
+  eq(spoken.length >= 10, true, `only ${spoken.length} lines: `);
+  eq(kinds(list, "say").some((b) => b.hold === false), true, "nothing is ever said while it moves: ");
+  // never two hundred words to say what fits in twenty — this is an advert
+  const longest = Math.max(...spoken.map((b) => b.text.split(/\s+/).length));
+  eq(longest <= 24, true, `a ${longest}-word line: `);
 });
 
 // ---- the tutorial ----------------------------------------------------------
-test("the tutorial changes nothing", () => {
-  const list = tutorial();
-  eq(kinds(list, "key").length, 0, "the tutorial typed something: ");
-  eq(kinds(list, "enter").length, 0, "the tutorial submitted something: ");
-  for (const t of targets(list, "press"))
-    eq(t.startsWith("nav:"), true, `pressed ${t}, which is not navigation: `);
-});
-
-test("the tutorial lights up something on every tab, and puts the lights back", () => {
-  const list = tutorial();
-  eq(kinds(list, "spot").length >= 8, true, "too little of the interface is explained: ");
-  eq(kinds(list, "dim").length >= 1, true, "the last highlight is never cleared: ");
-  const lastSpot = list.map((b) => b.do).lastIndexOf("spot");
-  const lastDim = list.map((b) => b.do).lastIndexOf("dim");
-  eq(lastDim > lastSpot, true, "it ends with the lights still on: ");
-});
-
 // ---- running them ----------------------------------------------------------
 test("a line that is spoken holds the reel; one spoken over the top does not", () => {
   const clock = fakeClock();
@@ -250,12 +250,14 @@ test("a target that isn't there costs a beat, not the reel", () => {
   runReel(signUp(SARA), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
   clock.run();
   eq(b.clicked.includes("goal:whatswrong"), false);
-  eq(b.clicked.filter((c) => c === "next").length, 4, "the reel gave up: ");
+  eq(b.clicked.filter((c) => c === "next").length, 3, "the reel gave up: ");
   eq(b.form.name, SARA.name);
 });
 
 test("every reel finishes, and none of them outstays its welcome", () => {
-  const limits = { "sign-up": 60, simulation: 420, tutorial: 300 };   // seconds, worst case
+  // Seconds, worst case: every hop the slowest it can be. An advert that runs
+  // past these is not an advert any more.
+  const limits = { "sign-up": 55, showcase: 150 };
   for (const [name, list] of REELS) {
     const clock = fakeClock();
     const b = fakeBrowser({ moveMs: TRAVEL_MAX, revealMs: 420 });     // every hop the slowest it can be
@@ -283,39 +285,37 @@ test("a line is given about as long as it takes to say", () => {
 });
 
 // ---- which reel is due -----------------------------------------------------
-const ON = { simulation: true, tutorial: true };
+const ON = { guide: true };
 
-test("a first visit is signed up, shown around, then taught", () => {
+test("a first visit is signed up, then shown around", () => {
   eq(firstPhase({ ready: true, onboarded: false, empty: true, settings: ON }), "signup");
-  eq(afterPhase("signup", { settings: ON }).next, "sim");
-  eq(afterPhase("sim", { settings: ON }).next, "tour");
-  eq(afterPhase("tour", { settings: ON }).next, null);
+  eq(afterPhase("signup").next, "show");
+  eq(afterPhase("show").next, null);
 });
 
 test("nothing plays before the app is ready", () => {
   eq(firstPhase({ ready: false, onboarded: false, empty: true, settings: ON }), null);
 });
 
-test("a switched-off mode never starts, and the other one still does", () => {
-  eq(firstPhase({ ready: true, onboarded: true, settings: { simulation: false, tutorial: true } }), "tour");
-  eq(firstPhase({ ready: true, onboarded: true, settings: { simulation: true, tutorial: false } }), "sim");
-  eq(firstPhase({ ready: true, onboarded: true, settings: {} }), null);
-  eq(afterPhase("sim", { settings: { tutorial: false } }).next, null, "the tutorial ran anyway: ");
+test("switched off, nothing plays at all", () => {
+  eq(firstPhase({ ready: true, onboarded: true, settings: { guide: false } }), null);
+  eq(firstPhase({ ready: true, onboarded: false, empty: true, settings: {} }), null);
 });
 
-test("a half-filled sign-up is left alone, and so is a returning visit", () => {
+test("someone already onboarded is shown around rather than signed up again", () => {
+  eq(firstPhase({ ready: true, onboarded: true, settings: ON }), "show");
+});
+
+test("a half-filled sign-up is left alone", () => {
   eq(firstPhase({ ready: true, onboarded: false, empty: false, settings: ON }), null);
-  eq(firstPhase({ ready: true, onboarded: true, settings: { simulation: false, tutorial: false } }), null);
 });
 
-test("a mode that has played is spent, and so is one that was interrupted", () => {
-  eq(afterPhase("sim", { settings: ON }).off, "simulation");
-  eq(afterPhase("tour", { settings: ON }).off, "tutorial");
-  eq(afterPhase("signup", { settings: ON }).off, null, "the sign-up spent the switch before the tour ran: ");
-  eq(afterPhase("signup", { byHand: true, settings: ON }).off, "simulation");
-  eq(afterPhase("sim", { byHand: true, settings: ON }), { next: null, off: "simulation" },
-     "taking over led straight into the tutorial: ");
-  eq(afterPhase("tour", { byHand: true, settings: ON }).off, "tutorial");
+test("the guide is spent once it has played, and once it has been skipped", () => {
+  eq(afterPhase("show").off, "guide");
+  eq(afterPhase("signup").off, null, "the sign-up spent the switch before the tour ran: ");
+  eq(afterPhase("signup", { byHand: true }), { next: null, off: "guide" },
+     "skipping the sign-up led straight into the tour: ");
+  eq(afterPhase("show", { byHand: true }).off, "guide");
 });
 
 // ---- getting out of the way ------------------------------------------------
@@ -335,7 +335,7 @@ test("cancelling stops it mid-word and nothing more happens", () => {
 test("cancelling twice is harmless", () => {
   const clock = fakeClock();
   const b = fakeBrowser();
-  const cancel = runReel(simulation(), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
+  const cancel = runReel(showcase(), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
   cancel(); cancel();
   clock.run();
   eq(b.clicked.length, 0);

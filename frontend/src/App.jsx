@@ -9,8 +9,8 @@ import {
 import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
 // The sign-up signs itself up for a demo — beats, timings and the rule that a
 // person's form is left alone, all tested in demoreel.test.mjs.
-import { SARA, signUp, simulation, tutorial, runReel, isEmpty, firstPhase, afterPhase,
-         travelMs, sayMs, SCROLL_MS } from "./demoreel.js";
+import { SARA, signUp, showcase, runReel, isEmpty, firstPhase, afterPhase,
+         sentences, travelMs, sayMs, SCROLL_MS } from "./demoreel.js";
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
   cycleRuns, DAY_MS } from "./cycles.js";
@@ -100,6 +100,14 @@ const FONTS = `
   border:2.5px solid ${C.plum}; box-shadow:0 0 0 9999px rgba(42,35,49,0.45);
   transition:left .38s cubic-bezier(.34,.06,.22,1), top .38s cubic-bezier(.34,.06,.22,1),
              width .38s ease, height .38s ease; }
+/* while the guide plays it owns the screen: taps land here and go no further,
+   so nobody fights the pointer for a button. Escape is the way out, and the
+   hint says so. */
+.demo-shield{ position:fixed; inset:0; z-index:118; background:transparent; }
+.demo-hint{ position:fixed; z-index:125; top:14px; right:14px; pointer-events:none;
+  background:rgba(42,35,49,.62); color:#fff; border-radius:9999px; padding:6px 13px;
+  font-family:${bodyf}; font-size:12px; font-weight:600; letter-spacing:.02em;
+  backdrop-filter:blur(6px); animation:fadeIn .5s ease both; }
 /* what is being said, for anyone watching with the sound off */
 .demo-caption{ position:fixed; z-index:125; left:50%; bottom:104px; transform:translateX(-50%);
   pointer-events:none; max-width:min(560px, calc(100% - 32px)); text-align:center;
@@ -201,7 +209,7 @@ function useSpeaker(settings) {
   const speak = useCallback((text, onDone) => {
     if (!settings.voice || !text) { onDone?.(); return; }
     doneRef.current = onDone || null;
-    queueRef.current = (text.match(/[^.!?]+[.!?]*\s*/g) || [text]).map((s) => s.trim()).filter(Boolean);
+    queueRef.current = sentences(text);
     if (!playingRef.current) playNext();
   }, [settings.voice, playNext]);
   useEffect(() => () => stop(), [stop]);
@@ -784,7 +792,7 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const [profile, setProfile] = useState(BLANK);
   const [logs, setLogs] = useState([]);
-  const [settings, setSettings] = useState({ nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", simulation: true, tutorial: true });
+  const [settings, setSettings] = useState({ nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", guide: true });
   const vw = useViewport();
   const wide = vw >= 1024;
   const schema = useRecordSchema(settings);
@@ -792,7 +800,7 @@ export default function App() {
   useEffect(() => { (async () => {
     const s = await loadState();
     const profile0 = s?.profile || BLANK;
-    const settings0 = { nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", simulation: true, tutorial: true, ...(s?.settings || {}) };
+    const settings0 = { nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct", guide: true, ...(s?.settings || {}) };
     setProfile(profile0); setSettings(settings0);
     // DB-backed logs: provision a patient, seed realistic history, load it.
     const base = (settings0.backendUrl || "/api").replace(/\/$/, "");
@@ -890,7 +898,7 @@ export default function App() {
   // app the way a person would and drives the same controls, so there is
   // nothing here for the screens themselves to know about.
   const narrator = useSpeaker(settings);
-  const say = useCallback((text) => { narrator.stop(); narrator.speak(text); }, [narrator]);
+  const say = useCallback((text) => narrator.speak(text), [narrator]);
   const demo = useDirector({ ready, profile, settings, setSettings, speak: say, silence: narrator.stop });
 
   const axes = assessment?.axes;
@@ -1019,7 +1027,7 @@ const pressKey = (el, key) => {
   el.dispatchEvent(new view.KeyboardEvent("keydown", { key, bubbles: true }));
 };
 
-const REELS = { signup: () => signUp(SARA), sim: simulation, tour: tutorial };
+const REELS = { signup: () => signUp(SARA), show: showcase };
 
 /**
  * Runs whichever reel is due, and hands the app back when it is done.
@@ -1039,13 +1047,19 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence }) 
   // halfway through a two-minute tour.
   const live = useRef({});
   live.current = { profile, settings, setSettings, speak, silence };
+  // One history entry for the whole run, not one per reel: pushing again when
+  // the sign-up hands over to the tour would leave the back button popping the
+  // entry the tour had just pushed — cancelling it a moment after it started.
+  // It comes back off the stack when the run ends, and never when the back
+  // button is what ended it.
+  const pushed = useRef(false), popped = useRef(false);
 
   // Which reel is due — the rule is in demoreel.js, with the tests.
   useEffect(() => {
     if (phase) return;
     const due = firstPhase({ ready, onboarded: profile.onboarded, empty: isEmpty(profile), settings });
     if (due) setPhase(due);
-  }, [ready, phase, profile.onboarded, settings.simulation, settings.tutorial]);
+  }, [ready, phase, profile.onboarded, settings.guide]);
 
   useEffect(() => {
     if (!phase) return;
@@ -1059,7 +1073,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence }) 
     // it — a pointer clicking away at a document nobody is looking at is worse
     // than no pointer at all.
     const doc = document;
-    let stop = () => {};
+    let stop = () => {}, gone = null;
     const find = (t) => {
       if (!doc.defaultView || doc.defaultView.closed) { stop(); return null; }
       return doc.querySelector(`[data-demo="${t}"]`);
@@ -1113,22 +1127,37 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence }) 
       const { next, off } = afterPhase(phase, { byHand, settings: now });
       if (off) save?.((s) => ({ ...s, [off]: false }));
       setPhase(next);
+      if (next) return;
+      gone = setTimeout(() => setPointer(null), 700);              // after the fade
+      // Tidy the stack only once the listener above is gone — the pop is
+      // asynchronous, and this must not read as somebody pressing back.
+      if (pushed.current && !popped.current) {
+        pushed.current = false;
+        setTimeout(() => { try { window.history.back(); } catch (e) {} }, 300);
+      }
     };
 
     const cancel = runReel(REELS[phase](), io);
     stop = cancel;
-    // A hand on the machine ends it. Everything the reel does is untrusted,
-    // which is exactly how the browser marks an event it did not witness. The
-    // first moment is deaf on purpose: the click that switched a mode on in
-    // Settings must not be the one that switches it straight back off.
-    const armed = Date.now() + 800;
-    const handOver = (e) => {
-      if (!e.isTrusted || Date.now() < armed) return;
-      cancel(); setPointer(null); setRing(null); finish(true);
+    // ONE WAY OUT. While it plays it owns the screen — a stray tap on a control
+    // it is about to press would leave the rest of the reel talking about a
+    // screen that isn't there. So taps go into the shield and nowhere else, and
+    // skipping is deliberate: Escape, or the back button on a phone.
+    const skip = () => { cancel(); setPointer(null); setRing(null); finish(true); };
+    const onKey = (e) => { if (e.isTrusted && (e.key === "Escape" || e.key === "Esc")) skip(); };
+    const onBack = () => { popped.current = true; skip(); };
+    // Back needs something of its own to pop, or it would leave the app.
+    if (!pushed.current) {
+      try { window.history.pushState({ mynoGuide: true }, ""); pushed.current = true; }
+      catch (e) { /* no history, no back button */ }
+    }
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("popstate", onBack);
+    return () => {
+      cancel(); live.current.silence?.(); clearTimeout(gone);
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("popstate", onBack);
     };
-    const EVENTS = ["pointerdown", "mousedown", "keydown", "touchstart"];
-    for (const ev of EVENTS) window.addEventListener(ev, handOver, true);
-    return () => { cancel(); live.current.silence?.(); for (const ev of EVENTS) window.removeEventListener(ev, handOver, true); };
   }, [phase]);
 
   return { pointer, ring, spot, caption, playing: !!phase };
@@ -1139,7 +1168,14 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence }) 
 // a person reaching past it to take over is the point.
 function DemoLayer({ pointer, ring, spot, caption }) {
   if (!pointer) return null;
+  const done = !!pointer.gone;
   return (<>
+    {/* Swallows real taps so nobody fights the pointer; Escape is the way out.
+        It comes down the instant the reel is over — the pointer is still fading
+        at that moment, and a shield that outlived it would take the app with
+        it. */}
+    {!done && <div className="demo-shield" />}
+    {!done && <div className="demo-hint">Esc — or back — to skip</div>}
     {spot && <div className="demo-spot" style={{ left: spot.x - 6, top: spot.y - 6, width: spot.w + 12, height: spot.h + 12 }} />}
     {caption && <div className="demo-caption"><span>{caption}</span></div>}
     {/* keyed by the click count, so every press draws its own ring where it landed */}
@@ -1723,7 +1759,9 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const [partial, setPartial] = useState(""); const [busy, setBusy] = useState(false); const [text, setText] = useState(""); const [err, setErr] = useState("");
   const [reply, setReply] = useState(""); const speaker = useSpeaker(settings);
   const [flash, setFlash] = useState({}); const timers = useRef({});
-  const [insOn, setInsOn] = useState(true); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
+  const [insOn, setInsOn] = useState(true); const insRef = useRef(insOn);
+  useEffect(() => { insRef.current = insOn; }, [insOn]);
+  const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
   const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false); const [spoken, setSpoken] = useState({});  // schema fields Tawaazun heard from speech
 
   // Live insights run in the BACKGROUND (mic stays enabled) — they can take a
@@ -2788,24 +2826,18 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, s
         <span style={{ fontFamily: bodyf, fontSize: 15 }}>Tap sounds</span></label>
       <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input data-demo="set:voice" type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.plum, width: 18, height: 18 }} /><span style={{ fontSize: 15 }}>Speak replies aloud</span></label>
     </Card>
-    {/* THE WAY OUT. Both modes are on for a first visit and switch themselves
-        off at the end of their own run, so nothing here ever hijacks a second
-        one — and touching the screen stops whichever is playing on the spot. */}
+    {/* THE WAY OUT. It is on for a first visit and switches itself off at the
+        end of its own run, so nothing here ever hijacks a second one. */}
     <Card demo="set:demo" style={{ marginBottom: 14 }}>
       <Label color={C.inkVar}>Guided demo</Label>
       <p style={{ fontSize: 12.5, color: C.inkVar, margin: "8px 0 12px", lineHeight: 1.5 }}>
-        <Word font={head} /> can show itself: the simulation drives every tab out loud, and the tutorial after it
-        points at each part of the interface. Both end on their own, and touching the screen ends them sooner.</p>
-      <label data-demo="set:sim" style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginBottom: 12 }}>
-        <input type="checkbox" checked={settings.simulation !== false} onChange={(e) => set("simulation", e.target.checked)}
+        Haaniyah signs you up, then shows you round <Word font={head} /> — talking, pointing, and using the app
+        as she goes. It plays once and switches itself off. Escape, or the back button, stops it any time.</p>
+      <label data-demo="set:guide" style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+        <input type="checkbox" checked={settings.guide !== false} onChange={(e) => set("guide", e.target.checked)}
           style={{ width: 18, height: 18, accentColor: C.plum, marginTop: 2 }} />
-        <span><span style={{ fontFamily: bodyf, fontSize: 15 }}>Simulation</span>
-          <span style={{ display: "block", fontSize: 12, color: C.inkVar }}>It walks through every tab and talks as it goes</span></span></label>
-      <label data-demo="set:tour" style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
-        <input type="checkbox" checked={settings.tutorial !== false} onChange={(e) => set("tutorial", e.target.checked)}
-          style={{ width: 18, height: 18, accentColor: C.plum, marginTop: 2 }} />
-        <span><span style={{ fontFamily: bodyf, fontSize: 15 }}>Tutorial</span>
-          <span style={{ display: "block", fontSize: 12, color: C.inkVar }}>A guided tour of the interface, changing nothing</span></span></label>
+        <span><span style={{ fontFamily: bodyf, fontSize: 15 }}>Show me around</span>
+          <span style={{ display: "block", fontSize: 12, color: C.inkVar }}>Switch it back on to watch the tour again</span></span></label>
     </Card>
     <Card demo="set:block" style={{ marginBottom: 14 }}>
       <Label color={C.inkVar}>Block topics — <Word font={head} /> won't ask about or use these</Label>

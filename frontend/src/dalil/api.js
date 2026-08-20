@@ -46,8 +46,12 @@ export const api = {
   runs: () => request("/runs"),
   vocabulary: () => request("/vocabulary"),
 
+  reports: () => request("/reports"),
+  report: (sourceId) => request(`/report/${sourceId}`),
+
   // Long jobs answer immediately with a handle; the portal polls /jobs.
   jobs: () => request("/jobs"),
+  appraise: (body) => request("/jobs/appraise", { method: "POST", body }),
   anchor: () => request("/jobs/anchor", { method: "POST" }),
   seed: (body) => request("/jobs/seed", { method: "POST", body }),
   enrich: (limit) => request(`/jobs/enrich${query({ limit })}`, { method: "POST" }),
