@@ -1,11 +1,11 @@
 """
-Myno backend — orchestration + persistence.
+Tawazzun backend — orchestration + persistence.
 
 Responsibilities:
   * Postgres-backed storage for patients, daily logs, the patient's own
     vocabulary ("personal descriptors"), a feature blacklist, conversation
     history, and an adaptation state.
-  * A /chat endpoint that drives the conversation: it knows general PCOS facts,
+  * A /chat endpoint that drives the conversation: it knows general PMOS facts,
     asks the next relevant question, reuses the patient's own words, ADAPTS to
     them, and NEVER asks about blacklisted features. Claude is the LLM.
   * Thin /tts proxy so the frontend has a single origin.
@@ -13,7 +13,8 @@ Responsibilities:
 Run via docker-compose (see docker-compose.yml). Env:
   DATABASE_URL, ANTHROPIC_API_KEY, TTS_URL
 """
-import os, json, random, math, statistics, asyncio, urllib.parse, datetime as dt
+import os, json, random, math, statistics, asyncio, hashlib, urllib.parse, datetime as dt
+from collections import OrderedDict
 from typing import Optional
 
 import httpx
@@ -103,7 +104,7 @@ with engine.begin() as _conn:
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions_at TIMESTAMP"))
 
 # ---------------------------------------------------------------- app
-app = FastAPI(title="Myno backend")
+app = FastAPI(title="Tawazzun backend")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 FEATURES = {  # feature key -> human label + which log fields it governs
@@ -117,7 +118,8 @@ FEATURES = {  # feature key -> human label + which log fields it governs
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "model": ANTHROPIC_MODEL, "features": list(FEATURES.keys())}
+    return {"status": "ok", "model": ANTHROPIC_MODEL, "features": list(FEATURES.keys()),
+            "claude_cache": _cache_stats()}
 
 # ----- patients
 class PatientIn(BaseModel):
@@ -193,7 +195,7 @@ def _seed_logs(pid: int, days: int = 120):
     today = dt.date.today()
     weight = round(random.uniform(72, 78), 1)
     since = 6
-    cycle = random.randint(31, 44)        # PCOS: long / irregular cycles
+    cycle = random.randint(31, 44)        # PMOS: long / irregular cycles
     prev_sugar = 1
     for i in range(days, -1, -1):
         d = today - dt.timedelta(days=i)
@@ -366,7 +368,7 @@ async def patient_insights(pid: int):
     stats = _insight_summary(logs)
     block_line = ", ".join(FEATURES[f]["label"] for f in blocked if f in FEATURES) or "none"
     sys = (
-        "You are Myno, a practical PCOS companion. From this person's own tracking summary, produce 2-4 "
+        "You are Tawazzun, a practical PMOS companion. From this person's own tracking summary, produce 2-4 "
         "concrete, data-grounded insights — each a real trend or correlation in THEIR numbers — with brief, "
         "actionable, non-diagnostic advice. Never diagnose or give drug doses. "
         f"NEVER reference anything blocked: {block_line}.\n"
@@ -389,12 +391,12 @@ STANDARD_TRACKERS = [
     "hair loss", "skin patches", "hyperpigmentation", "bloating", "existing diagnoses",
 ]
 SUGG_SYSTEM = (
-    "You are a PCOS research analyst reviewing recent literature (2022-2025). The purpose is to generate "
+    "You are a PMOS research analyst reviewing recent literature (2022-2025). The purpose is to generate "
     "possible items for the user to track in another part of the app.\n"
     "The user will tell you what their app already tracks, and optionally what devices they own.\n"
     "Return ONLY a JSON array, no markdown, no preamble. Each item:\n"
     '{"tracker":"short name (2-5 words)","explanation":"1-2 sentences for a general audience (no jargon) on why '
-    'this is worth tracking for PCOS - focus on what the person might notice or why it matters for how they feel",'
+    'this is worth tracking for PMOS - focus on what the person might notice or why it matters for how they feel",'
     '"category":"one of: Symptom | Metabolic | Hormonal | Gut | Sleep | Skin | Neurological | Reproductive",'
     '"evidence":"Strong | Emerging | Early","tracking_method":"how the tracking app can get this information.",'
     '"requires_device":true or false,"device_needed":"name of device if requires_device is true, else null",'
@@ -406,7 +408,7 @@ SUGG_SYSTEM = (
 SUGG_TTL = dt.timedelta(hours=20)
 
 def _pubmed_link(q: str) -> str:
-    return f"https://pubmed.ncbi.nlm.nih.gov/?term={urllib.parse.quote(q or 'PCOS')}&sort=date"
+    return f"https://pubmed.ncbi.nlm.nih.gov/?term={urllib.parse.quote(q or 'PMOS')}&sort=date"
 
 async def _gap_suggestions(current_trackers, devices, focus):
     trackers_str = "\n".join(f"- {t}" for t in current_trackers)
@@ -431,7 +433,7 @@ async def _gap_suggestions(current_trackers, devices, focus):
             "category": s.get("category", ""), "evidence": s.get("evidence", ""),
             "tracking_method": s.get("tracking_method", ""), "requires_device": rd,
             "device_needed": s.get("device_needed"), "device_owned": owned,
-            "read_more": _pubmed_link(s.get("pubmed_query", "PCOS")),
+            "read_more": _pubmed_link(s.get("pubmed_query", "PMOS")),
         })
     out.sort(key=lambda x: (x["requires_device"], not x["device_owned"]))
     return out
@@ -490,22 +492,22 @@ ADVOCACY_BANK = [
     {"id": "pain_severe_frequent", "category": "pain", "trigger_conditions": {"type": "threshold", "metric": "pain_severe_days_per_cycle", "operator": ">=", "value": 3},
      "clinical_framing": "I have severe pain on {pain_severe_days_per_cycle} days during most cycles, mainly around days 1-3, and it interferes with work and daily activities.",
      "keywords_phrases": ["This level of pain is affecting my quality of life.", "I'd like this pain documented in my notes.", "I'd like to discuss pain management options beyond over-the-counter medication."],
-     "questions_to_ask": ["Given this pain pattern, could we explore whether further investigation (e.g. an ultrasound) is appropriate?", "What pain management options are suitable given my other PCOS symptoms?"]},
+     "questions_to_ask": ["Given this pain pattern, could we explore whether further investigation (e.g. an ultrasound) is appropriate?", "What pain management options are suitable given my other PMOS symptoms?"]},
     {"id": "cycle_irregularity", "category": "cycle_regularity", "trigger_conditions": {"type": "threshold", "metric": "cycle_length_std_dev", "operator": ">=", "value": 7},
      "clinical_framing": "My cycle length has varied by roughly {cycle_length_std_dev} days over the last {period_days} days, ranging from {cycle_length_min} to {cycle_length_max} days.",
      "keywords_phrases": ["I'd like this irregularity recorded as part of my history.", "This pattern has been consistent over several months, not a one-off."],
-     "questions_to_ask": ["Given this irregularity, would it be appropriate to check hormone levels (e.g. LH, FSH, testosterone) or have an ultrasound?", "Could this pattern be related to PCOS, and if so, what would the next step be?"]},
+     "questions_to_ask": ["Given this irregularity, would it be appropriate to check hormone levels (e.g. LH, FSH, testosterone) or have an ultrasound?", "Could this pattern be related to PMOS, and if so, what would the next step be?"]},
     {"id": "missed_periods", "category": "cycle_regularity", "trigger_conditions": {"type": "threshold", "metric": "missed_periods_last_6mo", "operator": ">=", "value": 2},
      "clinical_framing": "I've missed {missed_periods_last_6mo} periods in the last 6 months.",
      "keywords_phrases": ["I'd like this gap recorded in my notes.", "I'd like to understand what's causing this before it continues."],
-     "questions_to_ask": ["Should we investigate this with bloodwork or imaging?", "Is this consistent with PCOS, or could it indicate something else worth ruling out?"]},
+     "questions_to_ask": ["Should we investigate this with bloodwork or imaging?", "Is this consistent with PMOS, or could it indicate something else worth ruling out?"]},
     {"id": "fatigue_persistent", "category": "fatigue_energy", "trigger_conditions": {"type": "threshold", "metric": "fatigue_days_per_week", "operator": ">=", "value": 4},
      "clinical_framing": "I experience significant fatigue on {fatigue_days_per_week} days most weeks, even with adequate sleep.",
      "keywords_phrases": ["This fatigue isn't explained by my sleep or lifestyle.", "I'd like to rule out other causes, such as thyroid issues or anaemia.", "I'd like this logged so we can track whether it changes."],
-     "questions_to_ask": ["Could we test thyroid function and iron/ferritin levels given this fatigue pattern?", "Could this fatigue be linked to insulin resistance, given my PCOS?"]},
+     "questions_to_ask": ["Could we test thyroid function and iron/ferritin levels given this fatigue pattern?", "Could this fatigue be linked to insulin resistance, given my PMOS?"]},
     {"id": "mood_low_frequent", "category": "mood", "trigger_conditions": {"type": "threshold", "metric": "mood_low_days_per_month", "operator": ">=", "value": 10},
      "clinical_framing": "I've logged low mood on {mood_low_days_per_month} days in the last month, and it feels connected to my cycle and hormone patterns.",
-     "keywords_phrases": ["I'd like this considered as part of my hormonal health picture, not just on its own.", "I'm not only asking for a general mental health referral - I think this may be connected to my PCOS."],
+     "keywords_phrases": ["I'd like this considered as part of my hormonal health picture, not just on its own.", "I'm not only asking for a general mental health referral - I think this may be connected to my PMOS."],
      "questions_to_ask": ["Could there be a hormonal contribution to this mood pattern that's worth addressing alongside any mental health support?"]},
     {"id": "hirsutism", "category": "hair_skin", "trigger_conditions": {"type": "boolean", "metric": "hirsutism_descriptor_present", "value": True},
      "clinical_framing": "I've noticed increased hair growth in a male-pattern distribution (e.g. {hirsutism_areas}), which has developed or changed over {hirsutism_duration}.",
@@ -520,25 +522,25 @@ ADVOCACY_BANK = [
      "keywords_phrases": ["I'd like this change documented.", "I'm not looking for general weight advice - I'd like to understand why this is happening given my other symptoms."],
      "questions_to_ask": ["Could this weight change be related to insulin resistance or another hormonal factor?", "Is it worth checking blood sugar or insulin levels given this pattern?"]},
     {"id": "insulin_resistance_pattern", "category": "metabolic", "trigger_conditions": {"type": "boolean", "metric": "insulin_resistance_symptoms_present", "value": True},
-     "clinical_framing": "I've noticed a pattern of {insulin_resistance_symptom_description}, which can be associated with insulin resistance in PCOS.",
-     "keywords_phrases": ["I'd like to rule out insulin resistance given this pattern and my PCOS symptoms.", "I'd like this tested rather than just managed with general dietary advice."],
+     "clinical_framing": "I've noticed a pattern of {insulin_resistance_symptom_description}, which can be associated with insulin resistance in PMOS.",
+     "keywords_phrases": ["I'd like to rule out insulin resistance given this pattern and my PMOS symptoms.", "I'd like this tested rather than just managed with general dietary advice."],
      "questions_to_ask": ["Could we do a fasting glucose/insulin test or HbA1c given these symptoms?", "If insulin resistance is confirmed, what management options would be appropriate?"]},
     {"id": "sleep_disturbance", "category": "sleep", "trigger_conditions": {"type": "threshold", "metric": "sleep_disturbance_nights_per_week", "operator": ">=", "value": 3},
      "clinical_framing": "I have disrupted sleep on {sleep_disturbance_nights_per_week} nights most weeks, and it doesn't seem to correlate with stress or lifestyle changes.",
      "keywords_phrases": ["I'd like this connected to my other symptoms when reviewing my hormone health.", "This has been ongoing for several months."],
-     "questions_to_ask": ["Could this sleep pattern be related to my hormone levels or PCOS?"]},
+     "questions_to_ask": ["Could this sleep pattern be related to my hormone levels or PMOS?"]},
     {"id": "fertility_concern", "category": "fertility", "trigger_conditions": {"type": "boolean", "metric": "fertility_concern_flag", "value": True},
-     "clinical_framing": "I have concerns about my fertility given my cycle pattern and PCOS, and I'd like to discuss this proactively rather than waiting until I'm trying to conceive.",
+     "clinical_framing": "I have concerns about my fertility given my cycle pattern and PMOS, and I'd like to discuss this proactively rather than waiting until I'm trying to conceive.",
      "keywords_phrases": ["I'd like to understand my options now, even though I'm not trying to conceive yet.", "I'd like a referral to discuss this if that's appropriate."],
      "questions_to_ask": ["What does my cycle pattern suggest about my fertility, and is there anything worth addressing now?", "Would a referral to a gynaecologist or fertility specialist be appropriate given my history?"]},
     {"id": "documentation_request_general", "category": "general", "trigger_conditions": {"type": "always"},
      "clinical_framing": "Regardless of what we decide today, I'd like to make sure these symptoms and this data are recorded in my notes.",
      "keywords_phrases": ["Could this be added to my chart, even if no action is taken today?", "I'd like a record of this conversation for future appointments."],
      "questions_to_ask": []},
-    {"id": "pcos_diagnosis_review", "category": "general", "trigger_conditions": {"type": "composite", "metric": "no_formal_pcos_diagnosis", "value": True, "min_matched_categories": 2},
-     "clinical_framing": "I haven't had a formal diagnosis confirming or ruling out PCOS, but I'm experiencing several symptoms commonly associated with it ({matched_categories}).",
+    {"id": "pmos_diagnosis_review", "category": "general", "trigger_conditions": {"type": "composite", "metric": "no_formal_pmos_diagnosis", "value": True, "min_matched_categories": 2},
+     "clinical_framing": "I haven't had a formal diagnosis confirming or ruling out PMOS, but I'm experiencing several symptoms commonly associated with it ({matched_categories}).",
      "keywords_phrases": ["I'd like to work towards a clearer picture - even a working diagnosis would help me know what to track and discuss going forward.", "I'd like this combination of symptoms considered together rather than individually."],
-     "questions_to_ask": ["Given these symptoms together, does pursuing a PCOS diagnosis (e.g. via the Rotterdam criteria) seem appropriate?", "What would the next steps be to confirm or rule this out?"]},
+     "questions_to_ask": ["Given these symptoms together, does pursuing a PMOS diagnosis (e.g. via the Rotterdam criteria) seem appropriate?", "What would the next steps be to confirm or rule this out?"]},
 ]
 ADVOCACY_BL_MAP = {"hair_skin": "hair_skin", "mood": "mood", "weight": "weight", "pain": "pain", "fertility": "fertility", "diet": "metabolic"}
 
@@ -613,11 +615,12 @@ def _advocacy_metrics(logs, patient):
         "sleep_disturbance_nights_per_week": round(cnt(lambda l: isinstance(l.get("sleep"), (int, float)) and l["sleep"] <= 1) / days * 7, 1),
         "fertility_concern_flag": any("concei" in str(g).lower() or "fertil" in str(g).lower() for g in goals),
         "prior_dismissal_flag": False,
-        "no_formal_pcos_diagnosis": "pcos" not in diag.lower(),
+        # patients write the condition either way, so accept both spellings
+        "no_formal_pmos_diagnosis": not any(k in diag.lower() for k in ("pmos", "pcos")),
     }
 
 ADVOCACY_SYSTEM = (
-    "You are generating a GP visit preparation report for a patient with PCOS or a related endocrine condition.\n"
+    "You are generating a GP visit preparation report for a patient with PMOS or a related endocrine condition.\n"
     "You will be given the patient's logged-data insights, their stored descriptors (their own words), a list of "
     "advocacy bank entries whose trigger_conditions matched, their blacklist, and their adapt_state.\n"
     "Your task:\n1. Write a brief, factual trends summary using the patient's own descriptor language where it fits.\n"
@@ -686,17 +689,63 @@ def get_descriptors(pid: int):
     out = [{"concept": r.concept, "phrase": r.phrase} for r in rows]; s.close(); return out
 
 # ---------------------------------------------------------------- chat
+# A reply is a pure function of (model, system, messages, max_tokens), and the
+# payload already carries everything patient-specific, so identical asks — the
+# same person reopening Insights, a poll that fires twice, a re-rendered tab —
+# are answered from memory instead of paying for the call again. Concurrent
+# identical asks share a single in-flight request rather than racing.
+CACHE_TTL = dt.timedelta(minutes=30)
+CACHE_MAX = 512                 # ~ a few MB of replies; oldest evicted first
+_cache: "OrderedDict[str, tuple]" = OrderedDict()
+_inflight: dict = {}
+
+def _cache_stats():
+    return {"entries": len(_cache), "inflight": len(_inflight)}
+
 async def claude(system: str, messages: list, max_tokens=900) -> str:
     if not ANTHROPIC_API_KEY:
         raise HTTPException(500, "ANTHROPIC_API_KEY not configured")
     headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
                "content-type": "application/json"}
-    payload = {"model": ANTHROPIC_MODEL, "max_tokens": max_tokens, "system": system, "messages": messages}
-    async with httpx.AsyncClient(timeout=60) as c:
-        r = await c.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
-        r.raise_for_status()
-        data = r.json()
-    return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+    # top-level cache_control auto-caches the last cacheable block, so the whole
+    # tools -> system -> messages prefix is reused on repeat calls (5 min TTL)
+    payload = {"model": ANTHROPIC_MODEL, "max_tokens": max_tokens, "system": system, "messages": messages,
+               "cache_control": {"type": "ephemeral"}}
+    key = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+    now = dt.datetime.utcnow()
+    hit = _cache.get(key)
+    if hit and hit[0] > now:
+        _cache.move_to_end(key)         # keep hot answers away from eviction
+        return hit[1]
+    _cache.pop(key, None)               # expired
+
+    async def _ask() -> str:
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
+            if r.status_code >= 400:
+                # Surface Claude's own reason (bad key, low credit balance, rate limit)
+                # instead of a bare status code — it lands in the log and in the UI.
+                try: why = r.json().get("error", {}).get("message", "")
+                except Exception: why = ""
+                raise HTTPException(502, f"Claude API {r.status_code}: {why or r.text[:200]}")
+            data = r.json()
+        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        # only successful replies are cached; errors stay retryable
+        _cache[key] = (dt.datetime.utcnow() + CACHE_TTL, text)
+        _cache.move_to_end(key)
+        while len(_cache) > CACHE_MAX:
+            _cache.popitem(last=False)
+        return text
+
+    task = _inflight.get(key)
+    if task is None:
+        task = asyncio.create_task(_ask())
+        _inflight[key] = task
+    try:
+        return await task
+    finally:
+        _inflight.pop(key, None)
 
 class ChatIn(BaseModel):
     message: str
@@ -714,8 +763,8 @@ async def chat(pid: int, body: ChatIn):
     msgs.append({"role": "user", "content": body.message})
 
     avg_gap = _avg_cycle(s, pid)
-    system = f"""You are Myno, a warm voice companion for someone navigating possible or diagnosed PCOS.
-You know general PCOS knowledge: the Rotterdam criteria (2 of 3 — irregular ovulation; clinical/biochemical hyperandrogenism; polycystic morphology on ultrasound), that mimics (thyroid, prolactin, CAH, Cushing's) must be excluded, and that PCOS links to insulin resistance, type 2 diabetes, cardiovascular and mood risks.
+    system = f"""You are Tawazzun, a warm voice companion for someone navigating possible or diagnosed PMOS.
+You know general PMOS knowledge: the Rotterdam criteria (2 of 3 — irregular ovulation; clinical/biochemical hyperandrogenism; polycystic morphology on ultrasound), that mimics (thyroid, prolactin, CAH, Cushing's) must be excluded, and that PMOS links to insulin resistance, type 2 diabetes, cardiovascular and mood risks.
 
 YOUR JOB EACH TURN:
 - Acknowledge what they said in THEIR words, then ask ONE relevant next question to understand their situation.
@@ -725,7 +774,7 @@ YOUR JOB EACH TURN:
 
 HARD CONSTRAINTS:
 - NEVER ask about, request, or volunteer anything in this blocked list: {blocked_labels or 'none'}. If they raise a blocked topic themselves, respond briefly and respectfully without probing, and move on.
-- NEVER diagnose or say whether they have PCOS; a clinician decides. Offer to help them prepare.
+- NEVER diagnose or say whether they have PMOS; a clinician decides. Offer to help them prepare.
 - No specific drug doses. Spoken aloud, so keep the 'reply' under ~45 words.
 
 Return ONLY JSON, no prose, no code fences:
@@ -754,7 +803,7 @@ Return ONLY JSON, no prose, no code fences:
     s.commit(); s.close()
     return {"reply": reply, "learned": new_desc, "adapt": adapt}
 
-# ----- chat: a warm, practical PCOS companion that talks WITH the patient and
+# ----- chat: a warm, practical PMOS companion that talks WITH the patient and
 # grounds its guidance in the patient's own tracked insights (trends and
 # correlations computed from their daily logs) plus their personal vocabulary,
 # history and adaptation state from the DB. This powers the Chat tab.
@@ -825,7 +874,7 @@ async def chatbox_chat(pid: int, body: ChatboxChatIn):
     log_rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
     insight_brief = _insight_brief(_insight_summary([_log_dict(r) for r in log_rows]))
 
-    system = f"""You are Myno, a warm, practical PCOS companion. You are talking WITH this person, and you can see their own tracked data — use it to give grounded, specific, actionable guidance.
+    system = f"""You are Tawazzun, a warm, practical PMOS companion. You are talking WITH this person, and you can see their own tracked data — use it to give grounded, specific, actionable guidance.
 
 THEIR TRACKED INSIGHTS (computed from their logs): {insight_brief}
 Their goals: {p.goals or []}. Avg tracked cycle: {avg_gap} days. Known phrasings -> {desc_lines}. Current read of them: {json.dumps(p.adapt_state or {})}.
@@ -833,13 +882,13 @@ Their goals: {p.goals or []}. Avg tracked cycle: {avg_gap} days. Known phrasings
 EACH TURN:
 - Briefly acknowledge what they said, in their own words.
 - Lead with help: when it's relevant, connect what they raise to a concrete trend or correlation in THEIR insights above, and give ONE practical, non-diagnostic suggestion they can act on.
-- If their data doesn't cover what they asked, say so plainly and give general, well-grounded PCOS guidance instead of guessing about their numbers.
+- If their data doesn't cover what they asked, say so plainly and give general, well-grounded PMOS guidance instead of guessing about their numbers.
 - Ask at most ONE short follow-up question, and only when it genuinely helps — prioritise advising over interrogating.
 - Reuse the patient's vocabulary and adapt your tone to them (gentler if distressed, briefer if terse).
 
 HARD CONSTRAINTS:
 - NEVER ask about, reference, or volunteer anything in this blocked list: {blocked_labels or 'none'}.
-- NEVER diagnose or say whether they have PCOS; a clinician decides — offer to help them prepare.
+- NEVER diagnose or say whether they have PMOS; a clinician decides — offer to help them prepare.
 - No specific drug doses.
 - Keep the reply under ~80 words.
 
@@ -872,9 +921,9 @@ Return ONLY JSON, no prose, no code fences:
     return {"reply": reply, "learned": new_desc, "adapt": adapt}
 
 # ----- voice → structured daily-log fields + a spoken reply (server-side model;
-# no key in the browser). Myno talks back: acknowledges, and asks ONE clarifying
+# no key in the browser). Tawazzun talks back: acknowledges, and asks ONE clarifying
 # question when something important is ambiguous, so the patient can just answer.
-# Selectable conversation personalities — only the TONE of Myno's spoken reply
+# Selectable conversation personalities — only the TONE of Tawazzun's spoken reply
 # changes; the structural rules (infer ratings, no numbers, brevity) are fixed.
 PERSONALITIES = {
     "direct": "Be brief and matter-of-fact — note what you heard in a few words and move on; skip heavy empathy, reassurance, and exclamations.",
@@ -939,7 +988,7 @@ def _normalize_extract_payload(payload):
 def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
     block_line = ", ".join(blocked) if blocked else "none"
     return (
-        "You are Myno, a warm voice companion helping someone log their PCOS day just by talking. "
+        "You are Tawazzun, a warm voice companion helping someone log their PMOS day just by talking. "
         "From the WHOLE conversation so far and what they just said, do three things: reply out loud, "
         "maintain a personalized tracker, and update the standard analytics fields.\n"
         f"- 'say' TONE: {_style(personality)} INFER any ratings/severities yourself — never ask for numbers, scores, or 1-to-10 ratings. Ask a short clarifying question only when genuinely needed (never about numbers), otherwise just acknowledge. Spoken aloud — under ~28 words. Never diagnose.\n"
@@ -989,7 +1038,7 @@ class AdviseIn(BaseModel):
 async def advise(body: AdviseIn):
     block_line = ", ".join(body.blocked) if body.blocked else "none"
     sys = (
-        "You are Myno, a practical PCOS companion. Combine the person's tracked history (history_summary) with what "
+        "You are Tawazzun, a practical PMOS companion. Combine the person's tracked history (history_summary) with what "
         "they are telling you right now to surface ONE clear, useful insight: a trend or correlation grounded in THEIR data, "
         "plus brief, actionable, non-diagnostic advice. Never diagnose or give drug doses; a clinician decides. "
         f"NEVER reference anything in this blocked list: {block_line}.\n"
