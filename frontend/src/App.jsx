@@ -1268,9 +1268,9 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
           fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
           <span style={{ width: 9, height: 9, borderRadius: "50%", background: `linear-gradient(135deg, ${p.from}, ${p.to})` }} /> {p.name}</span>))}
       </div>
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 4, marginTop: 10 }}>
-        <span style={{ fontFamily: bodyf, fontSize: 11, color: C.outline }}>Phases are an estimate — the app can't see ovulation.</span>
-        <SourcesButton settings={settings} /></div>
+      {/* the sources live on Advocacy, where the clinical claims are made */}
+      <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 10 }}>
+        Phases are an estimate — the app can't see ovulation.</div>
     </Card>);
 
   // NEXT PERIOD — a date and a number of days, in the words someone would use
