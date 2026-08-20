@@ -1694,10 +1694,13 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     )}
   </Card>);
 
+  const chipsRow = (<div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6, marginBottom: 14 }}>{METRICS.map(([k, lbl]) => (
+    <button key={k} onClick={() => setMetric(k)} style={{ flexShrink: 0, fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "7px 14px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.plum : C.container, color: mSel === k ? "#fff" : C.inkVar }}>{lbl}</button>))}</div>);
   const trendsCard = (<Card>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-      <div><div style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>{mLbl} trends</div><div style={{ fontSize: 13, color: C.inkVar }}>Past 30 days · avg {sAvg.toFixed(1)}</div></div>
+      <div><div style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>Track one thing over time</div><div style={{ fontSize: 13, color: C.inkVar }}>{mLbl} · past 30 days · avg {sAvg.toFixed(1)}</div></div>
       <div style={{ textAlign: "right", color: C.plum, fontFamily: bodyf, fontWeight: 600, fontSize: 14 }}>{series[series.length - 1] <= series[0] ? "↘ lower" : "↗ higher"}</div></div>
+    {chipsRow}
     <Sparkline series={series} />
     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.outline, marginTop: 6 }}><span>30d ago</span><span>Today</span></div>
     <div style={{ marginTop: 16 }}><div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 600, color: C.inkVar, marginBottom: 6 }}>Daily intensity · last 12 weeks</div><Heatmap days={heatDays} valueOf={heatVal} max={heatMax} /></div></Card>);
@@ -1714,18 +1717,29 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     {SUBVIEWS.map(([id, lbl]) => { const on = view === id; return (
       <button key={id} onClick={() => setView(id)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "8px 18px", borderRadius: 9999, cursor: "pointer", border: "none", background: on ? C.surface : "transparent", color: on ? C.plum : C.inkVar, boxShadow: on ? SH_SM : "none" }}>{lbl}</button>); })}
   </div>);
-  const chipsRow = (<div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6, marginBottom: 18 }}>{METRICS.map(([k, lbl]) => (
-    <button key={k} onClick={() => setMetric(k)} style={{ flexShrink: 0, fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "9px 18px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.plum : C.container, color: mSel === k ? "#fff" : C.inkVar }}>{lbl}</button>))}</div>);
+
+
+  // What someone came here to read, in the order they'd want it: the overview,
+  // then their sections — with the cycle detail sitting right under the cycle
+  // section rather than as a second, disconnected cycle card.
+  const readCards = [];
+  (stats?.byCategory || []).forEach((g, i) => {
+    readCards.push(sectionCards[i]);
+    if (g.key === "cycle" && cycleCard) readCards.push(cycleCard);
+  });
+  // The tools you reach for after reading, not before.
+  const toolCards = [trendsCard, explorerCard, highlights];
+  const stack = (cards, gap) => cards.filter(Boolean).map((card, i) => (
+    <div key={i} style={{ marginBottom: gap }}>{card}</div>));
 
   if (wide) return (<div>
     <H size={28} style={{ marginBottom: 16 }}>Insights</H>{subNav}
     {view === "track" ? (
       <div style={{ maxWidth: 760 }}>{suggestionsCard}<div style={{ marginTop: 20 }}>{disclaimer}</div></div>
     ) : (<>
-      {chipsRow}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
-        <div style={{ display: "grid", gap: 18 }}>{summaryCard}{sectionCards}{explorerCard}</div>
-        <div style={{ display: "grid", gap: 18 }}>{statsLoading && loadingCard}{cycleCard}{trendsCard}{highlights}</div>
+        <div>{stack([summaryCard, ...readCards], 18)}</div>
+        <div>{stack([statsLoading && loadingCard, ...toolCards], 18)}</div>
       </div>
       <div style={{ marginTop: 20 }}>{disclaimer}</div>
     </>)}
@@ -1737,14 +1751,7 @@ function InsightsScreen({ ins, logs, settings, wide }) {
       {suggestionsCard}
       <div style={{ marginTop: 16 }}>{disclaimer}</div>
     </>) : (<>
-      {chipsRow}
-      <div style={{ marginBottom: 18 }}>{summaryCard}</div>
-      {statsLoading && <div style={{ marginBottom: 18 }}>{loadingCard}</div>}
-      {sectionCards.map((card, i) => <div key={i} style={{ marginBottom: 18 }}>{card}</div>)}
-      {cycleCard && <div style={{ marginBottom: 18 }}>{cycleCard}</div>}
-      <div style={{ marginBottom: 18 }}>{trendsCard}</div>
-      <div style={{ marginBottom: 18 }}>{explorerCard}</div>
-      {highlights}
+      {stack([summaryCard, statsLoading && loadingCard, ...readCards, ...toolCards], 18)}
       <div style={{ marginTop: 16 }}>{disclaimer}</div>
     </>)}
   </div>);
