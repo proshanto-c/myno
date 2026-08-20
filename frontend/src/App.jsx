@@ -621,6 +621,7 @@ function CriteriaLab({ derived, lab, setLab, rules, labRules, setLabRules, open,
         <LabNumber label="mFG hirsutism score" suffix="0–36" value={val("mfgScore")} onChange={set("mfgScore")} edited={"mfgScore" in lab} />
         <LabNumber label="Hair growth days" suffix="%" value={Math.round(val("hirsutismDaysPct") || 0)} onChange={set("hirsutismDaysPct")} edited={"hirsutismDaysPct" in lab} />
         <LabNumber label="Hair thinning days" suffix="%" value={Math.round(val("hairLossDaysPct") || 0)} onChange={set("hairLossDaysPct")} edited={"hairLossDaysPct" in lab} />
+        <LabToggle label="Already diagnosed with PMOS" value={!!val("diagnosed")} onChange={set("diagnosed")} edited={"diagnosed" in lab} />
         <LabToggle label="Has had first period" value={!!val("hasMenarche")} onChange={set("hasMenarche")} edited={"hasMenarche" in lab} />
         <LabToggle label="On hormonal contraception" value={!!val("onContraception")} onChange={set("onContraception")} edited={"onContraception" in lab} />
         <LabToggle label="Persistent acne" value={!!val("persistentAcne")} onChange={set("persistentAcne")} edited={"persistentAcne" in lab} />
@@ -685,7 +686,7 @@ function Triad({ axes }) {
 // ============================================================================
 //  APP
 // ============================================================================
-const BLANK = { onboarded: false, name: "", age: "", menarcheAge: "", heightCm: "", weightKg: "", familyHistory: false, acne: false, skinDarkening: false, weightGain: false, goals: [], integrations: [], conditions: [], mfg: {}, drugs: [] };
+const BLANK = { onboarded: false, name: "", age: "", menarcheAge: "", heightCm: "", weightKg: "", familyHistory: false, acne: false, skinDarkening: false, weightGain: false, goals: [], integrations: [], conditions: [], mfg: {}, drugs: [], pmosDiagnosed: null, pmosDiagnosedYear: "" };
 
 function useViewport() {
   const [w, setW] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
@@ -739,6 +740,7 @@ export default function App() {
       skin_darkening: !!profile.skinDarkening, weight_gain: !!profile.weightGain,
       goals: profile.goals || [], integrations: profile.integrations || [],
       conditions: profile.conditions || [], mfg: profile.mfg || {}, drugs: profile.drugs || [],
+      pmos_diagnosed: profile.pmosDiagnosed === true, pmos_diagnosed_year: num(profile.pmosDiagnosedYear),
     };
     let stale = false;
     const t = setTimeout(() => {
@@ -916,6 +918,10 @@ function Onboarding({ profile, setProfile }) {
             <Chip key={k} active={profile[k]} onClick={() => set(k, !profile[k])}>{l}</Chip>))}</div></>)}
       {step === 2 && (<><Label>Your health</Label><H size={24} style={{ margin: "10px 0 8px" }}>Anything already diagnosed?</H>
         <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 16 }}>Only what a clinician has told you. It changes how we read your tracking — and you can change it any time in Settings.</p>
+        <div style={{ padding: 14, borderRadius: 16, background: C.low, marginBottom: 16 }}>
+          <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15, marginBottom: 10 }}>Have you been diagnosed with PMOS?</div>
+          <DiagnosisPanel profile={profile} setProfile={setProfile} />
+        </div>
         <ConditionsPanel profile={profile} setProfile={setProfile} compact /></>)}
       {step === 3 && (<><Label>Connect your data</Label><H size={24} style={{ margin: "10px 0 8px" }}>Bring it together</H>
         <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 16 }}>Fold in cycles, sleep, and activity you already log (demo connections).</p>
@@ -1052,11 +1058,17 @@ function CycleCalendar({ logs, onSet }) {
   const [range, setRange] = useState(false);
   const [anchor, setAnchor] = useState(null);
   const { y, m } = month;
-  const iso = (d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  // Built from the local date, never toISOString — that shifts a day either side
+  // of UTC and would mark the wrong square.
+  const fmt = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+  // day 0 is the last of the previous month and days+1 the first of the next,
+  // so a bleed that crosses a month boundary still joins up.
+  const iso = (d) => fmt(new Date(y, m, d));
   const first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
   const isThisMonth = y === now.getFullYear() && m === now.getMonth();
   const todayD = isThisMonth ? now.getDate() : null;
   const periodSet = new Set(logs.filter((l) => l.period).map((l) => l.date));
+  const marked = (d) => periodSet.has(iso(d));
   const step = (n) => { setAnchor(null); setMonth(({ y: yy, m: mm }) => {
     const d = new Date(yy, mm + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; }); };
   const tap = (d) => {
@@ -1071,6 +1083,27 @@ function CycleCalendar({ logs, onSet }) {
   const cells = [];
   for (let i = 0; i < first; i++) cells.push(null);
   for (let d = 1; d <= days; d++) cells.push(d);
+
+  // The most recent bleed, said in words — the grid shows the run, this says
+  // which dates it ran between and how long it lasted.
+  const lastRun = (() => {
+    const dates = [...new Set(logs.filter((l) => l.period).map((l) => l.date))].sort();
+    let run = [];
+    for (const d of dates) {
+      const prev = run[run.length - 1];
+      if (prev && new Date(d) - new Date(prev) === 86400000) run.push(d);
+      else run = [d];
+    }
+    return run.length ? run : null;
+  })();
+  const pretty = (d) => new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const runLine = lastRun && (() => {
+    const a = lastRun[0], b = lastRun[lastRun.length - 1], n = lastRun.length;
+    const ongoing = (Date.now() - new Date(`${b}T00:00:00`)) < 2 * 86400000;
+    return ongoing
+      ? `Bleeding since ${pretty(a)} · day ${n}`
+      : `Last period ${n > 1 ? `${pretty(a)} – ${pretty(b)}` : pretty(a)} · ${n} day${n > 1 ? "s" : ""}`;
+  })();
   const navBtn = (dir, Ico) => (
     <button onClick={() => step(dir)} style={{ background: "none", border: "none", cursor: "pointer", color: C.plum,
       display: "grid", placeItems: "center", padding: 4 }}><Ico size={16} /></button>);
@@ -1088,17 +1121,30 @@ function CycleCalendar({ logs, onSet }) {
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 6 }}>
       {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.inkVar }}>{d}</div>))}</div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>{cells.map((d, i) => {
-      const isToday = d === todayD, isPeriod = d && periodSet.has(iso(d)), isAnchor = d && anchor === d;
-      return (<div key={i} style={{ aspectRatio: "1", display: "grid", placeItems: "center" }}>
+      const isToday = d === todayD, isPeriod = d && marked(d), isAnchor = d && anchor === d;
+      // One bleed is drawn as one capsule: days that touch are joined, so the
+      // rounded ends are where it started and where it stopped. A lone day is
+      // just a circle. Bleeds that cross a Saturday cap at the row edge — the
+      // line under the grid is what states the real dates.
+      const linkPrev = isPeriod && marked(d - 1), linkNext = isPeriod && marked(d + 1);
+      return (<div key={i} style={{ position: "relative", aspectRatio: "1", display: "grid", placeItems: "center" }}>
+        {isPeriod && <span style={{ position: "absolute", top: "50%", height: 34, transform: "translateY(-50%)",
+          borderRadius: 9999, background: isAnchor ? C.plumC : C.roseOn,
+          left: linkPrev ? -1 : "calc(50% - 17px)", right: linkNext ? -1 : "calc(50% - 17px)" }} />}
         {d && <span onClick={() => tap(d)} className={onSet ? "cal-day" : undefined}
           style={{ width: 34, height: 34, borderRadius: "50%", display: "grid",
             placeItems: "center", fontFamily: bodyf, fontSize: 14, fontWeight: isToday || isPeriod ? 700 : 500,
-            cursor: onSet ? "pointer" : "default", userSelect: "none",
-            background: isAnchor ? C.plumC : isPeriod ? C.roseOn : C.surface,
-            border: isToday ? `2px solid ${C.plum}` : `1px solid ${C.outlineVar}`,
+            cursor: onSet ? "pointer" : "default", userSelect: "none", position: "relative",
+            background: isPeriod || isAnchor ? "transparent" : C.surface,
+            border: isToday ? `2px solid ${isPeriod ? "#fff" : C.plum}`
+                            : isPeriod ? "2px solid transparent" : `1px solid ${C.outlineVar}`,
             color: isAnchor || isPeriod ? "#fff" : isToday ? C.plum : C.ink }}>{d}</span>}
       </div>); })}</div>
-    {onSet && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 8 }}>
+    {runLine && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+      marginTop: 10, fontFamily: bodyf, fontSize: 12.5, color: C.roseOn }}>
+      <span style={{ width: 24, height: 11, borderRadius: 9999, background: C.roseOn, flexShrink: 0 }} />
+      {runLine}</div>}
+    {onSet && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 6 }}>
       {range ? (anchor ? `From ${anchor} ${new Date(y, m, 1).toLocaleString(undefined, { month: "short" })} — tap the last day`
                        : "Tap the first day of the bleed")
              : "Tap a day to mark or unmark a period day"}</div>}
@@ -1975,6 +2021,32 @@ function FerrimanGallwey({ value, onChange, threshold = 4 }) {
   </div>);
 }
 
+// A formal diagnosis is not one of the conditions above: it is the answer to
+// the question this whole app is otherwise trying to help someone ask. When it
+// is set, the indicator stops screening and starts helping them prepare.
+function DiagnosisPanel({ profile, setProfile }) {
+  const said = profile.pmosDiagnosed;
+  const set = (v) => setProfile({ ...profile, pmosDiagnosed: v, ...(v ? {} : { pmosDiagnosedYear: "" }) });
+  return (<div>
+    <div style={{ display: "flex", gap: 8 }}>
+      {[["Yes", true], ["No", false], ["Not sure", null]].map(([lbl, val]) => (
+        <button key={lbl} onClick={() => set(val)} style={{ flex: 1, padding: "11px 0", borderRadius: 12,
+          cursor: "pointer", fontFamily: bodyf, fontWeight: 600, fontSize: 14,
+          background: said === val ? C.plum : C.low, color: said === val ? "#fff" : C.inkVar,
+          border: `1.5px solid ${said === val ? C.plum : "transparent"}` }}>{lbl}</button>))}
+    </div>
+    {said === true && (<div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
+      <span style={{ fontFamily: bodyf, fontSize: 13.5, color: C.inkVar }}>What year?</span>
+      <input type="number" placeholder="e.g. 2021" value={profile.pmosDiagnosedYear || ""}
+        onChange={(e) => setProfile({ ...profile, pmosDiagnosedYear: e.target.value })}
+        style={{ ...input, width: 120, padding: "9px 11px", fontSize: 14 }} />
+    </div>)}
+    {said === true && <p style={{ fontFamily: bodyf, fontSize: 12, color: C.outline, lineHeight: 1.5, marginTop: 10 }}>
+      Then the app stops asking whether to get checked. Your tracking becomes what a review appointment
+      runs on instead.</p>}
+  </div>);
+}
+
 function ConditionsPanel({ profile, setProfile, compact }) {
   const have = profile.conditions || [];
   const toggle = (k) => setProfile({ ...profile, conditions: have.includes(k) ? have.filter((x) => x !== k) : [...have, k] });
@@ -2041,6 +2113,12 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, s
   const have = profile.conditions || [];
   return (<div>
     <H size={28} style={{ margin: "8px 0 16px" }}>Settings</H>
+    <Card style={{ marginBottom: 14 }}>
+      <Label color={C.inkVar}>PMOS diagnosis</Label>
+      <p style={{ fontSize: 12.5, color: C.inkVar, margin: "8px 0 12px", lineHeight: 1.5 }}>
+        Has a clinician formally diagnosed you with PMOS?</p>
+      <DiagnosisPanel profile={profile} setProfile={setProfile} />
+    </Card>
     <Card style={{ marginBottom: 14 }}>
       <Label color={C.inkVar}>Conditions — what a clinician has already diagnosed</Label>
       <p style={{ fontSize: 12, color: C.inkVar, margin: "8px 0 12px", lineHeight: 1.5 }}>

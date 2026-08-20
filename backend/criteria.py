@@ -39,6 +39,7 @@ RULES = {
 
 # What the indicator can say, and how loudly.
 ADVICE = {
+    "diagnosed": {"headline": "You already have a diagnosis", "tone": "calm"},
     "soon":    {"headline": "Worth booking an appointment soon", "tone": "urgent"},
     "book":    {"headline": "Worth booking an appointment", "tone": "elevated"},
     "mention": {"headline": "Worth mentioning at your next visit", "tone": "mild"},
@@ -179,7 +180,7 @@ def assess_androgen(x, rules=None):
 
 
 # ---- the indicator ---------------------------------------------------------
-def recommend(cycles, androgen):
+def recommend(cycles, androgen, diagnosed=False):
     """Blunt on purpose. Alerts outrank everything; then it comes down to how
     many of the two assessable criteria are met — and which one, since cycles
     are measured while hair and skin signs are self-reported."""
@@ -189,6 +190,12 @@ def recommend(cycles, androgen):
 
     if alerts:
         return {"key": "soon", **ADVICE["soon"], "why": alerts, "met": len(met)}
+    # Screening someone who has already been diagnosed answers a question they
+    # no longer have. The tracking still stands — it is what a review runs on.
+    if diagnosed:
+        return {"key": "diagnosed", **ADVICE["diagnosed"], "met": len(met), "why": [
+            "PMOS is already on your record, so this isn't a question of whether to get checked.",
+            "What you log here is what a review appointment runs on — bring it with you."] + why}
     if len(met) == 2:
         return {"key": "book", **ADVICE["book"], "why": why, "met": 2}
     if cycles["state"] == "met":
@@ -217,11 +224,13 @@ def assess(x, rules=None):
     R = rules or RULES
     cycles = assess_cycles(x, R)
     androgen = assess_androgen(x, R)
+    diagnosed = bool(x.get("diagnosed"))
     return {
         "context": context_notes(x),
+        "diagnosed": diagnosed,
         "cycles": cycles,
         "androgen": androgen,
-        "recommendation": recommend(cycles, androgen),
+        "recommendation": recommend(cycles, androgen, diagnosed),
         "inputs": x,
         # The third circle stays locked: morphology is not ours to assess.
         "axes": {
@@ -273,6 +282,8 @@ def derive_inputs(patient, logs, summary):
         "cyclesPerYear": (observed + 1) if days >= 330 else None,
         "mfgScore": mfg_total(getattr(patient, "mfg", None)),
         "conditions": list(getattr(patient, "conditions", None) or []),
+        # a formal diagnosis is its own fact, not one of the conditions above
+        "diagnosed": bool(getattr(patient, "pmos_diagnosed", False)),
         "hirsutismDaysPct": pct("hairGrowth"),
         "hairLossDaysPct": pct("hairLoss"),
         "persistentAcne": bool(getattr(patient, "acne", False)),

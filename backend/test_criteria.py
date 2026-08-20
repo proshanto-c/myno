@@ -165,6 +165,25 @@ def test_alerts_outrank_everything():
     a = cr.assess(case(mfgScore=6, maxCycle=95))
     assert a["recommendation"]["key"] == "soon"
 
+def test_a_formal_diagnosis_stops_the_screening_question():
+    a = cr.assess(case(diagnosed=True, maxCycle=50))
+    assert a["recommendation"]["key"] == "diagnosed"
+    assert a["diagnosed"] is True
+    assert "already on your record" in a["recommendation"]["why"][0]
+    # the criteria are still worked out — a review runs on them
+    assert a["cycles"]["state"] == "met" and a["recommendation"]["met"] == 1
+
+def test_a_diagnosis_does_not_silence_an_alert():
+    a = cr.assess(case(diagnosed=True, maxCycle=95))
+    assert a["recommendation"]["key"] == "soon"
+
+def test_the_diagnosis_comes_from_its_own_field_not_the_conditions():
+    class P: age = 28; menarche_age = 13; acne = False; pmos_diagnosed = True
+    x = cr.derive_inputs(P(), [{"period": True}], {"loggedDays": 200, "cycleCount": 4,
+                                                   "cycleMin": 26, "cycleMax": 31, "avgCycleDays": 28})
+    assert x["diagnosed"] is True and x["conditions"] == []
+    assert cr.assess(case())["diagnosed"] is False
+
 def test_morphology_is_never_assessed():
     assert cr.assess(case())["axes"]["morphology"]["met"] is None
 

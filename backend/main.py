@@ -56,6 +56,8 @@ class Patient(Base):
     integrations = Column(JSON, default=list)
     blacklist = Column(JSON, default=list)          # blocked feature keys
     adapt_state = Column(JSON, default=dict)        # inferred prefs (tone, length, distress)
+    pmos_diagnosed = Column(Boolean, default=False)  # a clinician has named it
+    pmos_diagnosed_year = Column(Integer, nullable=True)
     conditions = Column(JSON, default=list)         # already-diagnosed conditions (settings)
     mfg = Column(JSON, default=dict)                # modified Ferriman-Gallwey, per body area
     drugs = Column(JSON, default=list)              # current drug therapy (home)
@@ -109,6 +111,8 @@ with engine.begin() as _conn:
     _conn.execute(text("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS data JSON DEFAULT '{}'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions JSON DEFAULT '[]'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions_at TIMESTAMP"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS pmos_diagnosed BOOLEAN DEFAULT FALSE"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS pmos_diagnosed_year INTEGER"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS conditions JSON DEFAULT '[]'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS mfg JSON DEFAULT '{}'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS drugs JSON DEFAULT '[]'::json"))
@@ -138,6 +142,7 @@ class PatientIn(BaseModel):
     family_history: bool = False; acne: bool = False; skin_darkening: bool = False
     weight_gain: bool = False; goals: list = []; integrations: list = []
     conditions: list = []; mfg: dict = {}; drugs: list = []
+    pmos_diagnosed: bool = False; pmos_diagnosed_year: int | None = None
 
 def patient_dict(p: Patient):
     return {c.name: getattr(p, c.name) for c in p.__table__.columns}
@@ -547,6 +552,8 @@ def _advocacy_metrics(logs, patient):
     # replaced the free-text "diagnoses" box, read both: old logs still carry it.
     known = [str(c).lower() for c in (getattr(patient, "conditions", None) or [])]
     diag_text = " ".join(known + [diag.lower()])
+    diagnosed = bool(getattr(patient, "pmos_diagnosed", False)) or any(
+        k in diag_text for k in ("pmos", "pcos"))
     goals = (patient.goals or []) if patient else []
     return {
         "period_days": days,
@@ -573,7 +580,7 @@ def _advocacy_metrics(logs, patient):
             "concei" in str(g).lower() or "fertil" in str(g).lower() for g in goals),
         "prior_dismissal_flag": False,
         # patients write the condition either way, so accept both spellings
-        "no_formal_pmos_diagnosis": not any(k in diag_text for k in ("pmos", "pcos")),
+        "no_formal_pmos_diagnosis": not diagnosed,
     }
 
 ADVOCACY_SYSTEM = (
