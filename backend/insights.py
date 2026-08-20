@@ -174,7 +174,7 @@ def _pairs(logs, kind, a, b):
 
 
 # ---- the summary -----------------------------------------------------------
-def summarise(logs, patient=None, rules=None, cycle_verdict=None):
+def summarise(logs, patient=None, rules=None, cycle_verdict=None, today=None):
     """Everything derived from the logs, in one pass.
 
     cycle_verdict is criteria.assess_cycles' answer; passing it in keeps this
@@ -250,7 +250,7 @@ def summarise(logs, patient=None, rules=None, cycle_verdict=None):
         "avgCycleDays": mean(gaps), "cycleMin": min(gaps) if gaps else None,
         "cycleMax": max(gaps) if gaps else None, "cycleCount": len(gaps),
         "periodsLogged": len(starts),
-        "cycleDay": _days_since(starts[-1], logs) if starts else None,
+        "cycleDay": cycle_day(starts, today),
         "daysSinceSeverePain": _days_since_severe_pain(logs, R),
         "hairGrowthDaysPct": _pct(logs, "hairGrowth"),
         "hairLossDaysPct": _pct(logs, "hairLoss"),
@@ -317,12 +317,18 @@ def _pct(logs, key):
     return round(100.0 * sum(1 for l in logs if l.get(key)) / len(logs), 1) if logs else 0.0
 
 
-def _days_since(start, logs):
-    """Where in the current cycle the last logged day falls."""
-    if not logs:
+def cycle_day(starts, today=None):
+    """Which day of the cycle today is, counting the first bleeding day as day 1.
+
+    Measured against today rather than the last logged day: someone who stopped
+    logging a week ago is still a week further into their cycle. Starts dated
+    after today are ignored — a log from the future is not the cycle you are in.
+    """
+    today = today or dt.date.today()
+    past = [s for s in starts if dt.date.fromisoformat(s) <= today]
+    if not past:
         return None
-    last = logs[-1].get("date")
-    return (dt.date.fromisoformat(last) - dt.date.fromisoformat(start)).days if last else None
+    return (today - dt.date.fromisoformat(past[-1])).days + 1
 
 
 def _days_since_severe_pain(logs, rules=None):

@@ -48,7 +48,19 @@ def test_cycle_stats_need_two_gaps():
 
 def test_cycle_day_counts_from_the_last_start():
     logs = days(35, period=[i in (0, 28) for i in range(35)])
-    assert ins.summarise(logs)["cycleDay"] == 6   # day 34 is 6 days after day 28
+    # the bleed began on index 28; on index 34 you are on cycle day 7
+    assert ins.summarise(logs, today=DAY0 + dt.timedelta(days=34))["cycleDay"] == 7
+    # the first day of bleeding is day 1, not day 0
+    assert ins.summarise(logs, today=DAY0 + dt.timedelta(days=28))["cycleDay"] == 1
+
+def test_cycle_day_is_measured_from_today_not_the_last_log():
+    logs = days(35, period=[i in (0, 28) for i in range(35)])
+    # stopped logging on index 34, but a week has passed since
+    assert ins.summarise(logs, today=DAY0 + dt.timedelta(days=41))["cycleDay"] == 14
+
+def test_a_start_dated_in_the_future_is_not_the_current_cycle():
+    logs = days(40, period=[i in (0, 28, 38) for i in range(40)])
+    assert ins.summarise(logs, today=DAY0 + dt.timedelta(days=30))["cycleDay"] == 3
 
 
 # ---- correlations ----------------------------------------------------------

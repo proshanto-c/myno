@@ -289,7 +289,10 @@ const DAY_MS = 86400000;
 const dayOf = (iso) => new Date(`${iso}T00:00:00`);
 
 function periodRuns(logs) {
-  const dates = [...new Set((logs || []).filter((l) => l.period).map((l) => l.date))].sort();
+  // A log dated after today is not something that has happened, so it can't
+  // open the cycle you are in. Seeded and clock-skewed data both produce them.
+  const today = new Date().toISOString().slice(0, 10);
+  const dates = [...new Set((logs || []).filter((l) => l.period && l.date <= today).map((l) => l.date))].sort();
   const runs = [];
   for (const d of dates) {
     const run = runs[runs.length - 1], prev = run && run[run.length - 1];
@@ -996,8 +999,14 @@ function arcPath(cx, cy, rO, rI, a0, a1) {
 }
 const PHASE_COLORS = [["Menstrual", C.roseDeep], ["Follicular", C.lilacDim], ["Ovulatory", "#e6be8a"], ["Luteal", C.plumC]];
 function CyclePhaseRing({ dayN, cycleLen }) {
-  const cyc = cycleLen && cycleLen > 0 ? Math.round(cycleLen) : 28;
-  const day = dayN == null ? null : Math.max(0, Math.min(cyc, dayN));
+  const day = dayN == null ? null : Math.max(1, Math.round(dayN));
+  // A cycle that has run past the average isn't back at the start: the ring
+  // stretches to hold it, rather than clamping the marker to twelve o'clock and
+  // reporting a day the person is not on.
+  const base = cycleLen && cycleLen > 0 ? Math.round(cycleLen) : 28;
+  // +2 so a late cycle's marker sits near the end of the ring instead of
+  // landing back on twelve o'clock, which reads as "you just started"
+  const cyc = Math.max(base, (day || 0) + 2);
   const ovuMid = Math.max(8, cyc - 14);
   const segs = [
     { name: "Menstrual", a: 0, b: Math.min(5, cyc), color: C.roseDeep },
@@ -1105,7 +1114,8 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   const phaseTiles = (
     <Card style={{ padding: 20, boxShadow: SH_SM }}>
       <Label>This cycle</Label>
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}><CyclePhaseRing dayN={ins.cycleDay} cycleLen={ins.avgCycleDays} /></div>
+      {/* the ring, the bar and the note all read the same current cycle */}
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}><CyclePhaseRing dayN={current?.days} cycleLen={avg} /></div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 4 }}>
         {PHASE_COLORS.map(([n, col]) => (<span key={n} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: col, opacity: 0.65 }} /> {n}</span>))}
       </div>
