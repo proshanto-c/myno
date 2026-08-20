@@ -1057,6 +1057,9 @@ function CycleCalendar({ logs, onSet }) {
   const [month, setMonth] = useState({ y: now.getFullYear(), m: now.getMonth() });
   const [range, setRange] = useState(false);
   const [anchor, setAnchor] = useState(null);
+  const [hover, setHover] = useState(null);
+  const [drag, setDrag] = useState(null);
+  const skipClick = useRef(false);
   const { y, m } = month;
   // Built from the local date, never toISOString — that shifts a day either side
   // of UTC and would mark the wrong square.
@@ -1071,15 +1074,48 @@ function CycleCalendar({ logs, onSet }) {
   const marked = (d) => periodSet.has(iso(d));
   const step = (n) => { setAnchor(null); setMonth(({ y: yy, m: mm }) => {
     const d = new Date(yy, mm + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; }); };
+  const span = (a, b) => {
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    return Array.from({ length: hi - lo + 1 }, (_, i) => iso(lo + i));
+  };
   const tap = (d) => {
     if (!onSet) return;
-    const date = iso(d);
-    if (!range) return onSet([date], !periodSet.has(date));
+    if (skipClick.current) { skipClick.current = false; return; }
+    if (!range) return onSet([iso(d)], !periodSet.has(iso(d)));
     if (!anchor) return setAnchor(d);
-    const [lo, hi] = anchor <= d ? [anchor, d] : [d, anchor];
-    onSet(Array.from({ length: hi - lo + 1 }, (_, i) => iso(lo + i)), true);
+    onSet(span(anchor, d), true);
     setAnchor(null);
   };
+
+  // Dragging across days marks the whole stretch in one go, and the highlight
+  // flows under the cursor as you go rather than appearing a day at a time.
+  // Mouse only: claiming touch drags here would stop the page scrolling.
+  const startDrag = (d) => (ev) => {
+    if (!onSet || range || ev.pointerType !== "mouse") return;
+    setDrag({ from: d, value: !periodSet.has(iso(d)) });
+    setHover(d);
+  };
+  const endDrag = () => {
+    if (!drag) return;
+    const to = hover == null ? drag.from : hover;
+    if (to !== drag.from) { onSet(span(drag.from, to), drag.value); skipClick.current = true; }
+    setDrag(null);
+  };
+  useEffect(() => {
+    if (!drag) return;
+    const up = () => endDrag();
+    window.addEventListener("pointerup", up);
+    return () => window.removeEventListener("pointerup", up);
+  });
+
+  // What the grid should look like right now, including a stretch being dragged
+  // or a range half-chosen — so the run reads as one shape before it is saved.
+  const preview = drag && hover != null ? [Math.min(drag.from, hover), Math.max(drag.from, hover), drag.value]
+    : range && anchor ? [Math.min(anchor, hover == null ? anchor : hover),
+                         Math.max(anchor, hover == null ? anchor : hover), true]
+    : null;
+  const inPreview = (d) => preview && d >= preview[0] && d <= preview[1];
+  const shown = (d) => (inPreview(d) ? preview[2] : marked(d));
   const cells = [];
   for (let i = 0; i < first; i++) cells.push(null);
   for (let d = 1; d <= days; d++) cells.push(d);
@@ -1120,34 +1156,37 @@ function CycleCalendar({ logs, onSet }) {
     </div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 6 }}>
       {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.inkVar }}>{d}</div>))}</div>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>{cells.map((d, i) => {
-      const isToday = d === todayD, isPeriod = d && marked(d), isAnchor = d && anchor === d;
+    <div onPointerLeave={() => !drag && setHover(null)}
+      style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>{cells.map((d, i) => {
+      const isToday = d === todayD, isPeriod = d && shown(d);
+      const isDraft = d && isPeriod && inPreview(d) && !marked(d);
       // One bleed is drawn as one capsule: days that touch are joined, so the
       // rounded ends are where it started and where it stopped. A lone day is
       // just a circle. Bleeds that cross a Saturday cap at the row edge — the
       // line under the grid is what states the real dates.
-      const linkPrev = isPeriod && marked(d - 1), linkNext = isPeriod && marked(d + 1);
+      const linkPrev = isPeriod && shown(d - 1), linkNext = isPeriod && shown(d + 1);
       return (<div key={i} style={{ position: "relative", aspectRatio: "1", display: "grid", placeItems: "center" }}>
         {isPeriod && <span style={{ position: "absolute", top: "50%", height: 34, transform: "translateY(-50%)",
-          borderRadius: 9999, background: isAnchor ? C.plumC : C.roseOn,
+          borderRadius: 9999, background: isDraft ? C.roseDeep : C.roseOn,
           left: linkPrev ? -1 : "calc(50% - 17px)", right: linkNext ? -1 : "calc(50% - 17px)" }} />}
         {d && <span onClick={() => tap(d)} className={onSet ? "cal-day" : undefined}
+          onPointerDown={startDrag(d)} onPointerEnter={() => setHover(d)}
           style={{ width: 34, height: 34, borderRadius: "50%", display: "grid",
             placeItems: "center", fontFamily: bodyf, fontSize: 14, fontWeight: isToday || isPeriod ? 700 : 500,
             cursor: onSet ? "pointer" : "default", userSelect: "none", position: "relative",
-            background: isPeriod || isAnchor ? "transparent" : C.surface,
+            background: isPeriod ? "transparent" : C.surface,
             border: isToday ? `2px solid ${isPeriod ? "#fff" : C.plum}`
                             : isPeriod ? "2px solid transparent" : `1px solid ${C.outlineVar}`,
-            color: isAnchor || isPeriod ? "#fff" : isToday ? C.plum : C.ink }}>{d}</span>}
+            color: isPeriod ? "#fff" : isToday ? C.plum : C.ink }}>{d}</span>}
       </div>); })}</div>
     {runLine && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
       marginTop: 10, fontFamily: bodyf, fontSize: 12.5, color: C.roseOn }}>
       <span style={{ width: 24, height: 11, borderRadius: 9999, background: C.roseOn, flexShrink: 0 }} />
       {runLine}</div>}
     {onSet && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 6 }}>
-      {range ? (anchor ? `From ${anchor} ${new Date(y, m, 1).toLocaleString(undefined, { month: "short" })} — tap the last day`
+      {range ? (anchor ? `Started ${anchor} ${new Date(y, m, 1).toLocaleString(undefined, { month: "short" })} — now tap the last day`
                        : "Tap the first day of the bleed")
-             : "Tap a day to mark or unmark a period day"}</div>}
+             : "Tap a day, or drag across several, to mark them"}</div>}
   </div>);
 }
 
@@ -1653,16 +1692,61 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     <div style={{ fontSize: 11.5, color: C.outline, marginTop: 10, lineHeight: 1.5 }}>Typical adult cycles run 21–35 days. Consistently longer or highly variable cycles are a common PMOS sign — worth raising with a clinician.</div>
   </Card>);
 
-  const explorerCard = (<Card>
-    <Label color={C.inkVar}>Explore a relationship</Label>
-    <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}><span style={{ fontSize: 12, color: C.inkVar, fontWeight: 700, width: 14 }}>X</span>{NUM.map(([k, lbl]) => exChip(lbl, xKey === k, () => setXKey(k)))}</div>
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}><span style={{ fontSize: 12, color: C.inkVar, fontWeight: 700, width: 14 }}>Y</span>{NUM.map(([k, lbl]) => exChip(lbl, yKey === k, () => setYKey(k)))}</div>
-      <div style={{ display: "flex", gap: 6 }}>{exChip("same day", !lagDay, () => setLagDay(false))}{exChip("X → next-day Y", lagDay, () => setLagDay(true))}</div>
+  // The one place someone can ask their own question of their own data, so it
+  // gets a header that says so, controls in plain words, and the answer stated
+  // rather than tucked under the chart as a footnote.
+  const exBand = exR == null ? null
+    : Math.abs(exR) >= 0.6 ? { bg: C.lilac, fg: C.onLilac }
+    : Math.abs(exR) >= 0.4 ? { bg: C.low, fg: C.plum }
+    : { bg: C.container, fg: C.inkVar };
+  const exControls = (<div style={{ display: "grid", gap: 10 }}>
+    <div>
+      <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, color: C.inkVar, marginBottom: 6 }}>Compare</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{NUM.map(([k, lbl]) => exChip(lbl, xKey === k, () => setXKey(k)))}</div>
     </div>
-    <div style={{ marginTop: 12 }}><Scatter points={exPoints} xMax={xMeta[2]} yMax={yMeta[2]} xLabel={`${xMeta[1]}${lagDay ? " (prev day)" : ""}`} yLabel={yMeta[1]} /></div>
-    {exR != null ? <div style={{ fontSize: 13, color: C.inkVar, marginTop: 6 }}>Pearson <b style={{ color: C.plum }}>r = {exR > 0 ? "+" : ""}{exR.toFixed(2)}</b> · {exS} · {exPoints.length} days · red line = best fit</div>
-      : <div style={{ fontSize: 12, color: C.outline, marginTop: 6 }}>Not enough overlapping days.</div>}
+    <div>
+      <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, color: C.inkVar, marginBottom: 6 }}>against</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{NUM.map(([k, lbl]) => exChip(lbl, yKey === k, () => setYKey(k)))}</div>
+    </div>
+    <div>
+      <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, color: C.inkVar, marginBottom: 6 }}>on</div>
+      <div style={{ display: "flex", gap: 6 }}>{exChip("the same day", !lagDay, () => setLagDay(false))}{exChip("the day after", lagDay, () => setLagDay(true))}</div>
+    </div>
+  </div>);
+  const exAnswer = exR != null ? (
+    <div style={{ padding: "12px 14px", borderRadius: 14, background: exBand.bg, marginTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span style={{ fontFamily: head, fontWeight: 700, fontSize: 24, color: exBand.fg }}>{exR > 0 ? "+" : ""}{exR.toFixed(2)}</span>
+        <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 14, color: exBand.fg }}>{exS}</span>
+        <span style={{ fontFamily: bodyf, fontSize: 12, color: exBand.fg, marginLeft: "auto" }}>{exPoints.length} days</span>
+      </div>
+      <div style={{ fontFamily: bodyf, fontSize: 12.5, lineHeight: 1.5, color: exBand.fg, marginTop: 4 }}>
+        {xMeta[1]}{lagDay ? " one day, " : " and "}{lagDay ? `then ${yMeta[1].toLowerCase()} the next` : yMeta[1].toLowerCase()} move
+        {exR > 0 ? " together" : " in opposite directions"} — Pearson r, where ±1 is a perfect line and 0 is none.
+      </div>
+    </div>
+  ) : (
+    <div style={{ padding: "12px 14px", borderRadius: 14, background: C.container, marginTop: 12,
+      fontFamily: bodyf, fontSize: 12.5, color: C.inkVar }}>
+      Not enough days where both were logged — pick another pair, or keep logging.
+    </div>);
+  const explorerCard = (<Card style={{ border: `2px solid ${C.lilac}` }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+      <span style={{ width: 34, height: 34, borderRadius: 11, background: C.plum, display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <Activity size={18} color="#fff" /></span>
+      <div>
+        <div style={{ fontFamily: head, fontWeight: 700, fontSize: 18 }}>Ask your own question</div>
+        <div style={{ fontFamily: bodyf, fontSize: 13, color: C.inkVar }}>Put any two things you track against each other</div>
+      </div>
+    </div>
+    <div style={{ display: wide ? "grid" : "block", gridTemplateColumns: wide ? "minmax(0,1fr) minmax(0,1fr)" : undefined, gap: 18, alignItems: "start" }}>
+      <div>{exControls}{wide && exAnswer}</div>
+      <div style={{ marginTop: wide ? 0 : 14 }}>
+        <Scatter points={exPoints} xMax={xMeta[2]} yMax={yMeta[2]} xLabel={`${xMeta[1]}${lagDay ? " (prev day)" : ""}`} yLabel={yMeta[1]} />
+        {exPoints.length >= 4 && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 2 }}>each dot is a day · the line is the best fit</div>}
+      </div>
+    </div>
+    {!wide && exAnswer}
   </Card>);
 
   const statsLoading = loadingA && !stats;
@@ -1727,7 +1811,7 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     readCards.push(sectionCards[i]);
     if (g.key === "cycle" && cycleCard) readCards.push(cycleCard);
   });
-  const chartCards = [trendsCard, explorerCard];
+  const chartCards = [explorerCard, trendsCard];
   const stack = (cards, gap) => cards.filter(Boolean).map((card, i) => (
     <div key={i} style={{ marginBottom: gap }}>{card}</div>));
   const grid = (cards, cols) => (
@@ -1751,7 +1835,8 @@ function InsightsScreen({ ins, logs, settings, wide }) {
       {stack([summaryCard, statsLoading && loadingCard, highlights], 18)}
       {packed(readCards)}
       {chartHeading}
-      {grid(chartCards, "1fr 1fr")}
+      {stack([explorerCard], 18)}
+      {grid([trendsCard], "1fr")}
       <div style={{ marginTop: 20 }}>{disclaimer}</div>
     </>)}
   </div>);
