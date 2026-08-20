@@ -57,6 +57,14 @@ const FONTS = `
 @keyframes bloom{ 0%{ opacity:0; transform:scale(.6) } 30%{ opacity:.5 } 100%{ opacity:0; transform:scale(1.5) } }
 @keyframes wash{ 0%{ background-position:0% 50% } 50%{ background-position:100% 50% } 100%{ background-position:0% 50% } }
 @keyframes fadeIn{ from{ opacity:0 } to{ opacity:1 } }
+@keyframes popIn{ 0%{ opacity:0; transform:scale(.5) } 60%{ transform:scale(1.08) } 100%{ opacity:1; transform:scale(1) } }
+@keyframes slideIn{ from{ opacity:0; transform:translateY(7px) } to{ opacity:1; transform:none } }
+@keyframes grow{ from{ width:0 } }
+@keyframes draw{ from{ stroke-dashoffset:1 } to{ stroke-dashoffset:0 } }
+.pop-in{ animation:popIn .5s cubic-bezier(.2,.9,.3,1.3) both; }
+.slide-in{ animation:slideIn .5s ease-out both; }
+.grow{ animation:grow .9s cubic-bezier(.2,.8,.2,1) both; }
+.draw{ animation:draw 1.1s ease-out both; }
 .phase-wash{ position:absolute; inset:0; pointer-events:none; background-size:180% 180%;
   animation:wash 26s ease-in-out infinite, fadeIn 1.4s ease both; }
 .spark{ position:absolute; pointer-events:none; will-change:transform,opacity;
@@ -70,6 +78,7 @@ const FONTS = `
 @media (prefers-reduced-motion: reduce){
   .halo,.breathe,.fade-up,.spin,.spark,.bloom{ animation:none !important; opacity:0 !important }
   .phase-wash{ animation:fadeIn 1ms both !important }
+  .pop-in,.slide-in,.grow,.draw{ animation:none !important }
 }
 input[type=range].slider{ -webkit-appearance:none; appearance:none; width:100%; height:10px; border-radius:9999px; outline:none; }
 input[type=range].slider::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:30px; height:30px; border-radius:50%; background:#fff; border:4px solid ${C.plum}; box-shadow:0 2px 8px rgba(92,75,125,.28); cursor:pointer; margin-top:-1px; }
@@ -1685,6 +1694,9 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
     </div>
   );
 
+  // Which metrics have already been on screen: anything else is new, and new
+  // things should arrive rather than blink into existence.
+  const seenKeys = useRef(new Set());
   // OPT-IN — live trends, correlations & advice from history + this conversation
   const toggleIns = () => { const nv = !insOn; setInsOn(nv); if (nv) runAdvise(); };
   // Trend metrics = the standard analytics fields PLUS any personalized
@@ -1702,6 +1714,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
     .concat(catEntries.slice(0, 4));
   const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", false];
   const mSel = mEntry[0]; const mIsCat = mEntry[2];
+  useEffect(() => { METRICS.forEach(([k]) => seenKeys.current.add(k)); });
   const series = mIsCat
     ? (() => { let last = 0; return logs.slice(-30).map((l) => { const c = (l.categories || []).find((x) => x.key === mSel); const scale = normalizedScale(c?.scale); if (scale) last = scale.value; return last; }); })()
     : logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
@@ -1712,13 +1725,14 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
         {advising && <Loader2 size={13} className="spin" color={C.outline} />}
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>{METRICS.map(([k, lbl]) => (
-        <button key={k} onClick={() => setMetric(k)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 11px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.plum : C.container, color: mSel === k ? "#fff" : C.inkVar, animation: (metricBlink && mSel === k) ? "pulse 0.9s ease 2" : "none" }}>{lbl}</button>))}</div>
-      {series.length > 1 && (<><Sparkline series={series} /><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.outline, marginTop: 4 }}><span>30d ago</span><span>today</span></div></>)}
-      {advice?.headline && <div style={{ display: "flex", gap: 6, alignItems: "flex-start", marginTop: 14, fontFamily: head, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: C.plum }}><Sparkles size={14} color={C.roseOn} style={{ flexShrink: 0, marginTop: 1 }} /> {advice.headline}</div>}
+        // a tracker invented mid-conversation pops in the first time it appears
+        <button key={k} className={seenKeys.current.has(k) ? undefined : "pop-in"} onClick={() => setMetric(k)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, padding: "5px 11px", borderRadius: 9999, cursor: "pointer", border: "none", background: mSel === k ? C.plum : C.container, color: mSel === k ? "#fff" : C.inkVar, animation: (metricBlink && mSel === k) ? "pulse 0.9s ease 2" : "none" }}>{lbl}</button>))}</div>
+      {series.length > 1 && (<><Sparkline key={series.join(",")} series={series} /><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.outline, marginTop: 4 }}><span>30d ago</span><span>today</span></div></>)}
+      {advice?.headline && <div key={advice.headline} className="slide-in" style={{ display: "flex", gap: 6, alignItems: "flex-start", marginTop: 14, fontFamily: head, fontWeight: 700, fontSize: 14, lineHeight: 1.3, color: C.plum }}><Sparkles size={14} color={C.roseOn} style={{ flexShrink: 0, marginTop: 1 }} /> {advice.headline}</div>}
       {advice?.correlations?.length > 0 && (<div style={{ display: "grid", gap: 8, marginTop: 10 }}>{advice.correlations.map((c, i) => (
-        <div key={i}>
+        <div key={c.label} className="slide-in" style={{ animationDelay: `${i * 90}ms` }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, color: C.inkVar, marginBottom: 3 }}><span>{c.label}</span><span style={{ fontWeight: 700, color: C.plum }}>{Math.round(c.strength)}%</span></div>
-          <div style={{ height: 6, borderRadius: 9999, background: C.high }}><div style={{ width: `${Math.max(0, Math.min(100, c.strength))}%`, height: "100%", borderRadius: 9999, background: C.plum, transition: "width .5s ease" }} /></div>
+          <div style={{ height: 6, borderRadius: 9999, background: C.high }}><div className="grow" style={{ animationDelay: `${i * 90 + 120}ms`, width: `${Math.max(0, Math.min(100, c.strength))}%`, height: "100%", borderRadius: 9999, background: C.plum, transition: "width .5s ease" }} /></div>
         </div>))}</div>)}
       {advice?.say ? (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, background: C.lilac, color: C.onLilac, borderRadius: 14, padding: "11px 12px" }}>
@@ -2121,7 +2135,9 @@ function Sparkline({ series }) {
   return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" preserveAspectRatio="none"
     style={{ display: "block", maxWidth: 420, margin: "0 auto" }}>
     <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.plumC} stopOpacity="0.25" /><stop offset="100%" stopColor={C.plumC} stopOpacity="0" /></linearGradient></defs>
-    <path d={area} fill="url(#g)" /><path d={d} fill="none" stroke={C.plum} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+    <path d={area} fill="url(#g)" className="fade-up" />
+    <path d={d} fill="none" stroke={C.plum} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"
+      className="draw" pathLength="1" strokeDasharray="1" />
     <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r="4" fill="#fff" stroke={C.plum} strokeWidth="2.5" />
   </svg>);
 }
