@@ -43,7 +43,7 @@ const checks = [
   ["both wordmarks in Arabic", has("توازن") && has("دليل")],
   ["the shared mark is drawn on each", (html.match(/M53\.33,76\.42/g) || []).length === 2],
   ["PMOS is named on both cards", (html.match(/PMOS/g) || []).length >= 2],
-  ["it speaks to someone who only suspects it", has("think you might")],
+  ["it speaks to someone who only suspects it", has("wondering if you are")],
 ];
 
 console.log(`DOM ${html.length} chars`);

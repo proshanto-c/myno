@@ -1,5 +1,5 @@
 import React from "react";
-import { BrandMark, Brand } from "../brand.jsx";
+import { BrandMark } from "../brand.jsx";
 
 /**
  * Two doors.
@@ -55,12 +55,12 @@ export default function Landing() {
         <div style={{ display: "grid", gap: 20, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
           <Door href="/tawaazun/" ring={APP.plum} border="#efe3ef" tint={APP.rose}
             wordmark="توازن" latin="Tawaazun"
-            who="If you have PMOS, or think you might"
+            who="If you're living with PMOS, or wondering if you are"
             what="Track your cycle, symptoms and days by talking. See the patterns in your own data, and find out whether what you are seeing is worth taking to a doctor." />
           <Door href="/dalil/" ring="#3e3159" border="#e6e0ee" tint="#eeeaf3"
             wordmark="دليل" latin="Dalīl"
             who="If you research PMOS"
-            what="The PMOS literature behind every claim the app makes: harvested from PubMed, appraised against a rubric, and signed off by a named reviewer before anyone sees it." />
+            what="The PMOS literature behind every claim the app makes: harvested from PubMed, appraised against a rubric, and signed off by a reviewer before anyone sees it." />
         </div>
 
       </main>
