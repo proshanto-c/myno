@@ -17,12 +17,17 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Respons
 from pydantic import BaseModel
 from sqlalchemy import func
 
+import httpx
+
 import auth
 import harvest
+import model
 import ncbi
+import reports
 import vocab
 from jobs import jobs
-from models import Citation, Query, Reviewer, Run, Session, Source, init_db
+from models import (Citation, Claim, ClaimField, Query, Report, Reviewer, Run,
+                    Session, Source, init_db)
 
 app = FastAPI(title="Dalīl")
 
@@ -324,6 +329,130 @@ def job_sweep(limit: int = 200):
             s.close()
 
     return jobs.start("sweep", work, detail=f"oldest {limit}")
+
+
+class AppraiseIn(BaseModel):
+    sourceId: int | None = None
+    limit: int = 5
+    force: bool = False
+    useModel: bool = True
+
+
+# Appraisal is the only thing here that costs money, so it never runs from a
+# timer. Harvesting is automatic; appraising is asked for, in batches, under a
+# cap that a mistake in a loop cannot spend past.
+BATCH_CAP = 20
+DAILY_CAP = 120
+
+
+def _appraisable(s, limit: int):
+    """Sources worth spending a call on: something to read, not yet appraised."""
+    rows = (s.query(Source)
+            .filter(Source.merged_into.is_(None), Source.retracted.is_(False),
+                    Source.screen_state.in_(("new", "included")))
+            .order_by(Source.fulltext.isnot(None).desc(), Source.year.desc().nullslast())
+            .limit(limit * 4).all())
+    out = []
+    for row in rows:
+        if not (row.abstract or row.fulltext):
+            continue
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
+@research.post("/jobs/appraise")
+def job_appraise(body: AppraiseIn):
+    limit = max(1, min(body.limit, BATCH_CAP))
+
+    def work():
+        s = Session()
+        try:
+            spent_today = (s.query(Report)
+                           .filter(Report.created_at >= dt.datetime.utcnow().replace(
+                               hour=0, minute=0, second=0, microsecond=0)).count())
+            room = max(0, DAILY_CAP - spent_today)
+            if room == 0:
+                return {"appraised": 0, "note": f"the daily cap of {DAILY_CAP} is spent"}
+
+            targets = ([s.get(Source, body.sourceId)] if body.sourceId
+                       else _appraisable(s, min(limit, room)))
+            targets = [t for t in targets if t is not None]
+            vocabulary = {"fields": vocab.field_keys(), "labels": vocab.field_labels()}
+
+            done, claims_kept, claims_dropped, tokens = [], 0, 0, 0
+            with httpx.Client(timeout=model.TIMEOUT) as http:
+                for row in targets:
+                    report, made, stats = reports.appraise_source(
+                        s, row, vocabulary, use_model=body.useModel, http=http, force=body.force)
+                    claims_kept += stats.get("kept", 0)
+                    claims_dropped += stats.get("dropped", 0)
+                    tokens += (report.tokens_in or 0) + (report.tokens_out or 0)
+                    done.append({"sourceId": row.id, "pmid": row.pmid, "score": report.score,
+                                 "verdict": report.verdict, "made": made,
+                                 "kept": stats.get("kept", 0), "dropped": stats.get("dropped", 0)})
+            return {"appraised": len(done), "claims": claims_kept, "discarded": claims_dropped,
+                    "tokens": tokens, "results": done, "capLeft": room - len(done)}
+        finally:
+            s.close()
+
+    return jobs.start("appraise", work, detail=f"{limit} source(s)")
+
+
+def _report_row(r: Report) -> dict:
+    return {"id": r.id, "sourceId": r.source_id, "score": r.score, "verdict": r.verdict,
+            "modules": r.modules or [], "flags": r.flags or [], "narrative": r.narrative or "",
+            "model": r.model, "rubricVersion": r.rubric_version,
+            "promptVersion": r.prompt_version, "tokensIn": r.tokens_in, "tokensOut": r.tokens_out,
+            "createdAt": r.created_at.isoformat() if r.created_at else None}
+
+
+def _claim_row(s, c: Claim) -> dict:
+    bound = s.query(ClaimField).filter(ClaimField.claim_id == c.id).all()
+    return {"id": c.id, "sourceId": c.source_id, "state": c.state, "claimText": c.claim_text,
+            "relation": c.relation, "direction": c.direction, "population": c.population,
+            "effect": c.effect or {}, "certainty": c.certainty,
+            "quote": c.quote, "quoteSection": c.quote_section, "quoteOffset": c.quote_offset,
+            "quoteVerified": c.quote_verified, "displayText": c.display_text,
+            "tracker": c.tracker,
+            "fields": [{"key": f.field_key, "role": f.role, "proposed": f.proposed} for f in bound]}
+
+
+@research.get("/reports")
+def report_list(limit: int = 50):
+    s = Session()
+    try:
+        rows = s.query(Report).order_by(Report.created_at.desc()).limit(min(limit, 200)).all()
+        by_id = {r.id: r for r in s.query(Source).filter(
+            Source.id.in_([r.source_id for r in rows] or [0])).all()}
+        return {"reports": [{**_report_row(r),
+                             "title": getattr(by_id.get(r.source_id), "title", ""),
+                             "pmid": getattr(by_id.get(r.source_id), "pmid", ""),
+                             "journal": getattr(by_id.get(r.source_id), "journal", ""),
+                             "year": getattr(by_id.get(r.source_id), "year", None)}
+                            for r in rows]}
+    finally:
+        s.close()
+
+
+@research.get("/report/{source_id}")
+def report_for(source_id: int):
+    s = Session()
+    try:
+        row = s.get(Source, source_id)
+        if row is None:
+            raise HTTPException(404, "no such source")
+        report = (s.query(Report).filter(Report.source_id == source_id)
+                  .order_by(Report.created_at.desc()).first())
+        found = (s.query(Claim).filter(Claim.source_id == source_id)
+                 .order_by(Claim.id.asc()).all())
+        return {"source": _source_row(row),
+                "report": _report_row(report) if report else None,
+                "claims": [_claim_row(s, c) for c in found],
+                "citedBy": reports.cited_by(s, row)}
+    finally:
+        s.close()
 
 
 app.include_router(public)

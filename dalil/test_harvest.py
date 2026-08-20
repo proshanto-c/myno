@@ -99,10 +99,21 @@ class FakeNcbi:
 
 
 # ---- the transaction everything runs in -------------------------------------
+# One outer transaction rolled back at the end keeps the real database clean,
+# and one savepoint per test keeps the tests clean of each other. Both are
+# needed: a `session.rollback()` after a `session.commit()` undoes nothing, so
+# without the savepoint one test's rows are still there for the next.
 init_db()
 connection = engine.connect()
 outer = connection.begin()
-Scoped = sessionmaker(bind=connection, join_transaction_mode="create_savepoint")
+_Scoped = sessionmaker(bind=connection, join_transaction_mode="create_savepoint")
+_open = []
+
+
+def Scoped():
+    s = _Scoped()
+    _open.append(s)
+    return s
 
 
 def fresh_query(s, term="test-term"):
@@ -577,12 +588,17 @@ def test_the_fields_the_seeds_claim_to_inform_are_real_fields():
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in T:
+        mark = connection.begin_nested()
         try:
             fn(); passed += 1
         except AssertionError as e:
             failed += 1; print(f"FAIL {name}: {e}")
         except Exception as e:
             failed += 1; print(f"ERROR {name}: {type(e).__name__}: {e}")
+        finally:
+            while _open:
+                _open.pop().close()
+            mark.rollback()
     outer.rollback()
     connection.close()
     print(f"{passed} passed, {failed} failed")
