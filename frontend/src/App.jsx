@@ -1161,17 +1161,6 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   // the arc: the shortest and longest cycle they have actually had
   const past = cycles.filter((c) => !c.open).map((c) => c.days);
   const span = past.length >= 2 ? [Math.min(...past), Math.max(...past)] : [null, null];
-  const cycleNote = (() => {
-    if (!current) return "Mark a period on the calendar and this fills in.";
-    if (current.days <= current.bleed) return `Day ${current.days} of your period.`;
-    if (!avg) return "A couple more cycles and this will know your rhythm.";
-    const left = avg - current.days;
-    const when = dayOf(addDays(current.start, avg)).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-    if (left > 0) return `On your average, the next one is around ${when} — ${left} day${left === 1 ? "" : "s"} away.`;
-    if (left === 0) return `On your average, the next one is due today.`;
-    return `${-left} day${left === -1 ? "" : "s"} past your ${avg}-day average.`;
-  })();
-  const late = current && avg && current.days > avg;
   const phaseTiles = (
     <Card style={{ padding: 20, boxShadow: SH_SM, position: "relative", overflow: "hidden" }}>
       <SparkleLayer burst={burst} />
@@ -1185,27 +1174,41 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
       </div>
     </Card>);
 
-  // The three sentences under the ring were doing the real work in 11px grey.
-  // They get a card: the answer first, then what it rests on.
+  // WHAT'S NEXT — one answer, big, and at most two quiet lines under it.
+  // Everything else the card used to carry (the phase's day span, the average
+  // repeated twice, a two-line caveat) was arithmetic the person had to do
+  // themselves. The ring says which phase; this says what happens next.
+  const nextUp = (() => {
+    if (!current) return { big: "Nothing logged yet", sub: "Mark a period on the calendar to start." };
+    if (current.days <= current.bleed) return { big: `Day ${current.days} of your period`, sub: "" };
+    if (!avg) return { big: "Still learning your rhythm", sub: "A couple more periods and this can say." };
+    const when = dayOf(addDays(current.start, avg)).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const left = avg - current.days;
+    if (left > 0) return { big: `Around ${when}`, sub: `${left} day${left === 1 ? "" : "s"} away, going by your ${avg}-day average.` };
+    if (left === 0) return { big: "Due today", sub: `Going by your ${avg}-day average.` };
+    return { big: `${-left} day${left === -1 ? "" : "s"} late`, sub: `Your average is ${avg} days.`, late: true };
+  })();
+  const late = !!nextUp.late;
+
   const cycleFacts = (() => {
     const cyc = current ? ringLength(current.days, avg) : null;
     const sp = current ? phaseSpans(cyc, usualBleed).find((x) => x.key === phaseKey) : null;
     const phaseName = (PHASES.find((x) => x.key === phaseKey) || {}).name;
-    const row = (label, value) => (
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12,
-        padding: "9px 0", borderTop: `1px solid ${C.high}` }}>
-        <span style={{ fontFamily: bodyf, fontSize: 12.5, color: C.inkVar, flexShrink: 0 }}>{label}</span>
-        <span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.ink, textAlign: "right" }}>{value}</span>
-      </div>);
+    const lastPhase = sp && sp.b >= cyc;
+    const lines = [
+      sp && (lastPhase ? `${phaseName} until your next period` : `${phaseName} until day ${sp.b}`),
+      span[0] != null && `Yours have come from day ${span[0]} to day ${span[1]}`,
+    ].filter(Boolean);
     return (<Card style={{ padding: 20, boxShadow: SH_SM }}>
       <Label color={late ? C.roseOn : C.plum}>{late ? "Running late" : "What's next"}</Label>
-      <div style={{ fontFamily: head, fontWeight: 700, fontSize: 19, lineHeight: 1.35, margin: "8px 0 14px",
-        color: late ? C.roseOn : C.ink }}>{cycleNote}</div>
-      {sp && row("This phase", `${phaseName} · days ${sp.a + 1}–${sp.b} of about ${cyc}`)}
-      {span[0] != null && row("Your own range", `day ${span[0]} to day ${span[1]}`)}
-      {avg && row("Your average", `${avg} days`)}
-      <div style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, lineHeight: 1.5, marginTop: 10 }}>
-        Phases are estimated from your average — ovulation isn't something the app can see.</div>
+      <div style={{ fontFamily: head, fontWeight: 700, fontSize: 26, lineHeight: 1.2, margin: "6px 0 4px",
+        color: late ? C.roseOn : C.ink }}>{nextUp.big}</div>
+      {nextUp.sub && <div style={{ fontFamily: bodyf, fontSize: 13.5, color: C.inkVar, lineHeight: 1.5 }}>{nextUp.sub}</div>}
+      {lines.length > 0 && (<div style={{ marginTop: 14, borderTop: `1px solid ${C.high}`, paddingTop: 10,
+        display: "grid", gap: 5 }}>
+        {lines.map((l) => (<div key={l} style={{ fontFamily: bodyf, fontSize: 13, color: C.inkVar }}>{l}</div>))}
+      </div>)}
+      <div style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 10 }}>Phases are an estimate.</div>
     </Card>);
   })();
   const recordCTA = (
