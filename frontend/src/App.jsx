@@ -39,6 +39,9 @@ const FONTS = `
 input[type=range].slider{ -webkit-appearance:none; appearance:none; width:100%; height:10px; border-radius:9999px; outline:none; }
 input[type=range].slider::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:30px; height:30px; border-radius:50%; background:#fff; border:4px solid ${C.plum}; box-shadow:0 2px 8px rgba(92,75,125,.28); cursor:pointer; margin-top:-1px; }
 input[type=range].slider::-moz-range-thumb{ width:30px; height:30px; border-radius:50%; background:#fff; border:4px solid ${C.plum}; cursor:pointer; }
+.cal-day{ transition:box-shadow .15s ease, transform .12s ease; }
+.cal-day:hover{ box-shadow:0 0 0 2px ${C.plum}; transform:scale(1.06); }
+.cal-day:active{ transform:scale(.93); }
 @media print{ .no-print{ display:none !important } body{ background:#fff !important } }
 `;
 
@@ -1083,16 +1086,17 @@ function CycleCalendar({ logs, onSet }) {
           border: `1.5px solid ${range ? C.plum : C.outlineVar}` }}>Range</button>}
     </div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 6 }}>
-      {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.outline }}>{d}</div>))}</div>
+      {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.inkVar }}>{d}</div>))}</div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>{cells.map((d, i) => {
       const isToday = d === todayD, isPeriod = d && periodSet.has(iso(d)), isAnchor = d && anchor === d;
       return (<div key={i} style={{ aspectRatio: "1", display: "grid", placeItems: "center" }}>
-        {d && <span onClick={() => tap(d)} style={{ width: 34, height: 34, borderRadius: "50%", display: "grid",
-          placeItems: "center", fontFamily: bodyf, fontSize: 14, fontWeight: isToday ? 700 : 500,
-          cursor: onSet ? "pointer" : "default", userSelect: "none",
-          background: isAnchor ? C.roseOn : isToday ? C.plum : isPeriod ? C.rose : "transparent",
-          border: isAnchor ? "none" : isPeriod && isToday ? `2px solid ${C.rose}` : "none",
-          color: isAnchor || isToday ? "#fff" : isPeriod ? C.roseOn : C.ink }}>{d}</span>}
+        {d && <span onClick={() => tap(d)} className={onSet ? "cal-day" : undefined}
+          style={{ width: 34, height: 34, borderRadius: "50%", display: "grid",
+            placeItems: "center", fontFamily: bodyf, fontSize: 14, fontWeight: isToday || isPeriod ? 700 : 500,
+            cursor: onSet ? "pointer" : "default", userSelect: "none",
+            background: isAnchor ? C.plumC : isPeriod ? C.roseOn : C.surface,
+            border: isToday ? `2px solid ${C.plum}` : `1px solid ${C.outlineVar}`,
+            color: isAnchor || isPeriod ? "#fff" : isToday ? C.plum : C.ink }}>{d}</span>}
       </div>); })}</div>
     {onSet && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 8 }}>
       {range ? (anchor ? `From ${anchor} ${new Date(y, m, 1).toLocaleString(undefined, { month: "short" })} — tap the last day`
