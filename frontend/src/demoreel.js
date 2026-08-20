@@ -86,15 +86,25 @@ export const sentences = (text) =>
   (String(text ?? "").match(/[^.!?]+[.!?]*\s*/g) || [String(text ?? "")])
     .map((x) => x.trim()).filter(Boolean);
 
-/** Every line the reels say, in order, deduplicated — what there is to warm. */
+/**
+ * Every line the reels say, in order, deduplicated — what there is to warm.
+ *
+ * A whole line at a time, not a sentence: the guide plays one clip per line, so
+ * the pause between two sentences is the speaker's own rather than a gap while
+ * the next request comes back. `sentences` is still what the app's own replies
+ * are split by, where the first words matter more than the seam.
+ */
 export function spokenLines(person = SARA) {
   const seen = new Set();
   for (const list of [signUp(person), showcase()])
     for (const b of list)
-      if ((b.do === "say" || b.do === "spot") && b.text)
-        for (const one of sentences(b.text)) seen.add(one);
+      if ((b.do === "say" || b.do === "spot") && b.text) seen.add(b.text);
   return [...seen];
 }
+
+/** The lines one reel says, in the order it will say them. */
+export const linesOf = (list) =>
+  [...new Set(list.filter((b) => (b.do === "say" || b.do === "spot") && b.text).map((b) => b.text))];
 
 /** The keystrokes for one person, in order: [field, valueSoFar] pairs. */
 export function keystrokes(person, fields = FIELDS) {

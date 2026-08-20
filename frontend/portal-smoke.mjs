@@ -57,6 +57,11 @@ const CLAIMS = [{ id: 9, sourceId: 2, state: "extracted", claimText: "Shorter sl
   fields: [{ key: "sleep", role: "exposure", proposed: false },
            { key: "brainFog", role: "outcome", proposed: false }] }];
 
+const QUEUE = [{ ...CLAIMS[0], state: "extracted",
+  source: { id: 2, title: "The prevalence and phenotypic features of PCOS", pmid: "27664216",
+            journal: "Hum Reprod", year: 2016, licence: "CC BY", retracted: false },
+  report: { id: 4, score: 56, verdict: "considerations", flags: ["quote_unverified"] } }];
+
 async function pass(name, { authRequired, signedIn, hash = "", check }) {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',
     { url: `https://localhost/dalil/${hash}`, pretendToBeVisual: true });
@@ -77,6 +82,9 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
       : u.includes("/runs") ? { runs: RUNS }
       : u.includes("/reports") ? { reports: REPORTS }
       : u.includes("/report/") ? { source: SOURCES[1], report: REPORTS[0], claims: CLAIMS, citedBy: 4 }
+      : u.includes("/queue") ? { claims: QUEUE, open: 1, published: 0, signedIn: false }
+      : u.includes("/candidates") ? { correlations: [{ exposure: "dietFibre", outcome: "acne", claims: 3 }],
+                                      fields: [{ key: "hotFlushes", claims: 2, labels: ["Hot flushes"] }] }
       : u.includes("/jobs") ? { current: null, past: [] }
       : {};
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
@@ -116,6 +124,11 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
   // the checks that actually mean something
   if (authRequired && !signedIn) {
     if (!html.includes("Sign in")) { console.log(`[${name}] no sign-in form behind the gate`); return 3; }
+  } else if (hash === "#queue") {
+    for (const want of ["Queue", "unsigned", "What the patient reads", "Shorter sleep goes with more brain fog",
+                        "p publish", "dietFibre", "Hot flushes"]) {
+      if (!html.includes(want)) { console.log(`[${name}] the queue omits ${JSON.stringify(want)}`); return 3; }
+    }
   } else if (hash === "#reports") {
     for (const want of ["Verdict", "Considerations", "Study design", "prevalence was 11.9%",
                         "not found in the text", "Shorter sleep goes with more brain fog",
@@ -156,5 +169,6 @@ if (code === 0) code = await pass("gated", { authRequired: true, signedIn: false
 if (code === 0) code = await pass("signed-in", { authRequired: true, signedIn: true });
 if (code === 0) code = await pass("report", { authRequired: false, signedIn: true,
                                               hash: "#reports", check: openFirstReport });
+if (code === 0) code = await pass("queue", { authRequired: false, signedIn: true, hash: "#queue" });
 console.log(code === 0 ? "OK" : `FAILED (${code})`);
 process.exit(code);

@@ -333,6 +333,190 @@ const Section = ({ title, children }) => (
   </div>
 );
 
+// Which way the finding runs. Declared above its first use rather than beside
+// its second: a const referenced before its initialiser has blanked this app's
+// screen three times already.
+const arrow = { "+": "↑", "-": "↓", "0": "→" };
+
+/* ---- the queue --------------------------------------------------------------
+   One claim at a time, strongest paper first, with the keys under a reviewer's
+   fingers. A hundred claims in an hour is only possible if the decision is the
+   slow part, so everything else — finding the quote, checking the bindings,
+   knowing what the rubric thought — is already on the card. */
+const KEYS = { a: "accept", r: "reject", p: "publish" };
+
+function Queue({ data, onAct, onSkip, index, busy, problems, candidates }) {
+  const rows = data.claims || [];
+  const claim = rows[index];
+  const [display, setDisplay] = React.useState("");
+  const [reason, setReason] = React.useState("");
+
+  React.useEffect(() => { setDisplay(claim?.displayText || ""); setReason(""); }, [claim?.id]);
+
+  const act = React.useCallback((action) => {
+    if (!claim || busy) return;
+    onAct(claim, action, { display, reason });
+  }, [claim, busy, display, reason, onAct]);
+
+  React.useEffect(() => {
+    const onKey = (e) => {
+      // never while somebody is typing the sentence a patient will read
+      if (["INPUT", "TEXTAREA"].includes(e.target?.tagName)) return;
+      if (e.key === "ArrowRight") { onSkip(1); return; }
+      if (e.key === "ArrowLeft") { onSkip(-1); return; }
+      const action = KEYS[e.key?.toLowerCase()];
+      if (action) { e.preventDefault(); act(action); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [act, onSkip]);
+
+  const words = display.trim() ? display.trim().split(/\s+/).length : 0;
+
+  return (
+    <section>
+      <H2 count={`${data.open || 0} open · ${data.published || 0} published`}>Queue</H2>
+
+      {data.signedIn === false && (
+        <div style={{ ...card, padding: "10px 14px", marginBottom: 14, background: T.warnSoft,
+          border: `1px solid ${T.warn}33`, fontFamily: sans, fontSize: 13, color: T.warn }}>
+          Sign-in is off, so anything published now is recorded as <b>unsigned</b>. The claim this
+          module makes is that a named person checked it; that claim is not true of these rows.
+        </div>
+      )}
+
+      {!claim ? (
+        <div style={{ ...card, border: `1px dashed ${T.lineStrong}`, padding: 26, textAlign: "center" }}>
+          <ListChecks size={20} color={T.inkSoft} />
+          <p style={{ fontFamily: sans, fontSize: 14, color: T.inkMid, lineHeight: 1.55,
+            margin: "10px auto 0", maxWidth: 460 }}>
+            Nothing waiting. Appraise some sources and any claim that survives quote verification
+            arrives here.
+          </p>
+        </div>
+      ) : (
+        <div style={{ ...card, padding: "20px 22px" }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap",
+            marginBottom: 4 }}>
+            <span style={{ fontFamily: sans, fontSize: 12.5, color: T.inkSoft, ...figures }}>
+              {index + 1} of {rows.length}
+            </span>
+            {claim.report && (
+              <Tag fg={verdictTone(claim.report.verdict).fg} bg={verdictTone(claim.report.verdict).bg}>
+                {claim.report.score}/100 · {verdictTone(claim.report.verdict).label}
+              </Tag>
+            )}
+            {(claim.report?.flags || []).map((f) => (
+              <Tag key={f} fg={T.bad} bg={T.badSoft}>{f.split(":")[0].replace(/_/g, " ")}</Tag>
+            ))}
+            <Tag>{claim.state}</Tag>
+          </div>
+          <div style={{ fontFamily: sans, fontSize: 13, color: T.inkMid, marginBottom: 16 }}>
+            {claim.source?.title} · {claim.source?.journal} {claim.source?.year}
+            {claim.source?.pmid && <> · <a target="_blank" rel="noreferrer"
+              href={`https://pubmed.ncbi.nlm.nih.gov/${claim.source.pmid}/`}
+              style={{ color: T.accent }}>PMID {claim.source.pmid}</a></>}
+          </div>
+
+          <p style={{ fontFamily: serif, fontSize: 19, lineHeight: 1.45, color: T.ink,
+            margin: "0 0 12px" }}>{claim.claimText}</p>
+
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+            {(claim.fields || []).map((f) => (
+              <Tag key={f.role + f.key} fg={f.proposed ? T.warn : T.accent}
+                bg={f.proposed ? T.warnSoft : T.accentSoft}>
+                {f.role}: {f.key}{f.proposed ? " (proposed)" : ""}
+              </Tag>
+            ))}
+            <Tag>{arrow[claim.direction] || claim.direction} {claim.relation?.replace("_", " ")}</Tag>
+            <Tag>certainty {claim.certainty}</Tag>
+            {claim.population && <Tag>{claim.population}</Tag>}
+          </div>
+
+          <blockquote style={{ margin: "0 0 18px", padding: "10px 14px", background: T.raised,
+            borderLeft: `3px solid ${T.lineStrong}`, borderRadius: 4, fontFamily: serif,
+            fontSize: 14.5, lineHeight: 1.6, color: T.ink }}>
+            “{claim.quote}”
+            <span style={{ fontFamily: mono, fontSize: 11, color: T.inkSoft, display: "block",
+              marginTop: 6 }}>
+              {(claim.quoteSection || "text").toLowerCase()} · character {claim.quoteOffset}
+              {claim.quoteVerified ? " · found in the stored text" : " · UNVERIFIED"}
+            </span>
+          </blockquote>
+
+          <Field label={`What the patient reads — your words, not the paper's (${words}/25)`}>
+            <input style={{ ...input, borderColor: words > 25 ? T.bad : T.lineStrong }}
+              value={display} placeholder="Shorter sleep tracks with more brain fog"
+              onChange={(e) => setDisplay(e.target.value)} />
+          </Field>
+
+          {claim.report && claim.report.score < 45 && (
+            <Field label="Why publish something the rubric scored below 45?">
+              <input style={input} value={reason} onChange={(e) => setReason(e.target.value)}
+                placeholder="The only trial in this population" />
+            </Field>
+          )}
+
+          {problems.length > 0 && (
+            <div style={{ background: T.badSoft, border: `1px solid ${T.bad}22`, borderRadius: 6,
+              padding: "10px 12px", marginBottom: 14 }}>
+              {problems.map((p) => (
+                <div key={p} style={{ fontFamily: sans, fontSize: 13, color: T.bad,
+                  lineHeight: 1.5 }}>· {p}</div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Button busy={busy} onClick={() => act("publish")}>Publish</Button>
+            <Button kind="ghost" busy={busy} onClick={() => act("accept")}>Accept</Button>
+            <Button kind="ghost" busy={busy} onClick={() => act("reject")}>Reject</Button>
+            <Button kind="ghost" busy={busy} onClick={() => onSkip(1)}>Skip</Button>
+            <span style={{ fontFamily: mono, fontSize: 11.5, color: T.inkSoft, marginLeft: "auto" }}>
+              p publish · a accept · r reject · ← → move
+            </span>
+          </div>
+        </div>
+      )}
+
+      {(candidates?.correlations?.length > 0 || candidates?.fields?.length > 0) && (
+        <div style={{ marginTop: 26 }}>
+          <H2>What the literature keeps asking for</H2>
+          <div style={{ display: "grid", gap: 12,
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
+            <Section title="Pairs Insights does not correlate yet">
+              {candidates.correlations.length === 0
+                ? <span style={{ fontFamily: sans, fontSize: 13, color: T.inkSoft }}>None.</span>
+                : candidates.correlations.map((c) => (
+                    <div key={c.exposure + c.outcome} style={{ fontFamily: sans, fontSize: 13.5,
+                      color: T.ink, lineHeight: 1.8 }}>
+                      {c.exposure} → {c.outcome}
+                      <span style={{ color: T.inkSoft }}> · {c.claims} claim{c.claims === 1 ? "" : "s"}</span>
+                    </div>
+                  ))}
+            </Section>
+            <Section title="Fields the app does not record">
+              {candidates.fields.length === 0
+                ? <span style={{ fontFamily: sans, fontSize: 13, color: T.inkSoft }}>None.</span>
+                : candidates.fields.map((f) => (
+                    <div key={f.key} style={{ fontFamily: sans, fontSize: 13.5, color: T.ink,
+                      lineHeight: 1.8 }}>
+                      {f.labels[0] || f.key}
+                      <span style={{ color: T.inkSoft }}> · {f.claims} claim{f.claims === 1 ? "" : "s"}</span>
+                    </div>
+                  ))}
+              <p style={{ fontFamily: sans, fontSize: 12, color: T.inkSoft, lineHeight: 1.5,
+                margin: "10px 0 0" }}>
+                Adopting one is a commit to record.py, never something this module does on its own.
+              </p>
+            </Section>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /* ---- the report ------------------------------------------------------------
    A document, not a dashboard: verdict first, then what was found, then the
    evidence behind each line, then the flags, then where it all came from. The
@@ -424,8 +608,6 @@ function ModuleRows({ modules }) {
     </div>
   );
 }
-
-const arrow = { "+": "↑", "-": "↓", "0": "→" };
 
 function ClaimCard({ claim }) {
   const bound = claim.fields || [];
@@ -737,6 +919,10 @@ export default function Portal() {
   const [job, setJob] = useState(null);
   const [reportRows, setReportRows] = useState([]);
   const [report, setReport] = useState(null);       // one source's full report
+  const [queue, setQueue] = useState({ claims: [] });
+  const [candidates, setCandidates] = useState(null);
+  const [at, setAt] = useState(0);                  // where in the queue
+  const [problems, setProblems] = useState([]);
   const [open, setOpen] = useState(null);           // the source in the panel
   const [filter, setFilter] = useState({ state: "", q: "" });
   const [loading, setLoading] = useState(false);
@@ -758,13 +944,17 @@ export default function Portal() {
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [corpus, seeds, ran, made] = await Promise.all([
+      const [corpus, seeds, ran, made, waiting, loops] = await Promise.all([
         api.corpus(filter), api.queries(), api.runs(), api.reports(),
+        api.queue({ limit: 200 }), api.candidates(),
       ]);
       setData({ sources: corpus.sources || [], summary: corpus.summary || null });
       setQueries(seeds.queries || []);
       setRuns(ran.runs || []);
       setReportRows(made.reports || []);
+      setQueue({ claims: waiting.claims || [], open: waiting.open,
+                 published: waiting.published, signedIn: waiting.signedIn });
+      setCandidates(loops);
     } catch (err) {
       mishap(err);
     } finally {
@@ -805,6 +995,23 @@ export default function Portal() {
   const openSource = useCallback(async (id) => {
     try { setOpen(await api.source(id)); } catch (err) { mishap(err); }
   }, [mishap]);
+
+  /** One reviewer decision. The display text is saved as its own edit first, so
+      the audit shows what a person wrote separately from what they then did. */
+  const decide = useCallback(async (claim, action, { display, reason }) => {
+    setProblems([]);
+    try {
+      const wrote = (display || "").trim();
+      if (action !== "reject" && wrote && wrote !== (claim.displayText || "")) {
+        await api.reviewClaim(claim.id, { action: "edit", changes: { display_text: wrote },
+                                          note: "wrote the patient-facing wording" });
+      }
+      const out = await api.reviewClaim(claim.id, { action, overrideReason: reason || "" });
+      if (!out.ok) { setProblems(out.problems || []); return; }
+      await load();
+      setAt((i) => Math.max(0, i));      // the list shrank under us; stay in place
+    } catch (err) { mishap(err); }
+  }, [load, mishap]);
 
   const openReport = useCallback(async (sourceId) => {
     try {
@@ -877,10 +1084,10 @@ export default function Portal() {
             busy={job?.state === "running"} onRefresh={load} />
         )}
         {view === "queue" && (
-          <Placeholder icon={ListChecks} title="Queue">
-            Claims waiting to be reviewed will appear here. Nothing reaches a patient until someone
-            signs it off.
-          </Placeholder>
+          <Queue data={queue} candidates={candidates} index={Math.min(at, Math.max(0, (queue.claims || []).length - 1))}
+            problems={problems} busy={loading} onAct={decide}
+            onSkip={(step) => setAt((i) => Math.max(0,
+              Math.min((queue.claims || []).length - 1, i + step)))} />
         )}
         {view === "reports" && (report
           ? <ReportView data={report} onBack={() => setReport(null)}

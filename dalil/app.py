@@ -24,10 +24,11 @@ import harvest
 import model
 import ncbi
 import reports
+import review
 import vocab
 from jobs import jobs
-from models import (Citation, Claim, ClaimField, Query, Report, Reviewer, Run,
-                    Session, Source, init_db)
+from models import (Citation, Claim, ClaimField, Published, Query, Report,
+                    Review, Reviewer, Run, Session, Source, init_db)
 
 app = FastAPI(title="Dalīl")
 
@@ -451,6 +452,101 @@ def report_for(source_id: int):
                 "report": _report_row(report) if report else None,
                 "claims": [_claim_row(s, c) for c in found],
                 "citedBy": reports.cited_by(s, row)}
+    finally:
+        s.close()
+
+
+# ---- review -----------------------------------------------------------------
+class ReviewIn(BaseModel):
+    action: str
+    changes: dict | None = None
+    note: str = ""
+    overrideReason: str = ""
+
+
+def _queue_row(s, claim: Claim, report: Report, source: Source) -> dict:
+    return {**_claim_row(s, claim),
+            "source": {"id": source.id, "title": source.title, "pmid": source.pmid,
+                       "journal": source.journal or source.book_title, "year": source.year,
+                       "licence": source.licence, "retracted": source.retracted},
+            "report": {"id": report.id, "score": report.score, "verdict": report.verdict,
+                       "flags": report.flags or []} if report else None}
+
+
+@research.get("/queue")
+def review_queue(limit: int = 50, state: str = ""):
+    s = Session()
+    try:
+        rows = review.queue(s, limit=limit, state=state)
+        return {"claims": [_queue_row(s, c, r, src) for c, r, src in rows],
+                "open": s.query(Claim).filter(Claim.state.in_(review.OPEN_STATES)).count(),
+                "published": s.query(Published).filter(Published.revoked_at.is_(None)).count(),
+                "signedIn": auth.auth_required()}
+    finally:
+        s.close()
+
+
+@research.post("/claim/{claim_id}/review")
+def review_claim(claim_id: int, body: ReviewIn, reviewer=Depends(auth.require_reviewer)):
+    s = Session()
+    try:
+        claim = s.get(Claim, claim_id)
+        if claim is None:
+            raise HTTPException(404, "no such claim")
+        try:
+            out = review.act(s, reviewer, claim, body.action, changes=body.changes,
+                             note=body.note, override_reason=body.overrideReason)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {**out, "claim": _claim_row(s, claim)}
+    finally:
+        s.close()
+
+
+@research.get("/claim/{claim_id}/audit")
+def claim_audit(claim_id: int):
+    s = Session()
+    try:
+        rows = (s.query(Review).filter(Review.claim_id == claim_id)
+                .order_by(Review.created_at.asc()).all())
+        names = {r.id: r.email for r in s.query(Reviewer).all()}
+        return {"audit": [{"id": r.id, "action": r.action, "note": r.note,
+                           "before": r.before, "after": r.after,
+                           "by": names.get(r.reviewer_id) or "unsigned",
+                           "at": r.created_at.isoformat() if r.created_at else None}
+                          for r in rows]}
+    finally:
+        s.close()
+
+
+@research.get("/published")
+def published(limit: int = 200):
+    s = Session()
+    try:
+        rows = (s.query(Published).filter(Published.revoked_at.is_(None))
+                .order_by(Published.published_at.desc()).limit(min(limit, 500)).all())
+        names = {r.id: r.email for r in s.query(Reviewer).all()}
+        return {"published": [{
+            "id": r.id, "claimId": r.claim_id, "correlationId": r.correlation_id,
+            "fieldKeys": r.field_keys or [], "displayText": r.display_text, "grade": r.grade,
+            "citation": r.citation or {}, "tracker": r.tracker,
+            # No `published_by` means sign-in was off when this was published.
+            # An unsigned row is not a review somebody put their name to, and
+            # saying so here is cheaper than discovering it later.
+            "signed": bool(r.published_by), "by": names.get(r.published_by) or "unsigned",
+            "at": r.published_at.isoformat() if r.published_at else None}
+            for r in rows]}
+    finally:
+        s.close()
+
+
+@research.get("/candidates")
+def candidate_pairs():
+    """Two feedback loops into the app: pairs worth correlating, and fields
+    worth recording. Neither is applied automatically."""
+    s = Session()
+    try:
+        return {"correlations": review.candidates(s), "fields": review.proposed_fields(s)}
     finally:
         s.close()
 

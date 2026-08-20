@@ -10,7 +10,7 @@ import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
 // The sign-up signs itself up for a demo — beats, timings and the rule that a
 // person's form is left alone, all tested in demoreel.test.mjs.
 import { SARA, signUp, showcase, runReel, isEmpty, firstPhase, afterPhase,
-         sentences, travelMs, sayMs, SCROLL_MS } from "./demoreel.js";
+         sentences, linesOf, travelMs, sayMs, SCROLL_MS } from "./demoreel.js";
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
   cycleRuns, DAY_MS } from "./cycles.js";
@@ -267,24 +267,8 @@ const scaleDisplay = (value, max = SCALE_MAX, words = null) => {
   const word = scaleWord(v, max, words);
   return word ? `${v}/${max} ${word}` : `${v}/${max}`;
 };
-const normalizedScale = (scale) => {
-  if (!scale || typeof scale.value !== "number") return null;
-  const oldMax = Number(scale.max) > 0 ? Number(scale.max) : SCALE_MAX;
-  const value = oldMax === SCALE_MAX ? scale.value : Math.round((scale.value / oldMax) * SCALE_MAX);
-  return { ...scale, value: clampScale(value), max: SCALE_MAX };
-};
-const normalizedCategory = (cat) => {
-  const scale = normalizedScale(cat.scale);
-  if (!scale) {
-    const { scale: _scale, ...rest } = cat;
-    return rest;
-  }
-  return { ...cat, scale };
-};
-
 // The saved daily log is JSON shaped by this schema. Speech fills what it can;
-// the rest is filled in the "End conversation" sheet. Users can also add their
-// own free-form categories on top (entry.categories).
+// the rest is filled in the "End conversation" sheet.
 // The questions themselves live in the backend (record.py) and arrive from
 // GET /record/schema, so the app, the voice extractor and the insight
 // categories can never drift apart. This copy is only what we draw while that
@@ -600,9 +584,9 @@ function CriterionRow({ title, source, result }) {
 
 // A section that can be folded away. The advocacy report is long, and most of
 // it is only wanted at the moment you're preparing for the appointment.
-function Collapsible({ title, count, children, defaultOpen = true, style }) {
+function Collapsible({ title, count, children, defaultOpen = true, style, demo }) {
   const [open, setOpen] = useState(defaultOpen);
-  return (<Card style={{ marginBottom: 14, ...style }}>
+  return (<Card demo={demo} style={{ marginBottom: 14, ...style }}>
     <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: "none", padding: 0, width: "100%",
       cursor: "pointer", display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
       <Label>{title}</Label>
@@ -1030,13 +1014,88 @@ const pressKey = (el, key) => {
 const REELS = { signup: () => signUp(SARA), show: showcase };
 
 /**
+ * THE VOICE THE GUIDE SPEAKS IN.
+ *
+ * One clip per line, fetched before it is needed. The app's own replies are
+ * split into sentences so the first words start sooner, but a narrator read
+ * that way breathes in the wrong places and loses its tail whenever the next
+ * line arrives — so a line here is one request, one clip, played whole.
+ *
+ * Because the clip is in hand before it plays, the reel can be paced by how
+ * long it actually runs rather than by a guess, which is what keeps the pointer
+ * and the voice together.
+ */
+function useNarrator(settings) {
+  const clips = useRef(new Map());          // line -> { url, ms }
+  const playing = useRef(null);
+  const last = useRef("");
+  const [blocked, setBlocked] = useState(false);   // the browser refused to play it
+
+  const fetchClip = useCallback(async (text) => {
+    const had = clips.current.get(text);
+    if (had) return had;
+    try {
+      const base = (settings.backendUrl || "/api").replace(/\/$/, "");
+      const r = await fetch(`${base}/tts`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ text }) });
+      if (!r.ok) return null;
+      const url = URL.createObjectURL(await r.blob());
+      // how long it runs, from the file rather than from a word count
+      const ms = await new Promise((done) => {
+        const probe = new Audio(); probe.preload = "metadata";
+        probe.onloadedmetadata = () => done(Number.isFinite(probe.duration) ? Math.round(probe.duration * 1000) : null);
+        probe.onerror = () => done(null);
+        probe.src = url;
+      });
+      const clip = { url, ms };
+      clips.current.set(text, clip);
+      return clip;
+    } catch (e) { return null; }
+  }, [settings.backendUrl]);
+
+  const play = useCallback((clip) => {
+    try { playing.current?.pause(); } catch (e) {}
+    const a = new Audio(clip.url);
+    playing.current = a;
+    // Autoplay is a permission, not a given: a page nobody has touched may be
+    // refused. Say so rather than playing a silent tour.
+    a.play().then(() => setBlocked(false)).catch(() => setBlocked(true));
+  }, []);
+
+  /** Fetch every line of a reel, in the order it will say them. */
+  const prime = useCallback((lines) => {
+    if (!settings.voice) return;
+    (async () => { for (const line of lines) await fetchClip(line); })();
+  }, [settings.voice, fetchClip]);
+
+  /** Say one line. Returns how long it will take when that is known. */
+  const say = useCallback((text) => {
+    if (!settings.voice) return null;
+    last.current = text;
+    const clip = clips.current.get(text);
+    if (clip) { play(clip); return clip.ms; }
+    fetchClip(text).then((c) => { if (c && last.current === text) play(c); });
+    return null;
+  }, [settings.voice, fetchClip, play]);
+
+  const stop = useCallback(() => { try { playing.current?.pause(); } catch (e) {} playing.current = null; }, []);
+  // Called from a real tap, which is the one thing that lifts the block.
+  const resume = useCallback(() => {
+    const clip = clips.current.get(last.current);
+    if (clip) play(clip); else setBlocked(false);
+  }, [play]);
+  useEffect(() => () => stop(), [stop]);
+  return { prime, say, stop, blocked, resume };
+}
+
+/**
  * Runs whichever reel is due, and hands the app back when it is done.
  *
  * `phase` is the whole state machine: null when nobody is being shown anything,
  * otherwise the reel that is playing. Each one names its own successor, so the
  * tutorial follows the simulation without either knowing about the other.
  */
-function useDirector({ ready, profile, settings, setSettings, speak, silence }) {
+function useDirector({ ready, profile, settings, setSettings, speak, silence, prime }) {
   const [phase, setPhase] = useState(null);
   const [pointer, setPointer] = useState(null);   // { x, y, ms, gone }
   const [ring, setRing] = useState(null);         // where a click landed: { x, y, n }
@@ -1046,7 +1105,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence }) 
   // where it can always read the latest: closures over props would go stale
   // halfway through a two-minute tour.
   const live = useRef({});
-  live.current = { profile, settings, setSettings, speak, silence };
+  live.current = { profile, settings, setSettings, speak, silence, prime };
   // One history entry for the whole run, not one per reel: pushing again when
   // the sign-up hands over to the tour would leave the back button popping the
   // entry the tour had just pushed — cancelling it a moment after it started.
@@ -1104,14 +1163,15 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence }) 
       },
       key: (t, value) => { const el = find(t); if (el) typeInto(el, value); },
       enter: (t) => { const el = find(t); if (el) pressKey(el, "Enter"); },
-      // Said out loud if the voice is on, and captioned either way — a demo
-      // watched with the sound off has to be followable too.
-      say: (text) => { setCaption(text); live.current.speak?.(text); return sayMs(text); },
+      // Said out loud, captioned either way, and held for as long as the clip
+      // actually runs — plus a breath, so two lines never butt up against each
+      // other. sayMs is the fallback for a line with no clip in hand.
+      say: (text) => { setCaption(text); return (live.current.speak?.(text) || sayMs(text)) + LINE_GAP_MS; },
       spot: (t, text) => {
         const el = find(t);
         if (el) { const r = el.getBoundingClientRect(); setSpot({ x: r.left, y: r.top, w: r.width, h: r.height }); }
-        setCaption(text); live.current.speak?.(text);
-        return sayMs(text);
+        setCaption(text);
+        return (live.current.speak?.(text) || sayMs(text)) + LINE_GAP_MS;
       },
       dim: () => { setSpot(null); setCaption(""); },
       end: () => finish(false),
@@ -1137,7 +1197,9 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence }) 
       }
     };
 
-    const cancel = runReel(REELS[phase](), io);
+    const list = REELS[phase]();
+    live.current.prime?.(linesOf(list));      // every line fetched before it is due
+    const cancel = runReel(list, io);
     stop = cancel;
     // ONE WAY OUT. While it plays it owns the screen — a stray tap on a control
     // it is about to press would leave the rest of the reel talking about a
@@ -1790,11 +1852,6 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const persist = (entry) => setLogs([...logs.filter((l) => l.date !== entry.date), entry].sort((a, b) => a.date.localeCompare(b.date)));
   const saveToDb = (entry) => { const pid = settings.patientId; if (!pid) return; const b = (settings.backendUrl || "/api").replace(/\/$/, ""); fetch(`${b}/patients/${pid}/logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }).catch(() => {}); };
   const set = (k, v) => { const n = { ...eRef.current, [k]: v }; setE(n); eRef.current = n; persist(n); setSaved(true); };
-  // The user can override an inferred category slider; their value is kept.
-  const setCatScale = (key, v) => {
-    const cats = (eRef.current.categories || []).map((c) => c.key === key ? { ...c, scale: { ...(normalizedScale(c.scale) || {}), value: clampScale(v), max: SCALE_MAX } } : c);
-    const n = { ...eRef.current, categories: cats }; setE(n); eRef.current = n; persist(n); setSaved(true);
-  };
   // Render one schema field as an input for the "End conversation" sheet.
   const field = (f) => {
     const v = e[f.key]; const on = !!spoken[f.key];
@@ -1845,15 +1902,14 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
     keys.forEach((k) => { clearTimeout(timers.current[k]); timers.current[k] = setTimeout(() => setFlash((f) => { const n = { ...f }; delete n[k]; return n; }), 1700); });
   };
 
-  // Speech → Claude updates the personalized tracker + analytics fields + a spoken
-  // reply. The categories are invented from the whole conversation, so they're
-  // unique to this person; whatever changed flashes.
+  // Speech → Claude fills the form's own fields and answers out loud. Whatever
+  // it heard is marked as heard and flashes on the card while it is fresh.
   const ingest = async (said) => {
     if (!said) return; setPartial(""); setErr(""); setBusy(true);
     const base = { ...eRef.current, note: (eRef.current.note ? eRef.current.note + " " : "") + said };
     let merged = base; let say = ""; let focus = null;
     try {
-      const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), categories: eRef.current.categories || [], personality: settings.personality });
+      const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), personality: settings.personality });
       const scaleValue = (key) => f[key] == null ? base[key] : clampScale(f[key], base[key] ?? 0);
       // Merge whatever the schema asks for, rather than a hand-kept list that
       // silently drops any field added to the backend since it was written.
@@ -1871,20 +1927,13 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
         } else if (fd.type === "scale" || fd.type === "emoji") next[k] = scaleValue(k);
         else next[k] = f[k] ?? base[k];
       }
-      // which of them actually came from speech, so those rows can flash
+      // Which of them actually came from speech: those rows carry a HEARD badge
+      // from here on, and flash on the card while the answer is fresh.
       const heard = fields.map((fd) => fd.key).filter((k) => f[k] != null && f[k] !== false);
       if (heard.length) setSpoken((p) => { const n = { ...p }; heard.forEach((k) => (n[k] = true)); return n; });
-      if (Array.isArray(f.categories)) {
-        const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, JSON.stringify([c.value, c.scale?.value])]));
-        const clean = f.categories.filter((c) => c && c.key && c.label).slice(0, 6).map(normalizedCategory);
-        const changed = clean.filter((c) => prevMap[c.key] !== JSON.stringify([c.value, c.scale?.value])).map((c) => c.key);
-        lightUp(changed);
-        next.categories = clean;
-        // most relevant changed category that has a graphable slider (highest severity)
-        const scaled = clean.filter((c) => changed.includes(c.key) && c.scale && typeof c.scale.value === "number" && c.scale.max > 0);
-        if (scaled.length) focus = scaled.reduce((a, b) => (b.scale.value / b.scale.max > a.scale.value / a.scale.max ? b : a)).key;
-      }
-      if (!focus) { const std = ["pain", "mood", "energy", "sugar"].filter((k) => next[k] != null && next[k] !== base[k]); if (std.length) focus = std.includes("pain") ? "pain" : std[0]; }
+      lightUp(heard.filter((k) => JSON.stringify(next[k]) !== JSON.stringify(base[k])));
+      const std = ["pain", "mood", "energy", "sugar", "sleep"].filter((k) => next[k] != null && next[k] !== base[k]);
+      if (std.length) focus = std.includes("pain") ? "pain" : std[0];
       merged = next; say = f.say || "";
     } catch (e) { setErr("Couldn't reach the model to read that — is the backend up?"); }
     setE(merged); eRef.current = merged; persist(merged); setSaved(true); setBusy(false);
@@ -1899,15 +1948,47 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t), continuous: false, silenceMs: 1100 });
   const micTap = () => { if (voice.listening) { convoRef.current = false; voice.stop(); } else { convoRef.current = true; voice.start(); } };
   const endConvo = () => { convoRef.current = false; voice.stop(); setEnded(true); setModal(true); };
-  const status = busy ? "noting it down…" : voice.listening ? "listening…" : "tap to speak";
+
+  // SPEAKING, WITHOUT A MICROPHONE.
+  // The guided demo has no voice of its own and no business asking a stranger's
+  // browser for microphone permission, so it hands its line over the way the
+  // microphone would: the button lights, the words arrive a few at a time in
+  // the transcript, and then it goes through ingest — the same path, and the
+  // same backend call, that a spoken sentence takes.
+  const [dictating, setDictating] = useState(false);
+  const demoLine = useRef("");
+  const dictate = () => {
+    const line = demoLine.current.trim();
+    if (!line || busy) return;
+    setDictating(true); setPartial("");
+    const words = line.split(/\s+/);
+    let i = 0;
+    const tick = () => {
+      i += 1;
+      setPartial(words.slice(0, i).join(" "));
+      timers.current._dictate = i < words.length
+        ? setTimeout(tick, 130)
+        : setTimeout(() => { setDictating(false); ingest(line); }, 550);
+    };
+    timers.current._dictate = setTimeout(tick, 250);
+  };
+  useEffect(() => () => clearTimeout(timers.current._dictate), []);
+
+  const listening = voice.listening || dictating;
+  const status = busy ? "noting it down…" : listening ? "listening…" : "tap to speak";
 
   // PRIMARY — the conversation
   const speakBlock = (
     <div style={{ background: C.plumC, borderRadius: 24, padding: 22, boxShadow: SH, textAlign: "center", color: "#fff" }}>
       <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 16, lineHeight: 1.4, marginBottom: 16, opacity: 0.95 }}>How has your body been today?</div>
       <div style={{ display: "grid", placeItems: "center", marginBottom: 12 }}>
-        <button data-demo="rec:mic" onClick={micTap} disabled={busy} style={{ width: 96, height: 96, borderRadius: "50%", border: "none", cursor: busy ? "default" : "pointer", display: "grid", placeItems: "center", background: voice.listening ? C.roseOn : "#fff", color: voice.listening ? "#fff" : C.plum, boxShadow: voice.listening ? "0 0 0 6px rgba(255,255,255,0.3)" : SH, animation: voice.listening ? "pulse 1.5s infinite" : "none", opacity: busy ? 0.7 : 1 }}>
-          {voice.listening ? <MicOff size={38} /> : <Mic size={38} />}</button></div>
+        <button data-demo="rec:mic" onClick={micTap} disabled={busy} style={{ width: 96, height: 96, borderRadius: "50%", border: "none", cursor: busy ? "default" : "pointer", display: "grid", placeItems: "center", background: listening ? C.roseOn : "#fff", color: listening ? "#fff" : C.plum, boxShadow: listening ? "0 0 0 6px rgba(255,255,255,0.3)" : SH, animation: listening ? "pulse 1.5s infinite" : "none", opacity: busy ? 0.7 : 1 }}>
+          {listening ? <MicOff size={38} /> : <Mic size={38} />}</button>
+        {/* the demo's way in: a line is written here, then said as if heard */}
+        <input data-demo="rec:line" aria-hidden="true" tabIndex={-1} onChange={(ev) => { demoLine.current = ev.target.value; }}
+          style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none" }} />
+        <button data-demo="rec:dictate" aria-hidden="true" tabIndex={-1} onClick={dictate}
+          style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none", background: "none" }} /></div>
       <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, letterSpacing: "0.06em", textTransform: "uppercase", minHeight: 18 }}>{busy ? <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Loader2 size={13} className="spin" /> {status}</span> : status}</div>
       <div style={{ minHeight: 24, marginTop: 10, fontSize: 15 }}>{partial ? <i style={{ opacity: 0.92 }}>{partial}…</i> : null}</div>
       {reply && (<div style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", background: "rgba(255,255,255,0.16)", borderRadius: 16, padding: "12px 14px", marginTop: 12 }}>
@@ -1924,11 +2005,33 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       {err && <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", marginTop: 12, padding: "10px 14px", borderRadius: 12, background: "rgba(255,255,255,0.16)", color: "#fff", fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0 }} /> {err}</div>}
     </div>);
 
-  // SIDE — the personalized tracker Tawaazun builds from the conversation. New and
-  // changed categories rise in and flash a plum "updated" notification.
-  const cats = e.categories || [];
-  // Literature → form: research-backed trackers the user can add; each is saved
-  // as a category on the entry, so it flows into the tracker, trends and JSON.
+  // WHAT TODAY LOOKS LIKE SO FAR.
+  //
+  // This used to render categories the model invented mid-conversation. The
+  // model does not invent them any more — see trendMetrics — so the card sat
+  // empty however long you talked, promising a tracker that could never arrive.
+  // It shows the day's own answers instead: every question the form asks that
+  // has an answer today, in the order it asks them, with the ones Tawaazun
+  // heard rather than read marked as heard, and whatever just changed lit up.
+  const answered = (f, v) => {
+    if (v == null) return false;
+    if (f.type === "bodymap") return Array.isArray(v) && v.length > 0;
+    if (f.type === "bool") return v === true || spoken[f.key];
+    if (f.type === "scale" || f.type === "emoji" || f.type === "number")
+      return typeof v === "number" && (spoken[f.key] || v !== SCHEMA_DEFAULTS[f.key]);
+    return String(v).trim().length > 0;
+  };
+  const shownValue = (f, v) => {
+    if (f.type === "bodymap") return `${v.length} spot${v.length === 1 ? "" : "s"}`;
+    if (f.type === "bool") return v ? "Yes" : "No";
+    if (f.type === "emoji") return (f.options.find((o) => o.value === v) || {}).label || String(v);
+    if (f.type === "scale") return scaleDisplay(v, f.max || SCALE_MAX, f.words);
+    return String(v);
+  };
+  const today = schema.flatMap((g) => g.fields)
+    .filter((f) => !fieldBlocked(settings, f.key))
+    .map((f) => [f, e[f.key]])
+    .filter(([f, v]) => answered(f, v));
 
   const dayBlock = (
     <div data-demo="rec:tracker">
@@ -1936,24 +2039,19 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
         <Label color={C.inkVar}>Your day so far</Label>
         <button data-demo="rec:details" onClick={() => setModal(true)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.plum, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}><SquarePen size={14} /> Details</button>
       </div>
-      {cats.length === 0 ? (
-        <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.5 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;As you talk, <Word font={head} /> builds a tracker here — in your own words.</Card>
+      {today.length === 0 ? (
+        <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.5 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;As you talk, <Word font={head} /> fills this in — everything it hears about your day lands here.</Card>
       ) : (
-        <div style={{ display: "grid", gap: 10 }}>
-          {cats.map((c) => { const on = !!flash[c.key]; const sc = normalizedScale(c.scale); return (
-            <div key={c.key} style={{ position: "relative", background: on ? C.lilac : C.surface, boxShadow: on ? `0 0 0 3px ${C.plum}` : SH_SM, borderRadius: 16, padding: "13px 16px", transition: "box-shadow .35s ease, background-color .35s ease", animation: on ? "rise .3s ease" : "none" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: C.inkVar }}>{c.label}
-                  {on && <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 10, letterSpacing: "0.06em", color: C.onLilac, background: "#fff", borderRadius: 9999, padding: "3px 8px", animation: "pulse 1s ease infinite" }}>UPDATED</span>}</span>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  {c.value && <span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.plum, textAlign: "right" }}>{String(c.value)}</span>}
-                  <button onClick={() => removeCat(c.key)} title="Remove this tracker" style={{ background: "none", border: "none", cursor: "pointer", color: C.outline, display: "grid", placeItems: "center", padding: 2 }}><X size={15} /></button>
-                </span>
-              </div>
-              {sc && <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
-                <div style={{ flex: 1 }}><Slider value={sc.value} max={sc.max} onChange={(v) => setCatScale(c.key, v)} /></div>
-                <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.outline, minWidth: 36, textAlign: "right" }}>{sc.value}/{sc.max}</span>
-              </div>}
+        <div style={{ display: "grid", gap: 8 }}>
+          {today.map(([f, v]) => { const lit = !!flash[f.key], heard = !!spoken[f.key]; return (
+            <div key={f.key} style={{ display: "flex", alignItems: "center", gap: 10, background: lit ? C.lilac : C.surface,
+              boxShadow: lit ? `0 0 0 3px ${C.plum}` : SH_SM, borderRadius: 14, padding: "11px 14px",
+              transition: "box-shadow .35s ease, background-color .35s ease", animation: lit ? "rise .3s ease" : "none" }}>
+              <span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, color: lit ? C.onLilac : C.inkVar }}>{f.label}</span>
+              {heard && <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 10, letterSpacing: "0.05em",
+                color: C.plum, background: lit ? "#fff" : C.low, borderRadius: 9999, padding: "2px 7px" }}>HEARD</span>}
+              <span style={{ marginLeft: "auto", fontFamily: head, fontWeight: 700, fontSize: 14, color: C.plum,
+                textAlign: "right" }}>{shownValue(f, v)}</span>
             </div>); })}
         </div>
       )}
@@ -2005,7 +2103,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
           <button data-demo="log:close" onClick={() => setModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><X size={22} /></button>
         </div>
         <p style={{ color: C.inkVar, fontSize: 14, marginBottom: 14 }}>Optional — add anything you didn't say out loud. You can keep talking after.</p>
-        {schema.map((g) => (<div key={g.key || g.group} style={{ marginBottom: 14 }}>
+        {schema.map((g) => (<div key={g.key || g.group} data-demo={`log:group:${g.key || g.group}`} style={{ marginBottom: 14 }}>
           <Label color={C.inkVar}>{g.group}</Label>
           <div style={{ marginTop: 4 }}>{g.fields.map(field)}</div>
         </div>))}
@@ -2124,7 +2222,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
     const Ico = SECTION_ICONS[g.key] || Info;
     const mine = (analysis?.insights || []).filter((it) => it.category === g.key);
     const empty = !mine.length && !g.correlations.length && !g.trends.length && !g.facts.length;
-    return (<Card key={g.key}>
+    return (<Card key={g.key} demo={`ins:cat:${g.key}`}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <span style={{ width: 30, height: 30, borderRadius: 9, background: C.lilac, display: "grid", placeItems: "center" }}>
           <Ico size={16} color={C.plumDark} /></span>
@@ -2582,7 +2680,7 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
       <div style={{ display: "flex", justifyContent: "center", margin: "4px 0 0" }}><Triad axes={axes} /></div>
     </Card>
     {assessment
-      ? <DoctorIndicator assessment={assessment} />
+      ? <div data-demo="adv:indicator"><DoctorIndicator assessment={assessment} /></div>
       : <Card style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center", color: C.inkVar, fontSize: 14 }}>
           <Loader2 size={15} className="spin" color={C.outline} /> Checking your tracked data against the criteria…</Card>}
   </>);
@@ -2602,7 +2700,7 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
             {rep.flagged_patterns.map((f, i) => <li key={i} style={{ fontSize: 14.5 }}>{f}</li>)}</ul></div>)}
       </Collapsible>)}
     {(rep?.talking_points || []).length > 0 && (
-      <Collapsible title="To raise with the doctor" count={rep.talking_points.length}>
+      <Collapsible demo="adv:points" title="To raise with the doctor" count={rep.talking_points.length}>
         {rep.talking_points.map((t, i) => (<div key={i} style={{ paddingTop: i ? 14 : 0, marginTop: i ? 14 : 0,
           borderTop: i ? `1px solid ${C.high}` : "none" }}>
       <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15.5, lineHeight: 1.45 }}>{t.clinical_framing}</div>
@@ -2774,7 +2872,7 @@ const DRUGS = [
 function DrugTherapy({ profile, setProfile }) {
   const on = profile.drugs || [];
   const toggle = (k) => setProfile({ ...profile, drugs: on.includes(k) ? on.filter((x) => x !== k) : [...on, k] });
-  return (<Card style={{ padding: 20, boxShadow: SH_SM }}>
+  return (<Card demo="home:drugs" style={{ padding: 20, boxShadow: SH_SM }}>
     <Label>Drug therapy</Label>
     <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 12px" }}>
       <H size={20}>What you're taking</H>

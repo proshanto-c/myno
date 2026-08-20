@@ -49,6 +49,12 @@ export const api = {
   reports: () => request("/reports"),
   report: (sourceId) => request(`/report/${sourceId}`),
 
+  queue: (params) => request(`/queue${query(params)}`),
+  reviewClaim: (id, body) => request(`/claim/${id}/review`, { method: "POST", body }),
+  audit: (id) => request(`/claim/${id}/audit`),
+  published: () => request("/published"),
+  candidates: () => request("/candidates"),
+
   // Long jobs answer immediately with a handle; the portal polls /jobs.
   jobs: () => request("/jobs"),
   appraise: (body) => request("/jobs/appraise", { method: "POST", body }),
