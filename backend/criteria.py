@@ -38,6 +38,48 @@ RULES = {
 }
 
 # What the indicator can say, and how loudly.
+# Where each number came from, so the app can show its working. Kept next to
+# the rules themselves: if a threshold changes, the line describing it is right
+# here to change with it.
+SOURCES = [
+    {
+        "id": "guideline2023",
+        "name": "2023 International Evidence-Based Guideline for PCOS",
+        "detail": "Monash University, on behalf of the international PCOS network — the "
+                  "current consensus on assessing and managing the condition.",
+        "url": "https://www.monash.edu/medicine/mchri/pcos/guideline",
+        "used": [
+            "Irregular cycles, 3+ years after menarche: shorter than 21 or longer than 35 days",
+            "1 to 3 years after menarche: shorter than 21 or longer than 45 days",
+            "Within the first year after menarche, irregular cycles are expected and not assessed",
+            "Any single cycle over 90 days is raised on its own",
+            "Fewer than 8 cycles in a year",
+            "No first period by age 15",
+            "Clinical hyperandrogenism: modified Ferriman-Gallwey of 4 or more",
+            "Two of three criteria; ultrasound and AMH are left to a clinic",
+            "Hormonal contraception makes the cycle criterion unreadable",
+        ],
+    },
+    {
+        "id": "belsey1986",
+        "name": "Belsey et al., WHO (1986) — analysis of menstrual bleeding patterns",
+        "detail": "The reference method for counting bleeding in clinical trials.",
+        "used": ["A bleeding episode ends after two bleeding-free days; one free day does not end it"],
+    },
+    {
+        "id": "ours",
+        "name": "Our own judgement calls",
+        "detail": "Not from any guideline. They are about how people use an app, and they are "
+                  "listed here so they can be argued with.",
+        "used": [
+            "Up to 3 unlogged days may sit inside a period — silence is not evidence that bleeding stopped",
+            "Phase boundaries are drawn with a 14-day luteal phase; the app cannot see ovulation",
+            "Hair growth or hair loss on a quarter of logged days stands in for a hirsutism score",
+            "A correlation needs 8 paired days and |r| of 0.2 before it is shown",
+        ],
+    },
+]
+
 ADVICE = {
     "diagnosed": {"headline": "You already have a diagnosis", "tone": "calm"},
     "soon":    {"headline": "Worth booking an appointment soon", "tone": "urgent"},

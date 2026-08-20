@@ -516,6 +516,59 @@ function Slider({ value, max, onChange }) {
     style={{ background: `linear-gradient(90deg, ${C.plum} ${pct}%, ${C.high} ${pct}%)` }} />);
 }
 
+// ---- where the numbers come from -------------------------------------------
+// Every threshold in this app is either from a guideline or a judgement we
+// made, and the difference matters to someone deciding whether to trust it. The
+// backend keeps the list beside the rules themselves; this just shows it.
+function useSources(settings) {
+  const [sources, setSources] = useState(null);
+  useEffect(() => {
+    let stale = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API(settings)}/sources`);
+        if (r.ok && !stale) setSources((await r.json()).sources || []);
+      } catch (e) { /* the button just says nothing */ }
+    })();
+    return () => { stale = true; };
+  }, [settings?.backendUrl]);
+  return sources;
+}
+
+function SourcesButton({ settings, label = "Where these numbers come from" }) {
+  const [open, setOpen] = useState(false);
+  const sources = useSources(settings);
+  if (!sources) return null;
+  return (<>
+    <button onClick={() => setOpen((o) => !o)} title={label} aria-label={label}
+      style={{ background: "none", border: "none", padding: 2, cursor: "pointer", color: C.outline,
+        display: "inline-grid", placeItems: "center", lineHeight: 0 }}>
+      <Info size={15} />
+    </button>
+    {open && (<div className="fade-up" style={{ marginTop: 10, padding: 14, borderRadius: 14,
+      background: C.low, fontFamily: bodyf }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.ink }}>{label}</span>
+        <button onClick={() => setOpen(false)} style={{ marginLeft: "auto", background: "none", border: "none",
+          cursor: "pointer", color: C.outline, padding: 0, lineHeight: 0 }}><X size={15} /></button>
+      </div>
+      <div style={{ display: "grid", gap: 12 }}>
+        {sources.map((src) => (<div key={src.id}>
+          <div style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 12.5,
+            color: src.id === "ours" ? C.roseOn : C.plum }}>{src.name}</div>
+          {src.detail && <div style={{ fontSize: 11.5, color: C.inkVar, lineHeight: 1.45, marginTop: 2 }}>{src.detail}</div>}
+          <ul style={{ margin: "6px 0 0", paddingLeft: 16, display: "grid", gap: 3 }}>
+            {src.used.map((u, i) => (<li key={i} style={{ fontSize: 11.5, color: C.inkVar, lineHeight: 1.45 }}>{u}</li>))}
+          </ul>
+          {src.url && <a href={src.url} target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 11.5, fontWeight: 600, color: C.plum, display: "inline-block", marginTop: 4 }}>
+            Read the guideline →</a>}
+        </div>))}
+      </div>
+    </div>)}
+  </>);
+}
+
 // ---- the doctor indicator --------------------------------------------------
 // One card, one question answered. The criteria breakdown sits underneath so
 // the verdict is never a black box — every line of it is traceable to a rule.
@@ -1210,8 +1263,9 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
           fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
           <span style={{ width: 9, height: 9, borderRadius: "50%", background: `linear-gradient(135deg, ${p.from}, ${p.to})` }} /> {p.name}</span>))}
       </div>
-      <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 10 }}>
-        Phases are an estimate — the app can't see ovulation.</div>
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 4, marginTop: 10 }}>
+        <span style={{ fontFamily: bodyf, fontSize: 11, color: C.outline }}>Phases are an estimate — the app can't see ovulation.</span>
+        <SourcesButton settings={settings} /></div>
     </Card>);
 
   // NEXT PERIOD — a date and a number of days, in the words someone would use
@@ -2356,6 +2410,7 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
     <Card style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Label>The three criteria</Label>
+        <SourcesButton settings={settings} />
         <button onClick={() => setLabOpen((o) => !o)} title="Experiment with the factors"
           style={{ marginLeft: "auto", background: labOpen ? C.lilac : "none", border: "none", borderRadius: 9,
             width: 30, height: 30, display: "grid", placeItems: "center", cursor: "pointer", color: C.plum }}>

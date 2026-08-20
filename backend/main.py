@@ -630,6 +630,12 @@ def record_schema():
     whatever comes back rather than keeping its own copy of the questions."""
     return {"schema": record.SCHEMA, "categories": [{"key": k, "label": l} for k, l in record.CATEGORIES]}
 
+@app.get("/sources")
+def sources():
+    """Where the numbers come from. The app shows this so a threshold is never
+    just a number on a screen — and so the ones we chose ourselves are named."""
+    return {"sources": criteria.SOURCES}
+
 @app.get("/criteria/rules")
 def criteria_rules():
     """The thresholds the rules read — the experiment panel renders these."""

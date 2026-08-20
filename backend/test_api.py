@@ -65,6 +65,21 @@ def test_criteria_rules_are_served():
     assert rules["cycleBands"] and rules["singleCycleDays"] == 90
 
 @test
+def test_sources_name_where_each_number_came_from():
+    body = client.get("/sources").json()
+    ids = [s["id"] for s in body["sources"]]
+    assert "guideline2023" in ids and "belsey1986" in ids and "ours" in ids
+    for src in body["sources"]:
+        assert src["name"] and src["used"], src["id"]
+    # the guideline's own thresholds must be the ones the rules actually use
+    rules = client.get("/criteria/rules").json()
+    text = " ".join(u for s in body["sources"] for u in s["used"])
+    assert str(rules["singleCycleDays"]) in text
+    assert str(rules["amenorrheaAge"]) in text
+    assert str(rules["mfgHirsutism"]) in text
+    assert str(rules["cycleBands"][-1]["longDays"]) in text
+
+@test
 def test_healthz():
     body = client.get("/healthz").json()
     assert body["status"] == "ok" and "claude_cache" in body
