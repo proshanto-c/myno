@@ -9,6 +9,8 @@ import {
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
   cycleRuns, DAY_MS } from "./cycles.js";
+// Speech capture and, more to the point, its teardown — see voice.test.mjs.
+import { VoiceController } from "./voice.js";
 
 /* ===========================================================================
    Tawazzun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
@@ -392,76 +394,25 @@ async function extractAdvise({ settings, note, categories = [], summary = {}, bl
 }
 
 // ---- voice capture: NeMo streaming WS, else Web Speech ---------------------
-class VoiceController {
-  constructor({ endpoint, onPartial, onFinal, onState, onError, continuous, silenceMs }) {
-    this.endpoint = endpoint; this.onPartial = onPartial; this.onFinal = onFinal; this.onState = onState; this.onError = onError;
-    this.continuous = !!continuous; this.silenceMs = silenceMs || 2500;
-    this.mode = endpoint ? "nemo" : ((window.SpeechRecognition || window.webkitSpeechRecognition) ? "webspeech" : "none");
-  }
-  available() { return this.mode !== "none"; }
-  async start() { if (this.mode === "nemo") return this._nemo(); if (this.mode === "webspeech") return this._web(); this.onError?.("Voice isn't available here — please type."); }
-  stop() { if (this.mode === "nemo") this._stopNemo(); else if (this.mode === "webspeech") { this.active = false; clearTimeout(this.silTimer); try { this.rec?.stop(); } catch (e) {} } this.onState?.(false); }
-  // Browser Web Speech. Patient on both ends: waits indefinitely for you to
-  // start, and tolerates long mid-sentence pauses — it only commits the turn
-  // after `silenceMs` of real silence, so it never cuts you off too early.
-  _web() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    this.active = true; this.finalText = ""; this._started = false;
-    const commit = () => {
-      clearTimeout(this.silTimer);
-      const t = (this.finalText || "").trim();
-      if (!t) return;                       // nothing said yet → keep waiting patiently
-      this.finalText = "";
-      this.onFinal?.(t);
-      if (!this.continuous) { this.active = false; try { this.rec?.stop(); } catch (e) {} }
-    };
-    // Only commit a turn after real silence FOLLOWING actual speech — armed by
-    // final segments, not every interim flicker, so turns are consistent.
-    const arm = () => { clearTimeout(this.silTimer); this.silTimer = setTimeout(commit, this.silenceMs); };
-    const build = () => {
-      const rec = new SR();
-      rec.lang = "en-US"; rec.interimResults = true; rec.continuous = true;
-      rec.onstart = () => { if (!this._started) { this._started = true; this.onState?.(true); } };  // fire once; survive internal restarts
-      rec.onerror = (ev) => { if (ev.error === "not-allowed" || ev.error === "service-not-allowed") { this.active = false; clearTimeout(this.silTimer); this.onState?.(false); this.onError?.("Microphone blocked — type instead."); } };
-      rec.onend = () => { if (this.active) { try { build(); } catch (e) { setTimeout(() => { if (this.active) build(); }, 300); } } else { this._started = false; this.onState?.(false); } };
-      rec.onresult = (ev) => {
-        let interim = "", gotFinal = false;
-        for (let i = ev.resultIndex; i < ev.results.length; i++) { const r = ev.results[i]; if (r.isFinal) { this.finalText += r[0].transcript + " "; gotFinal = true; } else interim += r[0].transcript; }
-        this.onPartial?.((this.finalText + interim).trim());
-        if (gotFinal) arm();                // start the silence countdown only once a phrase is finalized
-        else clearTimeout(this.silTimer);   // still mid-utterance → don't count silence yet
-      };
-      this.rec = rec; try { rec.start(); } catch (e) {}
-    };
-    build();
-  }
-  async _nemo() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }); this.stream = stream;
-      const ws = new WebSocket(this.endpoint); ws.binaryType = "arraybuffer"; this.ws = ws;
-      ws.onopen = () => this.onState?.(true);
-      ws.onerror = () => this.onError?.("Couldn't reach the ASR server — check Settings.");
-      ws.onmessage = (e) => { try { const m = JSON.parse(e.data); if (m.type === "partial") this.onPartial?.(m.text); else if (m.type === "final") this.onFinal?.(m.text); } catch (err) {} };
-      const ctx = new (window.AudioContext || window.webkitAudioContext)(); this.ctx = ctx;
-      const src = ctx.createMediaStreamSource(stream); const node = ctx.createScriptProcessor(4096, 1, 1); this.node = node;
-      const ratio = ctx.sampleRate / 16000;
-      node.onaudioprocess = (ev) => { if (ws.readyState !== 1) return; const input = ev.inputBuffer.getChannelData(0); const out = new Int16Array(Math.floor(input.length / ratio)); for (let i = 0; i < out.length; i++) { const s = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)])); out[i] = s < 0 ? s * 0x8000 : s * 0x7fff; } ws.send(out.buffer); };
-      src.connect(node); node.connect(ctx.destination);
-    } catch (e) { this.onState?.(false); this.onError?.("Microphone access was blocked — you can type instead."); }
-  }
-  _stopNemo() { try { this.ws?.send(JSON.stringify({ type: "end" })); } catch (e) {} try { this.node?.disconnect(); } catch (e) {} try { this.ctx?.close(); } catch (e) {} try { this.stream?.getTracks().forEach((t) => t.stop()); } catch (e) {} setTimeout(() => { try { this.ws?.close(); } catch (e) {} }, 300); }
-}
 function useVoice({ settings, onPartial, onFinal, continuous, silenceMs }) {
   const [listening, setListening] = useState(false); const [note, setNote] = useState(""); const ref = useRef(null); const onRef = useRef(false);
   const setL = (v) => { onRef.current = v; setListening(v); };
   const start = useCallback(() => {
-    if (onRef.current) return; setNote("");
-    const c = new VoiceController({ endpoint: settings.nemoEndpoint || null, onPartial, onFinal, onState: setL, onError: setNote, continuous, silenceMs });
-    ref.current = c; if (!c.available()) { setNote("Voice isn't available here — please type."); return; } c.start();
+    if (onRef.current) return;
+    setNote("");
+    // whatever came before is finished with, even if the UI thinks it stopped
+    try { ref.current?.stop(); } catch (e) {}
+    const c = new VoiceController({ endpoint: settings.nemoEndpoint || null, onPartial, onFinal,
+      onState: setL, onError: setNote, continuous, silenceMs });
+    ref.current = c;
+    if (!c.available()) { setNote("Voice isn't available here — please type."); return; }
+    c.start();
   }, [settings.nemoEndpoint, onPartial, onFinal, continuous, silenceMs]);
-  const stop = useCallback(() => { ref.current?.stop(); }, []);
+  const stop = useCallback(() => { const c = ref.current; ref.current = null; try { c?.stop(); } catch (e) {} }, []);
   const toggle = useCallback(() => { if (onRef.current) stop(); else start(); }, [start, stop]);
-  useEffect(() => () => { try { ref.current?.stop(); } catch (e) {} }, []);
+  // leaving the screen ends the session too — a socket must not outlive the
+  // component that opened it
+  useEffect(() => () => { const c = ref.current; ref.current = null; try { c?.stop(); } catch (e) {} }, []);
   return { listening, note, toggle, start, stop };
 }
 
