@@ -7,22 +7,14 @@
  */
 import {
   periodRuns, cyclesFrom, currentCycle, pastLengths,
-  phaseSpans, phaseAt, ringLength, daysBetween, typicalBleed,
+  phaseSpans, phaseAt, ringLength, daysBetween, typicalBleed, addDays,
 } from "./cycles.js";
 
 const TODAY = "2026-08-20";
 const log = (date) => ({ date, period: true });
 const logs = (...dates) => dates.map(log);
 // n consecutive bleeding days from `from`
-const run = (from, n) => {
-  const out = [];
-  const d = new Date(`${from}T00:00:00`);
-  for (let i = 0; i < n; i++) {
-    const x = new Date(d.getTime() + i * 86400000);
-    out.push(log(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`));
-  }
-  return out;
-};
+const run = (from, n) => Array.from({ length: n }, (_, i) => log(addDays(from, i)));
 
 const T = [];
 const test = (name, fn) => T.push([name, fn]);
@@ -258,6 +250,123 @@ test("the marker never laps: today is always inside the ring", () => {
   for (const [day, avg] of [[1, 28], [28, 28], [46, 31], [120, 26], [7, null]]) {
     eq(day < ringLength(day, avg), true, `day ${day} avg ${avg}: `);
   }
+});
+
+// ---- clocks: daylight saving, far-flung timezones, leap years ------------
+// These run under whatever TZ the process was given; the runner sweeps several.
+test("a run through a spring-forward night stays one run", () => {
+  // 29 Mar 2026 is the European clock change; 8 Mar 2026 the American one
+  eq(periodRuns(run("2026-03-28", 4), "2026-04-10")[0].length, 4);
+  eq(periodRuns(run("2026-03-07", 4), "2026-04-10")[0].length, 4);
+});
+
+test("a run through a fall-back night stays one run", () => {
+  eq(periodRuns(run("2026-10-24", 4), "2026-11-10")[0].length, 4);
+  eq(periodRuns(run("2026-11-01", 3), "2026-11-10")[0].length, 3);
+});
+
+test("cycle length across a clock change is still whole days", () => {
+  const l = [...run("2026-03-01", 3), ...run("2026-04-01", 3)];
+  eq(pastLengths(l, "2026-04-20"), [31]);
+  const back = [...run("2026-10-01", 3), ...run("2026-11-01", 3)];
+  eq(pastLengths(back, "2026-11-20"), [31]);
+});
+
+test("a cycle spanning a leap day counts the extra day", () => {
+  const l = [...run("2028-02-01", 3), ...run("2028-03-01", 3)];
+  eq(pastLengths(l, "2028-03-20"), [29]);
+});
+
+test("a cycle spanning new year counts across it", () => {
+  const l = [...run("2025-12-15", 3), ...run("2026-01-14", 3)];
+  eq(pastLengths(l, "2026-02-01"), [30]);
+});
+
+test("today's own date is never excluded by the future filter", () => {
+  eq(periodRuns(logs(TODAY), TODAY), [[TODAY]]);
+});
+
+// ---- rubbish in --------------------------------------------------------
+test("malformed entries are skipped rather than thrown on", () => {
+  const junk = [null, undefined, {}, { period: true }, { date: "", period: true },
+                { date: "2026-08-14", period: true }];
+  eq(periodRuns(junk, TODAY), [["2026-08-14"]]);
+});
+
+test("a cycle with no logs at all has no current cycle and no lengths", () => {
+  eq(currentCycle([], TODAY), null);
+  eq(pastLengths([], TODAY), []);
+  eq(typicalBleed([], TODAY), 5);
+});
+
+test("phase maths survives nonsense lengths", () => {
+  for (const cyc of [0, 1, 3, -5, NaN, null, undefined]) {
+    const spans = phaseSpans(cyc, 4);
+    eq(spans.length > 0, true, `cyc ${cyc}: `);
+    eq(spans[0].a, 0, `cyc ${cyc}: `);
+    eq(spans[spans.length - 1].b > 0, true, `cyc ${cyc}: `);
+  }
+});
+
+test("phase maths survives nonsense bleeds", () => {
+  for (const bleed of [0, -3, NaN, null, undefined, 999]) {
+    const key = phaseAt(3, 28, bleed);
+    eq(typeof key === "string", true, `bleed ${bleed}: `);
+  }
+});
+
+test("ringLength copes with a missing day", () => {
+  eq(ringLength(null, 30), 30);
+  eq(ringLength(undefined, null), 28);
+});
+
+// ---- long silences -----------------------------------------------------
+test("a year without a period is one very long open cycle", () => {
+  const cur = currentCycle(run("2025-08-20", 4), TODAY);
+  eq(cur.days, 366);        // 2026 is not a leap year; 2025-08-20 to 2026-08-20
+  eq(cur.open, true);
+});
+
+test("a long silence stays in the last phase rather than wrapping", () => {
+  const cur = currentCycle(run("2025-08-20", 4), TODAY);
+  eq(phaseAt(cur.days, ringLength(cur.days, 30), 4), "luteal");
+});
+
+test("two periods a day apart are one run, not a one-day cycle", () => {
+  eq(pastLengths(run("2026-08-01", 2), TODAY), []);
+  eq(currentCycle(run("2026-08-01", 2), TODAY).bleed, 2);
+});
+
+test("back-to-back short cycles are still counted separately", () => {
+  const l = [...run("2026-08-01", 2), ...run("2026-08-12", 2)];
+  eq(pastLengths(l, TODAY), [11]);
+});
+
+// ---- scale --------------------------------------------------------------
+test("five years of daily logs stay fast and correct", () => {
+  const many = Array.from({ length: 1826 }, (_, i) => ({ date: addDays("2021-08-20", i), period: i % 30 < 4 }));
+  const t0 = Date.now();
+  const cycles = cyclesFrom(many, "2026-08-20");
+  const ms = Date.now() - t0;
+  eq(cycles.length, 61);
+  eq(cycles.filter((c) => !c.open).every((c) => c.days === 30), true, "every gap is 30 days: ");
+  eq(ms < 400, true, `took ${ms}ms: `);
+});
+
+test("adding days walks the calendar, not the millisecond count", () => {
+  eq(addDays("2026-10-24", 1), "2026-10-25");     // 25-hour night in Europe
+  eq(addDays("2026-10-25", 1), "2026-10-26");
+  eq(addDays("2026-03-29", 1), "2026-03-30");     // 23-hour night
+  eq(addDays("2026-02-28", 1), "2026-03-01");     // not a leap year
+  eq(addDays("2028-02-28", 1), "2028-02-29");     // leap year
+  eq(addDays("2026-12-31", 1), "2027-01-01");
+  eq(addDays("2026-01-01", -1), "2025-12-31");
+  eq(addDays("2026-08-20", 0), "2026-08-20");
+});
+
+test("a month of consecutive days built with addDays is one unbroken run", () => {
+  eq(periodRuns(run("2026-10-20", 20), "2026-11-30")[0].length, 20);
+  eq(periodRuns(run("2026-03-25", 10), "2026-04-30")[0].length, 10);
 });
 
 // ---- run it ---------------------------------------------------------------

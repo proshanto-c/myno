@@ -225,6 +225,94 @@ def test_legacy_free_text_methods_are_still_read():
     assert _inputs(None, "condoms")["onContraception"] is False
 
 
+# ---- edges: empty, extreme and contradictory inputs ------------------------
+def test_nothing_logged_at_all():
+    a = cr.assess(cr.derive_inputs(None, [], {}))
+    assert a["cycles"]["state"] == "unknown"
+    assert a["recommendation"]["key"] == "unknown"
+    assert a["androgen"]["state"] == "clear"
+
+def test_a_single_logged_day():
+    class P: age = 28; menarche_age = 13; acne = False
+    x = cr.derive_inputs(P(), [{"date": "2026-08-20", "period": True}], {"loggedDays": 1, "cycleCount": 0})
+    assert x["hasMenarche"] is True
+    assert cr.assess(x)["cycles"]["state"] == "unknown"
+
+def test_absurd_cycle_lengths_do_not_crash_the_verdict():
+    for hi in (0, 1, 400, 10000):
+        a = cr.assess(case(minCycle=1, maxCycle=hi))
+        assert a["recommendation"]["key"] in cr.ADVICE
+
+def test_negative_and_zero_ages():
+    for age in (0, -1, 200):
+        a = cr.assess(case(age=age, yearsPostMenarche=None))
+        assert a["cycles"]["state"] in ("met", "clear", "unknown")
+
+def test_mfg_at_both_extremes():
+    assert cr.assess(case(mfgScore=0))["androgen"]["state"] == "clear"
+    assert cr.assess(case(mfgScore=36))["androgen"]["state"] == "met"
+    # a score above the sheet's maximum is still just "met", not an error
+    assert cr.assess(case(mfgScore=99))["androgen"]["state"] == "met"
+
+def test_a_partly_filled_mfg_sheet_counts_what_is_there():
+    assert cr.mfg_total({"chin": 4}) == 4
+    assert cr.mfg_total({"chin": 4, "nonsense": 9}) == 4          # unknown areas ignored
+    assert cr.mfg_total({"chin": None}) is None                    # nothing scored yet
+    assert cr.mfg_total({}) is None and cr.mfg_total(None) is None
+
+def test_conditions_are_matched_whatever_the_casing():
+    for spelling in ("hirsutism", "Hirsutism", "HIRSUTISM"):
+        assert cr.assess(case(conditions=[spelling]))["androgen"]["state"] == "met", spelling
+
+def test_every_hormonal_drug_spelling_blocks_the_cycle():
+    for name in ("ocp", "OCP", "Oral contraceptive pill", "combined pill", "contraceptive implant"):
+        assert cr.is_hormonal_drug(name) is True, name
+    for name in ("glp1", "letrozole", "metformin", "", None):
+        assert cr.is_hormonal_drug(name) is False, name
+
+def test_contraception_and_a_diagnosis_together():
+    # nothing to screen and nothing readable: the diagnosis still leads
+    a = cr.assess(case(diagnosed=True, onContraception=True))
+    assert a["recommendation"]["key"] == "diagnosed"
+    assert a["cycles"]["state"] == "unknown"
+
+def test_inputs_arriving_as_form_strings_are_coerced():
+    x = cr.clean_inputs({"age": "28", "maxCycle": "50", "minCycle": "", "mfgScore": "oops",
+                         "hasMenarche": 1, "conditions": "hirsutism"})
+    assert x["age"] == 28.0 and x["maxCycle"] == 50.0
+    assert x["minCycle"] is None and x["mfgScore"] is None
+    assert x["hasMenarche"] is True
+    assert x["conditions"] == []          # a bare string is not a list of conditions
+
+def test_assess_never_raises_on_junk_inputs():
+    junk = [None, {}, {"age": "old"}, {"maxCycle": ""}, {"cyclesObserved": "many"},
+            {"mfgScore": []}, {"conditions": "hirsutism"}, {"hasMenarche": "yes"},
+            {"age": float("nan")}, {"maxCycle": 10 ** 9}]
+    for x in junk:
+        a = cr.assess(x)
+        assert a["recommendation"]["key"] in cr.ADVICE, x
+
+def test_every_recommendation_key_has_wording():
+    for key, advice in cr.ADVICE.items():
+        assert advice["headline"] and advice["tone"], key
+
+def test_rule_overrides_survive_junk():
+    # these arrive as JSON from the experiment panel, so anything can turn up
+    junk = [None, {}, {"cycleBands": None}, {"cycleBands": []}, {"cycleBands": "no"},
+            {"cycleBands": [None, "x"]}, {"cycleBands": [{"longDays": None}]},
+            {"minCyclesToJudge": 0}, {"singleCycleDays": "ninety"}, {"mfgHirsutism": True},
+            {"unknownKey": 5}, {"amenorrheaAge": -4}]
+    for over in junk:
+        rules = cr.merge_rules(over)
+        assert cr.assess(case(), rules)["recommendation"]["key"] in cr.ADVICE, over
+        assert isinstance(rules["cycleBands"], list) and rules["cycleBands"], over
+
+def test_a_bad_override_leaves_the_default_in_place():
+    assert cr.merge_rules({"singleCycleDays": "ninety"})["singleCycleDays"] == 90
+    assert cr.merge_rules({"mfgHirsutism": True})["mfgHirsutism"] == 4
+    assert cr.merge_rules({"cycleBands": [{"longDays": None}]})["cycleBands"][0]["longDays"] == 45
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

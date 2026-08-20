@@ -192,6 +192,67 @@ def test_empty_logs_do_not_explode():
     assert s["loggedDays"] == 0 and s["cycle"] is None and s["correlations"] == []
 
 
+# ---- edges -----------------------------------------------------------------
+def test_a_single_logged_day_summarises_without_error():
+    s = ins.summarise(days(1, pain=5, period=True))
+    assert s["loggedDays"] == 1 and s["cycle"] is None
+    assert s["correlations"] == [] and s["trends"] == []
+
+def test_logs_with_nothing_but_dates():
+    s = ins.summarise([{"date": "2026-01-01"}, {"date": "2026-01-02"}])
+    assert s["avgPain"] is None and s["byCategory"][0]["facts"] == []
+
+def test_every_day_a_period_day_is_one_run():
+    s = ins.summarise(days(60, period=True))
+    assert s["periodsLogged"] == 1 and s["cycleCount"] == 0 and s["cycle"] is None
+
+def test_alternate_day_bleeding_is_not_a_string_of_cycles():
+    logs = days(60, period=[i % 2 == 0 for i in range(60)])
+    assert ins.cycle_gaps(logs) == []          # every gap is 2 days, under the floor
+
+def test_out_of_order_logs_are_read_in_order():
+    logs = list(reversed(days(70, period=[i in (0, 28, 56) for i in range(70)])))
+    assert ins.cycle_starts(logs) == ["2026-01-01", "2026-01-29", "2026-02-26"]
+
+def test_extreme_values_do_not_break_the_statistics():
+    logs = days(20, pain=[0, 10] * 10, sugar=[10, 0] * 10, sleep=1e6, mood=-50)
+    s = ins.summarise(logs)
+    assert isinstance(s["avgPain"], float)
+    for c in s["correlations"]:
+        assert -1.0 <= c["r"] <= 1.0
+
+def test_a_flat_metric_has_no_trend_and_no_correlation():
+    s = ins.summarise(days(40, pain=5, sugar=5, mood=5))
+    assert [t for t in s["trends"] if t["key"] in ("pain", "sugar", "mood")] == []
+    assert s["correlations"] == []
+
+def test_string_values_where_numbers_belong_are_ignored():
+    logs = days(20, pain=["ouch"] * 20, sugar=3)
+    s = ins.summarise(logs)
+    assert s["avgPain"] is None and s["daysSinceSeverePain"] == 20
+
+def test_a_category_without_a_scale_is_not_trended():
+    logs = [{"date": f"2026-01-{i+1:02d}", "categories": [{"key": "k", "label": "K", "value": "words"}]}
+            for i in range(10)]
+    assert ins.summarise(logs)["categoryTrends"] == []
+
+def test_every_category_key_in_the_summary_is_a_real_section():
+    known = {k for k, _ in ins.CATEGORIES}
+    s = ins.summarise(days(40, pain=[i % 9 for i in range(40)], period=[i in (0, 30) for i in range(40)]))
+    assert {g["key"] for g in s["byCategory"]} == known
+
+def test_thresholds_can_be_pushed_to_their_limits():
+    logs = days(30, sugar=[i % 5 for i in range(30)], pain=[i % 5 for i in range(30)])
+    for rules in ({**ins.RULES, "minAbsR": 0}, {**ins.RULES, "minAbsR": 1.1},
+                  {**ins.RULES, "minPairsForCorrelation": 1}, {**ins.RULES, "minPointsForTrend": 1000}):
+        s = ins.summarise(logs, rules=rules)
+        assert isinstance(s["correlations"], list) and isinstance(s["trends"], list)
+
+def test_cycle_day_with_no_starts_at_all():
+    assert ins.cycle_day([]) is None
+    assert ins.summarise(days(10))["cycleDay"] is None
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

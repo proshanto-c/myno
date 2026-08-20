@@ -19,6 +19,14 @@ export const isoOf = (d) =>
 export const todayISO = () => isoOf(new Date());
 export const daysBetween = (a, b) => Math.round((dayOf(b) - dayOf(a)) / DAY_MS);
 
+/** `n` days after an ISO date, by the calendar rather than by milliseconds.
+ *  Adding 86_400_000 twice across a clock change lands on 23:00 the day before
+ *  and repeats a date; letting Date normalise d+n never does. */
+export function addDays(iso, n) {
+  const d = dayOf(iso);
+  return isoOf(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n));
+}
+
 /** Consecutive bleeding days grouped into runs, oldest first.
  *  Days after `today` are dropped: a log dated tomorrow has not happened, so it
  *  cannot open the cycle you are in. Duplicates and unsorted input are fine. */

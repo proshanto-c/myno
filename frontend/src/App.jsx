@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
-  phaseSpans, phaseAt, ringLength, dayOf, DAY_MS } from "./cycles.js";
+  phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO, DAY_MS } from "./cycles.js";
 
 /* ===========================================================================
    Tawazzun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
@@ -42,11 +42,22 @@ const FONTS = `
 @keyframes halo{ 0%{ r:7; opacity:.55 } 70%{ r:15; opacity:0 } 100%{ r:15; opacity:0 } }
 @keyframes breathe{ 0%,100%{ opacity:1 } 50%{ opacity:.82 } }
 @keyframes fadeUp{ from{ opacity:0; transform:translateY(4px) } to{ opacity:1; transform:none } }
+@keyframes spark{
+  0%{ opacity:0; transform:translate(0,0) scale(.2) rotate(0deg) }
+  12%{ opacity:1; transform:translate(calc(var(--dx)*.15), calc(var(--dy)*.15)) scale(1) rotate(calc(var(--r)*.15)) }
+  100%{ opacity:0; transform:translate(var(--dx), var(--dy)) scale(var(--s)) rotate(var(--r)) }
+}
+@keyframes bloom{ 0%{ opacity:0; transform:scale(.6) } 30%{ opacity:.5 } 100%{ opacity:0; transform:scale(1.5) } }
+.spark{ position:absolute; pointer-events:none; will-change:transform,opacity;
+  clip-path:polygon(50% 0%,61% 39%,100% 50%,61% 61%,50% 100%,39% 61%,0% 50%,39% 39%);
+  animation:spark var(--dur) cubic-bezier(.2,.7,.3,1) both; }
+.bloom{ position:absolute; inset:-20%; pointer-events:none; border-radius:50%;
+  animation:bloom 1.5s ease-out both; }
 .halo{ animation:halo 2.8s ease-out infinite; }
 .breathe{ animation:breathe 4s ease-in-out infinite; }
 .fade-up{ animation:fadeUp .45s ease-out both; }
 @media (prefers-reduced-motion: reduce){
-  .halo,.breathe,.fade-up,.spin{ animation:none !important }
+  .halo,.breathe,.fade-up,.spin,.spark,.bloom{ animation:none !important; opacity:0 !important }
 }
 input[type=range].slider{ -webkit-appearance:none; appearance:none; width:100%; height:10px; border-radius:9999px; outline:none; }
 input[type=range].slider::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:30px; height:30px; border-radius:50%; background:#fff; border:4px solid ${C.plum}; box-shadow:0 2px 8px rgba(92,75,125,.28); cursor:pointer; margin-top:-1px; }
@@ -966,6 +977,78 @@ const PHASES = [
   { key: "luteal",     name: "Luteal",     from: C.lilacDim, to: C.plumC,   note: "winding down" },
 ];
 
+// A phase change is the one moment in a cycle that is worth marking, so the
+// card marks it — and how it marks it says which phase you just entered.
+// Menstrual settles downward in deep rose, follicular lifts in lilac,
+// ovulatory bursts outward in gold (the loudest, because it is the shortest),
+// luteal drifts slowly in plum.
+const SPARK = {
+  menstrual:  { n: 16, color: C.roseOn,  glow: C.roseDeep, dur: [1500, 2100], drift: [0, 46],  spread: 34, size: [4, 9],  spin: 140 },
+  follicular: { n: 20, color: C.lilacDim, glow: C.lilac,   dur: [1400, 2000], drift: [0, -52], spread: 30, size: [3, 8],  spin: 200 },
+  ovulatory:  { n: 30, color: "#e0b077", glow: "#f2d7ab",  dur: [900, 1500],  drift: [0, 0],   spread: 90, size: [4, 11], spin: 320 },
+  luteal:     { n: 14, color: C.plumC,   glow: C.lilacDim, dur: [1900, 2600], drift: [0, 30],  spread: 26, size: [3, 7],  spin: 90 },
+};
+
+function makeSparks(key) {
+  const k = SPARK[key] || SPARK.follicular;
+  const rand = (a, b) => a + Math.random() * (b - a);
+  return Array.from({ length: k.n }, (_, i) => {
+    // ovulatory throws its sparks outward from the middle; the others rise or
+    // settle from wherever they start
+    const radial = key === "ovulatory";
+    const a = rand(0, Math.PI * 2);
+    return {
+      id: `${key}-${i}`,
+      left: radial ? 50 : rand(6, 94),
+      top: radial ? 46 : rand(12, 88),
+      dx: radial ? Math.cos(a) * rand(30, k.spread + 40) : rand(-k.spread, k.spread),
+      dy: radial ? Math.sin(a) * rand(24, k.spread + 20) : k.drift[1] + rand(-14, 14),
+      size: rand(k.size[0], k.size[1]),
+      dur: rand(k.dur[0], k.dur[1]),
+      delay: rand(0, 420),
+      spin: rand(-k.spin, k.spin),
+      end: rand(0.2, 0.9),
+      color: k.color,
+    };
+  });
+}
+
+// Fires only when the phase actually changes, and remembers the last one
+// between visits so opening the app twice in a day doesn't re-fire it.
+const PHASE_SEEN = "myno:phase-seen:v1";
+function usePhaseChange(phaseKey) {
+  const [burst, setBurst] = useState(null);
+  useEffect(() => {
+    if (!phaseKey) return;
+    let last = null;
+    try { last = localStorage.getItem(PHASE_SEEN); } catch (e) {}
+    try { localStorage.setItem(PHASE_SEEN, phaseKey); } catch (e) {}
+    if (!last || last === phaseKey) return;
+    const still = typeof window !== "undefined" && window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (still) return;
+    setBurst({ key: phaseKey, sparks: makeSparks(phaseKey), at: Date.now() });
+    const t = setTimeout(() => setBurst(null), 3200);
+    return () => clearTimeout(t);
+  }, [phaseKey]);
+  return burst;
+}
+
+function SparkleLayer({ burst }) {
+  if (!burst) return null;
+  const k = SPARK[burst.key] || SPARK.follicular;
+  return (<div aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden",
+    borderRadius: "inherit", pointerEvents: "none", zIndex: 2 }}>
+    <div className="bloom" style={{ background: `radial-gradient(circle at 50% 46%, ${k.glow}, transparent 62%)` }} />
+    {burst.sparks.map((sp) => (
+      <span key={sp.id} className="spark" style={{
+        left: `${sp.left}%`, top: `${sp.top}%`, width: sp.size, height: sp.size, background: sp.color,
+        "--dx": `${sp.dx}px`, "--dy": `${sp.dy}px`, "--s": sp.end, "--r": `${sp.spin}deg`,
+        "--dur": `${sp.dur}ms`, animationDelay: `${sp.delay}ms`,
+      }} />))}
+  </div>);
+}
+
 // Eases a number to its target once, on mount and on change.
 function useCountUp(target, ms = 950) {
   const [v, setV] = useState(target || 0);
@@ -1073,6 +1156,8 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   // moment someone taps one date, and everything after would read follicular.
   const usualBleed = Math.max(current?.bleed || 0, typicalBleed(logs));
   const avg = ins.avgCycleDays ? Math.round(ins.avgCycleDays) : null;
+  const phaseKey = current ? phaseAt(current.days, ringLength(current.days, avg), usualBleed) : null;
+  const burst = usePhaseChange(phaseKey);
   // the arc: the shortest and longest cycle they have actually had
   const past = cycles.filter((c) => !c.open).map((c) => c.days);
   const span = past.length >= 2 ? [Math.min(...past), Math.max(...past)] : [null, null];
@@ -1080,16 +1165,16 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
     if (!current) return "Mark a period on the calendar and this fills in.";
     if (current.days <= current.bleed) return `Day ${current.days} of your period.`;
     if (!avg) return "A couple more cycles and this will know your rhythm.";
-    const due = new Date(new Date(`${current.start}T00:00:00`).getTime() + avg * 86400000);
     const left = avg - current.days;
-    const when = due.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const when = dayOf(addDays(current.start, avg)).toLocaleDateString(undefined, { day: "numeric", month: "short" });
     if (left > 0) return `On your average, the next one is around ${when} — ${left} day${left === 1 ? "" : "s"} away.`;
     if (left === 0) return `On your average, the next one is due today.`;
     return `${-left} day${left === -1 ? "" : "s"} past your ${avg}-day average.`;
   })();
   const late = current && avg && current.days > avg;
   const phaseTiles = (
-    <Card style={{ padding: 20, boxShadow: SH_SM }}>
+    <Card style={{ padding: 20, boxShadow: SH_SM, position: "relative", overflow: "hidden" }}>
+      <SparkleLayer burst={burst} />
       <Label>This cycle</Label>
       <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
         <CycleRing day={current?.days} bleed={usualBleed} avg={avg} /></div>
@@ -1098,19 +1183,31 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
           fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
           <span style={{ width: 9, height: 9, borderRadius: "50%", background: `linear-gradient(135deg, ${p.from}, ${p.to})` }} /> {p.name}</span>))}
       </div>
-      <div style={{ textAlign: "center", fontSize: 13.5, lineHeight: 1.55, marginTop: 12,
-        color: late ? C.roseOn : C.inkVar }}>{cycleNote}</div>
-      {span[0] != null && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 12, color: C.outline, marginTop: 6 }}>
-        Yours have started anywhere from day {span[0]} to day {span[1]}.</div>}
-      {current && (() => {
-        const cyc = ringLength(current.days, avg);
-        const key = phaseAt(current.days, cyc, usualBleed);
-        const sp = phaseSpans(cyc, usualBleed).find((x) => x.key === key);
-        const name = (PHASES.find((x) => x.key === key) || {}).name;
-        return sp ? (<div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 6 }}>
-          {name} runs days {sp.a + 1}–{sp.b} of about {cyc} — phases are estimated from your average.</div>) : null;
-      })()}
     </Card>);
+
+  // The three sentences under the ring were doing the real work in 11px grey.
+  // They get a card: the answer first, then what it rests on.
+  const cycleFacts = (() => {
+    const cyc = current ? ringLength(current.days, avg) : null;
+    const sp = current ? phaseSpans(cyc, usualBleed).find((x) => x.key === phaseKey) : null;
+    const phaseName = (PHASES.find((x) => x.key === phaseKey) || {}).name;
+    const row = (label, value) => (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12,
+        padding: "9px 0", borderTop: `1px solid ${C.high}` }}>
+        <span style={{ fontFamily: bodyf, fontSize: 12.5, color: C.inkVar, flexShrink: 0 }}>{label}</span>
+        <span style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.ink, textAlign: "right" }}>{value}</span>
+      </div>);
+    return (<Card style={{ padding: 20, boxShadow: SH_SM }}>
+      <Label color={late ? C.roseOn : C.plum}>{late ? "Running late" : "What's next"}</Label>
+      <div style={{ fontFamily: head, fontWeight: 700, fontSize: 19, lineHeight: 1.35, margin: "8px 0 14px",
+        color: late ? C.roseOn : C.ink }}>{cycleNote}</div>
+      {sp && row("This phase", `${phaseName} · days ${sp.a + 1}–${sp.b} of about ${cyc}`)}
+      {span[0] != null && row("Your own range", `day ${span[0]} to day ${span[1]}`)}
+      {avg && row("Your average", `${avg} days`)}
+      <div style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, lineHeight: 1.5, marginTop: 10 }}>
+        Phases are estimated from your average — ovulation isn't something the app can see.</div>
+    </Card>);
+  })();
   const recordCTA = (
     <button onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
       <span style={{ fontFamily: head, fontWeight: 700, fontSize: 22 }}>Record your day</span>
@@ -1136,13 +1233,14 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
     <H size={30} style={{ marginBottom: 22 }}>{profile.name ? `Welcome back, ${profile.name}` : "Welcome back"}</H>
     <div style={{ display: "grid", gridTemplateColumns: "1.05fr 0.95fr", gap: 24, alignItems: "start" }}>
       <div style={{ display: "grid", gap: 20 }}>{calendarBlock}{drugCard}</div>
-      <div style={{ display: "grid", gap: 18 }}>{phaseTiles}{recordCTA}{trackedToday}{prepareCard}</div>
+      <div style={{ display: "grid", gap: 18 }}>{phaseTiles}{cycleFacts}{recordCTA}{trackedToday}{prepareCard}</div>
     </div>
   </div>);
 
   return (<div>
     <div style={{ marginTop: 6 }}>{calendarBlock}</div>
     <div style={{ marginTop: 18 }}>{phaseTiles}</div>
+    <div style={{ marginTop: 18 }}>{cycleFacts}</div>
     <div style={{ marginTop: 18 }}>{recordCTA}</div>
     <div style={{ marginTop: 18 }}>{drugCard}</div>
     {trackedToday && <div style={{ marginTop: 20 }}>{trackedToday}</div>}
@@ -1234,12 +1332,12 @@ function CycleCalendar({ logs, onSet }) {
   const runs = periodRuns(logs);
   const lastRun = runs.length ? runs[runs.length - 1] : null;
   const gapDays = runs.length > 1
-    ? Math.round((new Date(runs[runs.length - 1][0]) - new Date(runs[runs.length - 2][0])) / 86400000)
+    ? daysBetween(runs[runs.length - 2][0], runs[runs.length - 1][0])
     : null;
   const pretty = (d) => new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" });
   const runLine = lastRun && (() => {
     const a = lastRun[0], b = lastRun[lastRun.length - 1], n = lastRun.length;
-    const ongoing = (Date.now() - new Date(`${b}T00:00:00`)) < 2 * 86400000;
+    const ongoing = daysBetween(b, todayISO()) <= 1;
     const head = ongoing
       ? `Bleeding since ${pretty(a)} · day ${n}`
       : `Last period ${n > 1 ? `${pretty(a)} – ${pretty(b)}` : pretty(a)} · ${n} day${n > 1 ? "s" : ""}`;
@@ -1706,7 +1804,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment }) {
   const heatMax = mIsCat ? 10 : (mSel === "pain" ? 10 : 4);
   const heatDays = logs.slice(-84);
   const periodDates = logs.filter((l) => l.period).map((l) => l.date);
-  const gaps = []; for (let i = 1; i < periodDates.length; i++) { const g = Math.round((new Date(periodDates[i]) - new Date(periodDates[i - 1])) / 86400000); if (g > 10) gaps.push(g); }
+  const gaps = []; for (let i = 1; i < periodDates.length; i++) { const g = daysBetween(periodDates[i - 1], periodDates[i]); if (g > 10) gaps.push(g); }
   // relationship explorer: pick X, Y and same/next-day → scatter + live Pearson r
   const NUM = [["sugar", "Sugar", 4], ["pain", "Pain", 10], ["mood", "Mood", 4], ["energy", "Energy", 4], ["sleep", "Sleep", 4], ["brainFog", "Brain fog", 4]]
     .filter(([k]) => !(k === "sugar" && isBlocked(settings, "diet")) && !(k === "mood" && isBlocked(settings, "mood")));
@@ -2100,11 +2198,10 @@ function CycleSpiral({ logs, avg, maxTurns = 8 }) {
   const dated = (logs || []).filter((l) => l.date && l.date <= today).sort((a, b) => a.date.localeCompare(b.date));
   if (dated.length < T * 1.5) return null;
 
-  const end = dayOf(dated[dated.length - 1].date);
+  const end = dated[dated.length - 1].date;
   const window = Math.min(dated.length, Math.round(T * maxTurns));
-  const first = new Date(end.getTime() - (window - 1) * DAY_MS);
+  const first = addDays(end, -(window - 1));
   const bleeding = new Set(dated.filter((l) => l.period).map((l) => l.date));
-  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
   const S = 250, cx = S / 2, cy = S / 2, r0 = 24, rMax = 104;
   const turns = window / T;
@@ -2120,11 +2217,11 @@ function CycleSpiral({ logs, avg, maxTurns = 8 }) {
   const segs = [];
   let starts = [];
   for (let i = 0; i < window - 1; i++) {
-    const d = iso(new Date(first.getTime() + i * DAY_MS));
+    const d = addDays(first, i);
     const on = bleeding.has(d);
     const [x1, y1] = at(i), [x2, y2] = at(i + 1);
     segs.push({ x1, y1, x2, y2, on, key: d });
-    const prev = iso(new Date(first.getTime() + (i - 1) * DAY_MS));
+    const prev = addDays(first, i - 1);
     if (on && (i === 0 || !bleeding.has(prev))) starts.push({ i, date: d });
   }
   const [tx, ty] = at(window - 1);

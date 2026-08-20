@@ -49,14 +49,20 @@ ADVICE = {
 
 
 def merge_rules(overrides):
-    """Caller-supplied thresholds on top of the defaults (the experiment panel)."""
+    """Caller-supplied thresholds on top of the defaults (the experiment panel).
+
+    The overrides arrive as JSON from a browser, so a value of the wrong type is
+    ignored rather than installed: every threshold here is a number, and letting
+    `null` through for the bands took the whole assessment down with it.
+    """
     r = {**RULES, "cycleBands": [dict(b) for b in RULES["cycleBands"]]}
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
     for k, v in (overrides or {}).items():
-        if k == "cycleBands" and isinstance(v, list):
-            for i, band in enumerate(v):
+        if k == "cycleBands":
+            for i, band in enumerate(v if isinstance(v, list) else []):
                 if i < len(r["cycleBands"]) and isinstance(band, dict):
-                    r["cycleBands"][i].update(band)
-        elif k in r:
+                    r["cycleBands"][i].update({bk: bv for bk, bv in band.items() if num(bv)})
+        elif k in r and num(v):
             r[k] = v
     return r
 
@@ -91,7 +97,7 @@ def is_hormonal_drug(name):
 def _band_for(years, rules):
     if years is None:
         return None
-    for b in rules["cycleBands"]:
+    for b in (rules.get("cycleBands") or RULES["cycleBands"]):
         if years >= b["fromYear"] and (b["toYear"] is None or years < b["toYear"]):
             return b
     return None
@@ -220,7 +226,33 @@ def context_notes(x):
     return [note for key, note in CONFOUNDERS.items() if key in have]
 
 
+# Numbers arriving from a form are strings, and an emptied field is "". Coerce
+# once here so no rule has to defend itself against comparing a string to an
+# int — which is how the experiment panel could take /assess down with a 500.
+NUMERIC = ("age", "yearsPostMenarche", "cyclesObserved", "minCycle", "maxCycle",
+           "avgCycle", "cyclesPerYear", "mfgScore", "hirsutismDaysPct", "hairLossDaysPct")
+BOOLEAN = ("hasMenarche", "onContraception", "persistentAcne", "diagnosed")
+
+def clean_inputs(x):
+    out = dict(x or {})
+    for key in NUMERIC:
+        v = out.get(key)
+        if v is None or v == "":
+            out[key] = None
+            continue
+        try:
+            out[key] = float(v)
+        except (TypeError, ValueError):
+            out[key] = None
+    for key in BOOLEAN:
+        out[key] = bool(out.get(key))
+    conditions = out.get("conditions")
+    out["conditions"] = list(conditions) if isinstance(conditions, (list, tuple)) else []
+    return out
+
+
 def assess(x, rules=None):
+    x = clean_inputs(x)
     R = rules or RULES
     cycles = assess_cycles(x, R)
     androgen = assess_androgen(x, R)
