@@ -1733,6 +1733,12 @@ function InsightsScreen({ ins, logs, settings, wide }) {
   const grid = (cards, cols) => (
     <div style={{ display: "grid", gridTemplateColumns: cols, gap: 18, alignItems: "start" }}>
       {cards.filter(Boolean).map((card, i) => <div key={i}>{card}</div>)}</div>);
+  // Sections differ a lot in height — a two-column grid would leave a ragged
+  // hole under the short ones, so they flow into columns and pack instead.
+  const packed = (cards) => (
+    <div style={{ columnCount: 2, columnGap: 18 }}>
+      {cards.filter(Boolean).map((card, i) => (
+        <div key={i} style={{ breakInside: "avoid", marginBottom: 18 }}>{card}</div>))}</div>);
   const chartHeading = (
     <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "26px 0 12px" }}>
       <BarChart3 size={17} color={C.plum} /><Label>Charts</Label></div>);
@@ -1742,8 +1748,8 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     {view === "track" ? (
       <div style={{ maxWidth: 760 }}>{suggestionsCard}<div style={{ marginTop: 20 }}>{disclaimer}</div></div>
     ) : (<>
-      {stack([summaryCard, statsLoading && loadingCard], 18)}
-      {grid([...readCards, highlights], "1fr 1fr")}
+      {stack([summaryCard, statsLoading && loadingCard, highlights], 18)}
+      {packed(readCards)}
       {chartHeading}
       {grid(chartCards, "1fr 1fr")}
       <div style={{ marginTop: 20 }}>{disclaimer}</div>
@@ -1756,7 +1762,7 @@ function InsightsScreen({ ins, logs, settings, wide }) {
       {suggestionsCard}
       <div style={{ marginTop: 16 }}>{disclaimer}</div>
     </>) : (<>
-      {stack([summaryCard, statsLoading && loadingCard, ...readCards, highlights], 18)}
+      {stack([summaryCard, statsLoading && loadingCard, highlights, ...readCards], 18)}
       {chartHeading}
       {stack(chartCards, 18)}
       <div style={{ marginTop: 16 }}>{disclaimer}</div>
@@ -1768,7 +1774,8 @@ function Sparkline({ series }) {
   const pts = series.map((v, i) => [(i / (series.length - 1)) * w, h - ((v - min) / Math.max(1, max - min)) * (h - 12) - 6]);
   const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
   const area = `${d} L${w},${h} L0,${h} Z`;
-  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" preserveAspectRatio="none" style={{ display: "block" }}>
+  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" preserveAspectRatio="none"
+    style={{ display: "block", maxWidth: 420, margin: "0 auto" }}>
     <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.plumC} stopOpacity="0.25" /><stop offset="100%" stopColor={C.plumC} stopOpacity="0" /></linearGradient></defs>
     <path d={area} fill="url(#g)" /><path d={d} fill="none" stroke={C.plum} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
     <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r="4" fill="#fff" stroke={C.plum} strokeWidth="2.5" />
@@ -1779,7 +1786,7 @@ function Heatmap({ days, valueOf, max, color = C.plum }) {
   const cell = 13, gap = 3, rows = 7;
   const cols = Math.ceil(days.length / rows) || 1;
   const w = cols * (cell + gap), h = rows * (cell + gap);
-  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" preserveAspectRatio="xMinYMin meet" style={{ display: "block", maxWidth: w }}>
+  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" preserveAspectRatio="xMinYMin meet" style={{ display: "block", maxWidth: w, margin: "0 auto" }}>
     {days.map((l, i) => { const c = Math.floor(i / rows), r = i % rows; const v = valueOf(l);
       const op = v == null ? 1 : Math.max(0.1, Math.min(1, v / max));
       return <rect key={i} x={c * (cell + gap)} y={r * (cell + gap)} width={cell} height={cell} rx={3} fill={v == null ? C.high : color} fillOpacity={op} />; })}
@@ -1794,7 +1801,7 @@ function CycleBars({ gaps, lo = 21, hi = 35 }) {
   const Y = (v) => padT + (1 - v / maxV) * (h - padT - padB);
   const pts = gaps.map((g, i) => [X(i), Y(g)]);
   const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
-  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block" }}>
+  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block", maxWidth: 400, margin: "0 auto" }}>
     <rect x={padL} y={Y(hi)} width={w - padL} height={Y(lo) - Y(hi)} fill={C.lilac} fillOpacity={0.5} />
     {[lo, hi].map((v) => (<g key={v}><line x1={padL} y1={Y(v)} x2={w} y2={Y(v)} stroke={C.lilacDim} strokeDasharray="3 3" /><text x={0} y={Y(v) + 3} style={{ fontSize: 8, fill: C.outline }}>{v}</text></g>))}
     {gaps.length > 1 && <path d={line} fill="none" stroke={C.outlineVar} strokeWidth={1.5} />}
@@ -1813,7 +1820,7 @@ function Scatter({ points, xMax, yMax, xLabel, yLabel }) {
   const n = points.length, mx = points.reduce((a, p) => a + p.x, 0) / n, my = points.reduce((a, p) => a + p.y, 0) / n;
   const den = points.reduce((a, p) => a + (p.x - mx) ** 2, 0) || 1;
   const slope = points.reduce((a, p) => a + (p.x - mx) * (p.y - my), 0) / den, intc = my - slope * mx;
-  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block" }}>
+  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block", maxWidth: 400, margin: "0 auto" }}>
     <line x1={pad} y1={h - pad} x2={w - 4} y2={h - pad} stroke={C.outlineVar} />
     <line x1={pad} y1={8} x2={pad} y2={h - pad} stroke={C.outlineVar} />
     {points.map((p, i) => { const jx = ((i % 5) - 2) * 0.07, jy = (((i * 3) % 5) - 2) * 0.07;
