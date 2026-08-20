@@ -18,6 +18,8 @@ Field types the client knows how to render:
     text     free text
     bodymap  tappable front/back body outline, stores a list of pain points
 
+`heading` on a field starts a labelled sub-group above it (the diet macros).
+
 `showIf` is declarative — {"field": ..., "equals": ...} — so it survives JSON.
 """
 SCALE_MAX = 10
@@ -43,6 +45,10 @@ WORDS = {
     "foodDrive": ["no appetite", "low", "normal", "high", "ravenous"],
     "sexDrive":  ["none", "low", "moderate", "high", "very high"],
 }
+
+
+# Every macro is answered on the same three-level scale.
+LEVELS = ["low", "usual", "high"]
 
 
 def _scale(key, label):
@@ -81,8 +87,14 @@ SCHEMA = [
          "options": ["salty", "sugary"], "showIf": {"field": "cravings", "equals": True}},
         {"key": "exercise", "label": "Exercise", "type": "select",
          "options": ["inactive", "fairly active", "active", "very active"]},
-        {"key": "diet", "label": "Diet", "type": "select",
-         "options": ["higher carbohydrates", "higher fats", "higher proteins"]},
+        # One macro per line rather than a single "mostly carbs" choice, so a
+        # day can be high protein AND low carb — which is the pattern people
+        # actually eat to, and the one a clinician asks about.
+        {"key": "dietCarbs", "label": "Carbohydrates", "type": "select", "options": LEVELS,
+         "heading": "Diet — how today's eating went"},
+        {"key": "dietFats", "label": "Fats", "type": "select", "options": LEVELS},
+        {"key": "dietProtein", "label": "Protein", "type": "select", "options": LEVELS},
+        {"key": "dietFibre", "label": "Fibre", "type": "select", "options": LEVELS},
     ]},
     {"key": "skin", "group": "Skin & hair", "fields": [
         {"key": "acne", "label": "Acne (new breakouts)", "type": "bool"},

@@ -237,7 +237,10 @@ const FALLBACK_SCHEMA = [
     { key: "cravingType", label: "Craving for", type: "select", options: ["salty", "sugary"],
       showIf: { field: "cravings", equals: true } },
     { key: "exercise", label: "Exercise", type: "select", options: ["inactive", "fairly active", "active", "very active"] },
-    { key: "diet", label: "Diet", type: "select", options: ["higher carbohydrates", "higher fats", "higher proteins"] },
+    { key: "dietCarbs", label: "Carbohydrates", type: "select", options: LEVELS, heading: "Diet — how today's eating went" },
+    { key: "dietFats", label: "Fats", type: "select", options: LEVELS },
+    { key: "dietProtein", label: "Protein", type: "select", options: LEVELS },
+    { key: "dietFibre", label: "Fibre", type: "select", options: LEVELS },
   ] },
   { key: "skin", group: "Skin & hair", fields: [
     { key: "acne", label: "Acne (new breakouts)", type: "bool" },
@@ -247,7 +250,8 @@ const FALLBACK_SCHEMA = [
     { key: "hyperpigmentation", label: "Hyperpigmentation", type: "bool" },
   ] },
 ];
-const SCHEMA_CACHE = "myno:record-schema:v1";
+const LEVELS = ["low", "usual", "high"];
+const SCHEMA_CACHE = "myno:record-schema:v2";
 
 // One fetch at boot, remembered between visits so a slow or missing backend
 // never leaves the Record screen blank.
@@ -275,7 +279,7 @@ function useRecordSchema(settings) {
 
 const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, sugar: 5, flow: null, birthControl: null, birthControlType: null,
   sleep: 5, brainFog: 0, sexDrive: 5, painPoints: [], morningWeight: null, foodDrive: 5, cravings: null, cravingType: null,
-  exercise: null, diet: null, acne: false, hairGrowth: false, hairLoss: false, dryPatches: false, hyperpigmentation: false };
+  exercise: null, dietCarbs: null, dietFats: null, dietProtein: null, dietFibre: null, acne: false, hairGrowth: false, hairLoss: false, dryPatches: false, hyperpigmentation: false };
 
 // ---- the body map ----------------------------------------------------------
 // Tap the drawing to drop a marker where it hurts; tap a marker to take it off.
@@ -520,6 +524,23 @@ function CriterionRow({ title, source, result }) {
         {result.reasons.map((r, i) => <li key={i}>{r}</li>)}
       </ul>
     </div>);
+}
+
+// A section that can be folded away. The advocacy report is long, and most of
+// it is only wanted at the moment you're preparing for the appointment.
+function Collapsible({ title, count, children, defaultOpen = true, style }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (<Card style={{ marginBottom: 14, ...style }}>
+    <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: "none", padding: 0, width: "100%",
+      cursor: "pointer", display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+      <Label>{title}</Label>
+      {count != null && <span style={{ fontFamily: bodyf, fontSize: 11.5, fontWeight: 700, color: C.plum,
+        background: C.low, borderRadius: 9999, padding: "3px 9px" }}>{count}</span>}
+      <ChevronRight size={18} color={C.outline} style={{ marginLeft: "auto",
+        transform: open ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
+    </button>
+    {open && <div style={{ marginTop: 12 }}>{children}</div>}
+  </Card>);
 }
 
 function DoctorIndicator({ assessment }) {
@@ -1291,8 +1312,13 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
     const labelEl = (<span style={{ fontFamily: bodyf, fontSize: 14, color: C.ink, display: "inline-flex", alignItems: "center", gap: 6 }}>{f.label}{on && <span style={{ fontFamily: bodyf, fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", color: C.plum, background: "#fff", borderRadius: 9999, padding: "2px 7px" }}>HEARD</span>}</span>);
     // a field can depend on another answer (birth-control type, craving type)
     if (f.showIf && e[f.showIf.field] !== f.showIf.equals) return null;
+    // ...and can open a labelled sub-group, so the three macros read as "Diet"
+    const withHeading = (el) => !f.heading ? el : (<React.Fragment key={f.key}>
+      <div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 700, letterSpacing: "0.04em",
+        textTransform: "uppercase", color: C.outline, margin: "12px 0 2px", padding: "0 12px" }}>{f.heading}</div>
+      {el}</React.Fragment>);
     if (f.type === "emoji") {
-      return (<div key={f.key} style={wrap}>
+      return withHeading(<div key={f.key} style={wrap}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>{labelEl}
           <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.plum }}>
             {(f.options.find((o) => o.value === v) || {}).label || ""}</span></div>
@@ -1305,13 +1331,13 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
         </div></div>);
     }
     if (f.type === "bodymap") {
-      return (<div key={f.key} style={wrap}>
+      return withHeading(<div key={f.key} style={wrap}>
         <div style={{ marginBottom: 8 }}>{labelEl}</div>
         <BodyMap value={v} onChange={(pts) => set(f.key, pts)} /></div>);
     }
     if (f.type === "scale") {
       const max = f.max || SCALE_MAX; const disp = scaleDisplay(v ?? 0, max, f.words);
-      return (<div key={f.key} style={wrap}>
+      return withHeading(<div key={f.key} style={wrap}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>{labelEl}<span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.plum }}>{disp}</span></div>
         <Slider value={clampScale(v, 0, max)} max={max} onChange={(val) => set(f.key, clampScale(val, 0, max))} /></div>);
     }
@@ -1319,7 +1345,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       : f.type === "select" ? (<div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>{f.options.map((o) => <Chip key={o} active={v === o} onClick={() => set(f.key, v === o ? null : o)}>{o}</Chip>)}</div>)
       : f.type === "number" ? (<input type="number" value={v ?? ""} onChange={(ev) => set(f.key, ev.target.value === "" ? null : Number(ev.target.value))} placeholder={f.placeholder || ""} style={{ ...input, width: 120, padding: "9px 11px", fontSize: 14 }} />)
       : (<input value={v || ""} onChange={(ev) => set(f.key, ev.target.value)} placeholder={f.placeholder || ""} style={{ ...input, width: 210, padding: "9px 11px", fontSize: 14 }} />);
-    return (<div key={f.key} style={{ ...wrap, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>{labelEl}<div style={{ flexShrink: 0 }}>{control}</div></div>);
+    return withHeading(<div key={f.key} style={{ ...wrap, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>{labelEl}<div style={{ flexShrink: 0 }}>{control}</div></div>);
   };
 
   // Light up whichever fields just changed, then fade the highlight out.
@@ -1339,20 +1365,18 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
     try {
       const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), categories: eRef.current.categories || [], personality: settings.personality });
       const scaleValue = (key) => f[key] == null ? base[key] : clampScale(f[key], base[key] ?? 0);
-      const next = { ...base,
-        period: f.period ?? base.period, flow: f.flow || base.flow, birthControl: f.birthControl || base.birthControl,
-        pain: scaleValue("pain"), mood: scaleValue("mood"), energy: scaleValue("energy"),
-        sleep: scaleValue("sleep"), brainFog: scaleValue("brainFog"), sexDrive: scaleValue("sexDrive"),
-        sugar: scaleValue("sugar"), foodDrive: scaleValue("foodDrive"),
-        birthControlType: f.birthControlType || base.birthControlType, morningWeight: f.morningWeight ?? base.morningWeight,
-        hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, acne: f.acne || base.acne,
-        dryPatches: f.dryPatches || base.dryPatches, hyperpigmentation: f.hyperpigmentation || base.hyperpigmentation,
-        bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings,
-        cravingType: f.cravingType || base.cravingType, exercise: f.exercise || base.exercise, diet: f.diet || base.diet };
-      // remember which schema fields actually came from speech (to highlight them)
-      const heard = ["period", "flow", "birthControl", "birthControlType", "pain", "mood", "energy", "sleep", "brainFog",
-        "sexDrive", "sugar", "foodDrive", "morningWeight", "hairGrowth", "hairLoss", "acne", "dryPatches",
-        "hyperpigmentation", "bloating", "cravings", "cravingType", "exercise", "diet"].filter((k) => f[k] != null && f[k] !== false);
+      // Merge whatever the schema asks for, rather than a hand-kept list that
+      // silently drops any field added to the backend since it was written.
+      const next = { ...base };
+      const fields = schema.flatMap((g) => g.fields).filter((fd) => fd.type !== "bodymap");
+      for (const fd of fields) {
+        const k = fd.key;
+        if (fd.type === "scale" || fd.type === "emoji") next[k] = scaleValue(k);
+        else if (fd.type === "bool") next[k] = f[k] ?? base[k];        // false is an answer
+        else next[k] = f[k] ?? base[k];
+      }
+      // which of them actually came from speech, so those rows can flash
+      const heard = fields.map((fd) => fd.key).filter((k) => f[k] != null && f[k] !== false);
       if (heard.length) setSpoken((p) => { const n = { ...p }; heard.forEach((k) => (n[k] = true)); return n; });
       if (Array.isArray(f.categories)) {
         const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, JSON.stringify([c.value, c.scale?.value])]));
@@ -2041,17 +2065,25 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
   const meView = (<>
     {standCard}
     {(loadingR && !rep) && <Card style={{ display: "flex", alignItems: "center", gap: 10, color: C.inkVar, fontSize: 14, marginBottom: 14 }}><Loader2 size={16} className="spin" color={C.plum} /> Preparing your talking points from your data…</Card>}
-    {(rep?.trends_summary || rep?.flagged_patterns?.length > 0) && (<div style={{ marginBottom: 18 }}>
-      <H size={19} style={{ margin: "18px 0 10px" }}>What your tracking shows</H>
-    {rep?.trends_summary && <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Your trends</Label><p style={{ fontSize: 14.5, lineHeight: 1.55, margin: "8px 0 0" }}>{rep.trends_summary}</p></Card>}
-    {rep?.flagged_patterns?.length > 0 && <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Patterns worth flagging</Label><ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 7 }}>{rep.flagged_patterns.map((f, i) => <li key={i} style={{ fontSize: 14.5 }}>{f}</li>)}</ul></Card>}
-    </div>)}
-    {(rep?.talking_points || []).length > 0 && <H size={19} style={{ margin: "18px 0 10px" }}>To raise with the doctor</H>}
-    {(rep?.talking_points || []).map((t, i) => (<Card key={i} style={{ marginBottom: 14 }}>
+    {(rep?.trends_summary || rep?.flagged_patterns?.length > 0) && (
+      <Collapsible title="What your tracking shows">
+        {rep?.trends_summary && (<div style={{ marginBottom: rep?.flagged_patterns?.length ? 16 : 0 }}>
+          <Label color={C.inkVar}>Your trends</Label>
+          <p style={{ fontSize: 14.5, lineHeight: 1.55, margin: "8px 0 0" }}>{rep.trends_summary}</p></div>)}
+        {rep?.flagged_patterns?.length > 0 && (<div>
+          <Label color={C.inkVar}>Patterns worth flagging</Label>
+          <ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 7 }}>
+            {rep.flagged_patterns.map((f, i) => <li key={i} style={{ fontSize: 14.5 }}>{f}</li>)}</ul></div>)}
+      </Collapsible>)}
+    {(rep?.talking_points || []).length > 0 && (
+      <Collapsible title="To raise with the doctor" count={rep.talking_points.length}>
+        {rep.talking_points.map((t, i) => (<div key={i} style={{ paddingTop: i ? 14 : 0, marginTop: i ? 14 : 0,
+          borderTop: i ? `1px solid ${C.high}` : "none" }}>
       <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15.5, lineHeight: 1.45 }}>{t.clinical_framing}</div>
       {t.keywords_phrases?.length > 0 && (<div style={{ marginTop: 12 }}><Label color={C.plum}>Say it like this</Label><ul style={{ margin: "8px 0 0", paddingLeft: 18, display: "grid", gap: 6 }}>{t.keywords_phrases.map((k, j) => <li key={j} style={{ fontSize: 14, lineHeight: 1.45 }}>{k}</li>)}</ul></div>)}
       {t.questions_to_ask?.length > 0 && (<div style={{ marginTop: 12 }}><Label color={C.roseOn}>Ask</Label><ul style={{ margin: "8px 0 0", paddingLeft: 18, display: "grid", gap: 6 }}>{t.questions_to_ask.map((q, j) => <li key={j} style={{ fontSize: 14, lineHeight: 1.45 }}>{q}</li>)}</ul></div>)}
-    </Card>))}
+        </div>))}
+      </Collapsible>)}
     {rep?.documentation_request_text && <Card style={{ marginBottom: 14, background: C.lilac, boxShadow: "none" }}><Label color={C.plumDark}>Before you leave</Label><p style={{ fontSize: 14, lineHeight: 1.6, margin: "8px 0 0", color: C.onLilac }}>{rep.documentation_request_text}</p></Card>}
     {rep && <div className="no-print"><Pill onClick={() => window.print()} style={{ width: "100%" }}><Printer size={16} /> Print to bring along</Pill></div>}
   </>);
@@ -2074,8 +2106,8 @@ function Mini({ label, value, flag, amber }) {
 const CONDITIONS = [
   ["infertility", "Infertility", "Trying to conceive without success"],
   ["hirsutism", "Hirsutism", "Diagnosed excess hair growth"],
-  ["diabetes1", "Diabetes type 1", ""],
-  ["diabetes2", "Diabetes type 2", ""],
+  ["diabetes1", "Diabetes type 1", "Autoimmune — the body makes little or no insulin"],
+  ["diabetes2", "Diabetes type 2", "The body resists its own insulin"],
   ["hypothyroidism", "Hypothyroidism", "Underactive thyroid"],
   ["hyperthyroidism", "Hyperthyroidism", "Overactive thyroid"],
 ];
