@@ -537,34 +537,39 @@ function useSources(settings) {
 
 function SourcesButton({ settings, label = "Where these numbers come from" }) {
   const [open, setOpen] = useState(false);
+  const [showing, setShowing] = useState(null);
   const sources = useSources(settings);
   if (!sources) return null;
+  // Three lines, not fourteen: each source says how many rules it accounts for
+  // and opens only if you want the list.
   return (<>
     <button onClick={() => setOpen((o) => !o)} title={label} aria-label={label}
       style={{ background: "none", border: "none", padding: 2, cursor: "pointer", color: C.outline,
         display: "inline-grid", placeItems: "center", lineHeight: 0 }}>
       <Info size={15} />
     </button>
-    {open && (<div className="fade-up" style={{ marginTop: 10, padding: 14, borderRadius: 14,
-      background: C.low, fontFamily: bodyf }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-        <span style={{ fontFamily: head, fontWeight: 700, fontSize: 14, color: C.ink }}>{label}</span>
-        <button onClick={() => setOpen(false)} style={{ marginLeft: "auto", background: "none", border: "none",
-          cursor: "pointer", color: C.outline, padding: 0, lineHeight: 0 }}><X size={15} /></button>
-      </div>
-      <div style={{ display: "grid", gap: 12 }}>
-        {sources.map((src) => (<div key={src.id}>
-          <div style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 12.5,
-            color: src.id === "ours" ? C.roseOn : C.plum }}>{src.name}</div>
-          {src.detail && <div style={{ fontSize: 11.5, color: C.inkVar, lineHeight: 1.45, marginTop: 2 }}>{src.detail}</div>}
-          <ul style={{ margin: "6px 0 0", paddingLeft: 16, display: "grid", gap: 3 }}>
-            {src.used.map((u, i) => (<li key={i} style={{ fontSize: 11.5, color: C.inkVar, lineHeight: 1.45 }}>{u}</li>))}
-          </ul>
-          {src.url && <a href={src.url} target="_blank" rel="noopener noreferrer"
-            style={{ fontSize: 11.5, fontWeight: 600, color: C.plum, display: "inline-block", marginTop: 4 }}>
-            Read the guideline →</a>}
-        </div>))}
-      </div>
+    {open && (<div className="fade-up" style={{ marginTop: 10, padding: "10px 12px", borderRadius: 14,
+      background: C.low, fontFamily: bodyf, textAlign: "left" }}>
+      {sources.map((src, i) => { const on = showing === src.id; return (
+        <div key={src.id} style={{ borderTop: i ? `1px solid ${C.high}` : "none" }}>
+          <button onClick={() => setShowing(on ? null : src.id)} style={{ width: "100%", background: "none",
+            border: "none", padding: "8px 0", cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
+            textAlign: "left", fontFamily: bodyf }}>
+            <span style={{ fontWeight: 600, fontSize: 12.5, color: src.id === "ours" ? C.roseOn : C.plum }}>{src.name}</span>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: C.outline, whiteSpace: "nowrap" }}>{src.used.length}</span>
+            <ChevronRight size={13} color={C.outline} style={{ flexShrink: 0,
+              transform: on ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
+          </button>
+          {on && (<div className="fade-up" style={{ padding: "0 0 10px" }}>
+            {src.detail && <div style={{ fontSize: 11.5, color: C.inkVar, lineHeight: 1.45, marginBottom: 5 }}>{src.detail}</div>}
+            <ul style={{ margin: 0, paddingLeft: 16, display: "grid", gap: 3 }}>
+              {src.used.map((u, j) => (<li key={j} style={{ fontSize: 11.5, color: C.inkVar, lineHeight: 1.45 }}>{u}</li>))}
+            </ul>
+            {src.url && <a href={src.url} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize: 11.5, fontWeight: 600, color: C.plum, display: "inline-block", marginTop: 5 }}>
+              Read the guideline →</a>}
+          </div>)}
+        </div>); })}
     </div>)}
   </>);
 }
