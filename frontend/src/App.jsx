@@ -5,6 +5,9 @@ import {
   Printer, Stethoscope, AlertTriangle, Info, Heart, Moon, Loader2, X, Target,
   Brain, HeartPulse, Microscope, Droplet, Activity, ChevronLeft, Pill as Pill2
 } from "lucide-react";
+// One definition of what a cycle is, tested in cycles.test.mjs.
+import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
+  phaseSpans, phaseAt, ringLength, dayOf, DAY_MS } from "./cycles.js";
 
 /* ===========================================================================
    Tawazzun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
@@ -262,39 +265,6 @@ function useRecordSchema(settings) {
 const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, sugar: 5, flow: null, birthControl: null, birthControlType: null,
   sleep: 5, brainFog: 0, sexDrive: 5, painPoints: [], morningWeight: null, foodDrive: 5, cravings: null, cravingType: null,
   exercise: null, dietCarbs: null, dietFats: null, dietProtein: null, dietFibre: null, acne: false, hairGrowth: false, hairLoss: false, dryPatches: false, hyperpigmentation: false };
-
-// ---- cycles ----------------------------------------------------------------
-// Consecutive bleeding days are one period. Two runs are two cycles, and the
-// days from one start to the next are the cycle length — which is what the
-// guideline bands are measured against.
-const DAY_MS = 86400000;
-const dayOf = (iso) => new Date(`${iso}T00:00:00`);
-
-function periodRuns(logs) {
-  // A log dated after today is not something that has happened, so it can't
-  // open the cycle you are in. Seeded and clock-skewed data both produce them.
-  const today = new Date().toISOString().slice(0, 10);
-  const dates = [...new Set((logs || []).filter((l) => l.period && l.date <= today).map((l) => l.date))].sort();
-  const runs = [];
-  for (const d of dates) {
-    const run = runs[runs.length - 1], prev = run && run[run.length - 1];
-    if (prev && dayOf(d) - dayOf(prev) === DAY_MS) run.push(d);
-    else runs.push([d]);
-  }
-  return runs;
-}
-
-// Each run with the length of the cycle it opened. The most recent one is still
-// running, so it carries how far in it is rather than a finished length.
-function cyclesFrom(logs) {
-  const runs = periodRuns(logs);
-  return runs.map((run, i) => {
-    const next = runs[i + 1];
-    const days = next ? Math.round((dayOf(next[0]) - dayOf(run[0])) / DAY_MS)
-                      : Math.round((Date.now() - dayOf(run[0])) / DAY_MS) + 1;
-    return { start: run[0], bleed: run.length, days, open: !next };
-  });
-}
 
 // ---- the body map ----------------------------------------------------------
 // Tap the drawing to drop a marker where it hurts; tap a marker to take it off.
@@ -996,19 +966,6 @@ const PHASES = [
   { key: "luteal",     name: "Luteal",     from: C.lilacDim, to: C.plumC,   note: "winding down" },
 ];
 
-// Boundaries in days, from the cycle length. Luteal is the steady one at about
-// fourteen days, so everything else is measured back from the end.
-function phaseBounds(cyc, bleed) {
-  const bleedEnd = Math.max(1, Math.min(bleed || 5, Math.round(cyc * 0.3)));
-  const ovuMid = Math.max(bleedEnd + 3, cyc - 14);
-  return [
-    { ...PHASES[0], a: 0, b: bleedEnd },
-    { ...PHASES[1], a: bleedEnd, b: Math.max(bleedEnd + 1, ovuMid - 2) },
-    { ...PHASES[2], a: Math.max(bleedEnd + 1, ovuMid - 2), b: Math.min(cyc, ovuMid + 2) },
-    { ...PHASES[3], a: Math.min(cyc, ovuMid + 2), b: cyc },
-  ].filter((p) => p.b > p.a);
-}
-
 // Eases a number to its target once, on mount and on change.
 function useCountUp(target, ms = 950) {
   const [v, setV] = useState(target || 0);
@@ -1033,11 +990,13 @@ function useCountUp(target, ms = 950) {
 
 function CycleRing({ day, bleed, avg }) {
   const S = 200, cx = S / 2, cy = S / 2, rO = 86, rI = 62, mr = (rO + rI) / 2;
-  const cyc = Math.max(Math.round(avg || 28), (day || 0) + 1);
-  const segs = phaseBounds(cyc, bleed);
+  const cyc = ringLength(day, avg);
+  const byKey = Object.fromEntries(PHASES.map((p) => [p.key, p]));
+  const segs = phaseSpans(cyc, bleed).map((p) => ({ ...p, ...byKey[p.key] }));
   const shown = useCountUp(day == null ? null : day);
   const ang = (d) => (d / cyc) * 2 * Math.PI;
-  const here = day == null ? null : (segs.find((p) => day > p.a && day <= p.b) || segs[segs.length - 1]);
+  const hereKey = phaseAt(day, cyc, bleed);
+  const here = hereKey ? segs.find((p) => p.key === hereKey) : null;
   const mx = cx + mr * Math.sin(ang(shown)), my = cy - mr * Math.cos(ang(shown));
 
   return (<svg viewBox={`0 0 ${S} ${S}`} width="100%" style={{ maxWidth: 220, display: "block", overflow: "visible" }}>
@@ -1109,6 +1068,10 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   // needing the calendar.
   const cycles = cyclesFrom(logs);
   const current = cycles.length ? cycles[cycles.length - 1] : null;
+  // Phase boundaries follow how long their periods usually run. Taking the run
+  // in progress instead would collapse the menstrual phase to a single day the
+  // moment someone taps one date, and everything after would read follicular.
+  const usualBleed = Math.max(current?.bleed || 0, typicalBleed(logs));
   const avg = ins.avgCycleDays ? Math.round(ins.avgCycleDays) : null;
   // the arc: the shortest and longest cycle they have actually had
   const past = cycles.filter((c) => !c.open).map((c) => c.days);
@@ -1129,7 +1092,7 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
     <Card style={{ padding: 20, boxShadow: SH_SM }}>
       <Label>This cycle</Label>
       <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
-        <CycleRing day={current?.days} bleed={current?.bleed} avg={avg} /></div>
+        <CycleRing day={current?.days} bleed={usualBleed} avg={avg} /></div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 12 }}>
         {PHASES.map((p) => (<span key={p.key} style={{ display: "inline-flex", alignItems: "center", gap: 5,
           fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
@@ -1139,8 +1102,14 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
         color: late ? C.roseOn : C.inkVar }}>{cycleNote}</div>
       {span[0] != null && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 12, color: C.outline, marginTop: 6 }}>
         Yours have started anywhere from day {span[0]} to day {span[1]}.</div>}
-      <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 6 }}>
-        Phases are estimated from your average — ovulation isn't something the app can see.</div>
+      {current && (() => {
+        const cyc = ringLength(current.days, avg);
+        const key = phaseAt(current.days, cyc, usualBleed);
+        const sp = phaseSpans(cyc, usualBleed).find((x) => x.key === key);
+        const name = (PHASES.find((x) => x.key === key) || {}).name;
+        return sp ? (<div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 6 }}>
+          {name} runs days {sp.a + 1}–{sp.b} of about {cyc} — phases are estimated from your average.</div>) : null;
+      })()}
     </Card>);
   const recordCTA = (
     <button onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
