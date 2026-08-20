@@ -39,7 +39,30 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      # Bound to loopback: every patient route is an unauthenticated integer id,
+      # so a public 8080 hands the whole database to anyone who finds the port,
+      # whatever nginx is configured to do. The browser reaches it through
+      # nginx's /api/ on 80/443.
+      - "127.0.0.1:8080:8080"
+
+  # Dalīl (دليل) — the evidence module. Reviewed literature behind the claims the
+  # app makes. Publishes no host port: nginx is the only way in.
+  dalil:
+    build: ./dalil
+    environment:
+      DATABASE_URL: postgresql+psycopg2://myno:myno@db:5432/myno
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in your environment}
+      APP_URL: http://backend:8080
+      # NCBI asks that automated callers identify themselves; a key raises the
+      # rate limit from 3 to 10 requests a second.
+      NCBI_TOOL: ${NCBI_TOOL:-tawazzun-dalil}
+      NCBI_EMAIL: ${NCBI_EMAIL:-}
+      NCBI_API_KEY: ${NCBI_API_KEY:-}
+      # Creates the first reviewer, and only while there are none.
+      DALIL_BOOTSTRAP: ${DALIL_BOOTSTRAP:-}
+    depends_on:
+      db:
+        condition: service_healthy
 
   asr:
     build: ./asr
