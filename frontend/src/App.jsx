@@ -8,7 +8,7 @@ import {
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
-  cycleRuns, DAY_MS } from "./cycles.js";
+  cycleRuns, MIN_CYCLE_GAP, DAY_MS } from "./cycles.js";
 
 /* ===========================================================================
    Tawazzun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
@@ -1368,6 +1368,13 @@ function CycleCalendar({ logs, onSet }) {
     ? daysBetween(runs[runs.length - 2][0], runs[runs.length - 1][0])
     : null;
   const pretty = (d) => new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  // A day marked within MIN_CYCLE_GAP of the cycle's start is more bleeding, not
+  // a new cycle — a six-day cycle doesn't exist. Left unsaid, the tap looks like
+  // it did nothing, so the calendar explains itself.
+  const cur = currentCycle(logs);
+  const spottingNote = cur && cur.spotting > 0
+    ? `Counted inside this cycle — a new one needs ${MIN_CYCLE_GAP} days between starts, and this began ${pretty(cur.start)}.`
+    : null;
   const runLine = lastRun && (() => {
     const a = lastRun[0], b = lastRun[lastRun.length - 1], n = lastRun.length;
     const ongoing = daysBetween(b, todayISO()) <= 1;
@@ -1428,6 +1435,10 @@ function CycleCalendar({ logs, onSet }) {
       marginTop: 10, fontFamily: bodyf, fontSize: 12.5, color: C.roseOn }}>
       <span style={{ width: 24, height: 11, borderRadius: 9999, background: C.bleed, flexShrink: 0 }} />
       {runLine}</div>}
+    {spottingNote && <div style={{ display: "flex", gap: 7, alignItems: "flex-start", margin: "8px auto 0", maxWidth: 320,
+      padding: "8px 11px", borderRadius: 11, background: C.surface, fontFamily: bodyf, fontSize: 11.5,
+      lineHeight: 1.45, color: C.inkVar }}>
+      <Info size={13} color={C.plum} style={{ flexShrink: 0, marginTop: 1 }} />{spottingNote}</div>}
     {onSet && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 6 }}>
       {range ? (anchor ? `Started ${anchor} ${new Date(y, m, 1).toLocaleString(undefined, { month: "short" })} — now tap the last day`
                        : "Tap the first day of the bleed")
