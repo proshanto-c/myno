@@ -11,10 +11,13 @@
  *                  the calendar all have to render without a console error.
  *
  *   docker compose build frontend && docker compose up -d frontend
- *   BUNDLE=$(curl -sk https://localhost/ | grep -o '/assets/[^"]*\.js' | head -1)
- *   curl -sk "https://localhost$BUNDLE" -o /tmp/app-bundle.mjs
+ *   rm -rf /tmp/dist && mkdir -p /tmp/dist
+ *   docker cp myno-frontend-1:/usr/share/nginx/html/assets /tmp/dist/assets
  *   cp smoke.mjs /tmp/ && docker run --rm -v /tmp:/t -w /t node:20-alpine \
- *     sh -c "npm i --silent jsdom && node /t/smoke.mjs /t/app-bundle.mjs"
+ *     sh -c "npm i --silent jsdom && node /t/smoke.mjs /t/dist/assets/main-*.js"
+ *
+ * The whole assets directory, not one file: since the build gained a second
+ * entry for the researcher portal, React lives in a chunk both of them import.
  *
  * Run it from the directory holding node_modules — node resolves imports from
  * the script's own location, not the working directory.
@@ -70,7 +73,12 @@ async function pass(name, { stored, fetch: fetchImpl }) {
   const errs = [];
   dom.window.addEventListener("error", (e) => errs.push(String(e.error?.stack || e.error || e.message)));
   const realError = console.error;
-  console.error = (...a) => errs.push(a.map(String).join(" ").slice(0, 400));
+  console.error = (...a) => {
+    const line = a.map(String).join(" ");
+    // node's own module-resolution warnings arrive on this channel too; only
+    // React's belong in the failure list
+    if (!line.includes("[MODULE_TYPELESS_PACKAGE_JSON]")) errs.push(line.slice(0, 400));
+  };
 
   try {
     // cache-bust so the second pass re-evaluates the module top to bottom

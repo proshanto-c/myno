@@ -13,7 +13,7 @@ import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
 import { VoiceController } from "./voice.js";
 
 /* ===========================================================================
-   Tawazzun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
+   Tawaazun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
    soft blush + lilac on warm rose-white, soft tactile minimalism).
    Logic carried over: voice (NeMo streaming / browser fallback), TTS that
    speaks + shows text, personalised associations, feature blacklist, and an
@@ -1525,7 +1525,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const [reply, setReply] = useState(""); const speaker = useSpeaker(settings);
   const [flash, setFlash] = useState({}); const timers = useRef({});
   const [insOn, setInsOn] = useState(true); const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
-  const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false); const [spoken, setSpoken] = useState({});  // schema fields Tawazzun heard from speech
+  const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false); const [spoken, setSpoken] = useState({});  // schema fields Tawaazun heard from speech
 
   // Live insights run in the BACKGROUND (mic stays enabled) — they can take a
   // while, so they never block the conversation.
@@ -1653,7 +1653,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
     setE(merged); eRef.current = merged; persist(merged); setSaved(true); setBusy(false);
     // Surface the trend the user just talked about, with a blink to draw the eye.
     if (focus) { setMetric(focus); setMetricBlink(true); clearTimeout(timers.current._blink); timers.current._blink = setTimeout(() => setMetricBlink(false), 1700); }
-    // Mic stays OFF through transcription, inference, and Tawazzun's spoken reply —
+    // Mic stays OFF through transcription, inference, and Tawaazun's spoken reply —
     // it only comes back on for the next turn (hands-free).
     const resume = () => { if (convoRef.current) voice.start(); };
     if (say) { setReply(say); speaker.speak(say, resume); } else resume();
@@ -1687,7 +1687,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       {err && <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", marginTop: 12, padding: "10px 14px", borderRadius: 12, background: "rgba(255,255,255,0.16)", color: "#fff", fontSize: 13, fontWeight: 600 }}><AlertTriangle size={15} style={{ flexShrink: 0 }} /> {err}</div>}
     </div>);
 
-  // SIDE — the personalized tracker Tawazzun builds from the conversation. New and
+  // SIDE — the personalized tracker Tawaazun builds from the conversation. New and
   // changed categories rise in and flash a plum "updated" notification.
   const cats = e.categories || [];
   // Literature → form: research-backed trackers the user can add; each is saved

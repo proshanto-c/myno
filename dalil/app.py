@@ -49,7 +49,7 @@ def healthz():
     finally:
         s.close()
     return {"status": "ok", "reviewers": reviewers, "sources": sources,
-            "started_at": STARTED_AT.isoformat()}
+            "authRequired": auth.auth_required(), "started_at": STARTED_AT.isoformat()}
 
 
 # ---- signing in -------------------------------------------------------------
@@ -89,12 +89,14 @@ def logout(request: Request, response: Response):
 def whoami(request: Request):
     """Deliberately on the public router: the portal asks this on load to decide
     whether to show the login form, so it must answer without a session."""
+    if not auth.auth_required():
+        return {"signedIn": True, "authRequired": False, **auth.OPEN_REVIEWER}
     s = Session()
     try:
         reviewer = auth.resolve(s, request.cookies.get(auth.COOKIE, ""))
         if reviewer is None:
-            return {"signedIn": False}
-        return {"signedIn": True, "email": reviewer.email,
+            return {"signedIn": False, "authRequired": True}
+        return {"signedIn": True, "authRequired": True, "email": reviewer.email,
                 "name": reviewer.name, "role": reviewer.role}
     finally:
         s.close()

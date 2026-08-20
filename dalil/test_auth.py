@@ -258,6 +258,36 @@ def test_signing_in_clears_the_count():
         s.close()
 
 
+# ---- the switch ------------------------------------------------------------
+@test
+def test_sign_in_is_off_by_default_and_says_so():
+    import os
+    os.environ.pop("DALIL_REQUIRE_AUTH", None)
+    assert auth.auth_required() is False
+    # and with it off, the gate lets anyone through rather than 401-ing
+    class FakeRequest:
+        method = "GET"; cookies = {}; headers = {}
+    who = auth.require_reviewer(FakeRequest())
+    assert who["role"] == "open"
+
+
+@test
+def test_turning_it_on_restores_the_gate():
+    import os
+    class FakeRequest:
+        method = "GET"; cookies = {}; headers = {}
+    os.environ["DALIL_REQUIRE_AUTH"] = "1"
+    try:
+        assert auth.auth_required() is True
+        try:
+            auth.require_reviewer(FakeRequest())
+            assert False, "the gate let an anonymous request through"
+        except HTTPException as e:
+            assert e.status_code == 401
+    finally:
+        os.environ.pop("DALIL_REQUIRE_AUTH", None)
+
+
 # ---- bootstrap -------------------------------------------------------------
 @test
 def test_bootstrap_does_nothing_once_an_account_exists():

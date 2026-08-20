@@ -1,5 +1,5 @@
 """
-Tawazzun backend — orchestration + persistence.
+Tawaazun backend — orchestration + persistence.
 
 Responsibilities:
   * Postgres-backed storage for patients, daily logs, the patient's own
@@ -108,7 +108,7 @@ with engine.begin() as _conn:
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS drugs JSON DEFAULT '[]'::json"))
 
 # ---------------------------------------------------------------- app
-app = FastAPI(title="Tawazzun backend")
+app = FastAPI(title="Tawaazun backend")
 
 # ----- one client for everything upstream ------------------------------------
 # A client per request means a fresh TCP and TLS handshake to api.anthropic.com
@@ -317,7 +317,7 @@ async def patient_insights(pid: int):
     block_line = ", ".join(FEATURES[f]["label"] for f in blocked if f in FEATURES) or "none"
     sections = ", ".join(f'"{k}" ({l})' for k, l in record.CATEGORIES)
     sys = (
-        "You are Tawazzun, a practical PMOS companion. From this person's own tracking summary, produce "
+        "You are Tawaazun, a practical PMOS companion. From this person's own tracking summary, produce "
         "concrete, data-grounded insights — each a real trend or correlation in THEIR numbers — with brief, "
         "actionable, non-diagnostic advice. Never diagnose or give drug doses. "
         "The summary has a 'byCategory' block: the sections of their Record screen, with the findings and "
@@ -787,9 +787,9 @@ async def claude(system: str, messages: list, max_tokens=900) -> str:
             _inflight.pop(key, None)
 
 # ----- voice → structured daily-log fields + a spoken reply (server-side model;
-# no key in the browser). Tawazzun talks back: acknowledges, and asks ONE clarifying
+# no key in the browser). Tawaazun talks back: acknowledges, and asks ONE clarifying
 # question when something important is ambiguous, so the patient can just answer.
-# Selectable conversation personalities — only the TONE of Tawazzun's spoken reply
+# Selectable conversation personalities — only the TONE of Tawaazun's spoken reply
 # changes; the structural rules (infer ratings, no numbers, brevity) are fixed.
 PERSONALITIES = {
     "direct": "Be brief and matter-of-fact — note what you heard in a few words and move on; skip heavy empathy, reassurance, and exclamations.",
@@ -849,7 +849,7 @@ def _normalize_extract_payload(payload):
 def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
     block_line = ", ".join(blocked) if blocked else "none"
     return (
-        "You are Tawazzun, a warm voice companion helping someone log their PMOS day just by talking. "
+        "You are Tawaazun, a warm voice companion helping someone log their PMOS day just by talking. "
         "From the WHOLE conversation so far and what they just said, do two things: reply out loud, "
         "and fill in the tracking fields the form asks for.\n"
         f"- 'say' TONE: {_style(personality)} INFER any ratings/severities yourself — never ask for numbers, scores, or 1-to-10 ratings. Ask a short clarifying question only when genuinely needed (never about numbers), otherwise just acknowledge. Spoken aloud — under ~28 words. Never diagnose.\n"
@@ -891,7 +891,7 @@ class AdviseIn(BaseModel):
 async def advise(body: AdviseIn):
     block_line = ", ".join(body.blocked) if body.blocked else "none"
     sys = (
-        "You are Tawazzun, a practical PMOS companion. Combine the person's tracked history (history_summary) with what "
+        "You are Tawaazun, a practical PMOS companion. Combine the person's tracked history (history_summary) with what "
         "they are telling you right now to surface ONE clear, useful insight: a trend or correlation grounded in THEIR data, "
         "plus brief, actionable, non-diagnostic advice. Never diagnose or give drug doses; a clinician decides. "
         f"NEVER reference anything in this blocked list: {block_line}.\n"

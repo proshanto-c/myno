@@ -141,8 +141,24 @@ def clear_cookie(response: Response) -> None:
 
 
 # ---- the gate ---------------------------------------------------------------
+def auth_required() -> bool:
+    """Off while the portal is being built, on with one environment variable.
+
+    Turned off, the portal is open to anyone who reaches /research/ — which is
+    only the corpus metadata, all of it already public on PubMed. It has to go
+    back on before anything is *published*, because an unsigned review is not a
+    review: "a named person checked this" is the whole claim the module makes.
+    """
+    return os.environ.get("DALIL_REQUIRE_AUTH", "0").lower() in ("1", "true", "yes")
+
+
+OPEN_REVIEWER = {"id": None, "email": "", "name": "Signed out", "role": "open"}
+
+
 def require_reviewer(request: Request):
     """Applied once, on the router. Every research route is behind this."""
+    if not auth_required():
+        return dict(OPEN_REVIEWER)
     s = Session()
     try:
         reviewer = resolve(s, request.cookies.get(COOKIE, ""))

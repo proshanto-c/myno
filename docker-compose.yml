@@ -55,7 +55,7 @@ services:
       APP_URL: http://backend:8080
       # NCBI asks that automated callers identify themselves; a key raises the
       # rate limit from 3 to 10 requests a second.
-      NCBI_TOOL: ${NCBI_TOOL:-tawazzun-dalil}
+      NCBI_TOOL: ${NCBI_TOOL:-tawaazun-dalil}
       NCBI_EMAIL: ${NCBI_EMAIL:-}
       NCBI_API_KEY: ${NCBI_API_KEY:-}
       # Creates the first reviewer, and only while there are none.
