@@ -44,16 +44,37 @@ export function periodRuns(logs, today = todayISO()) {
   return runs;
 }
 
-/** Each run with the cycle it opened. The last one is still running, so it
- *  carries how far in it is (today included) rather than a finished length. */
+/** Bleeding again a few days after a period is that period, not a new cycle.
+ *  The same floor the backend uses (insights.RULES.minCycleGapDays), so the
+ *  ring, the ribbon and the server's statistics all count the same cycles. */
+export const MIN_CYCLE_GAP = 10;
+
+/** Runs grouped into cycles: a run beginning fewer than MIN_CYCLE_GAP days
+ *  after the current cycle started is spotting within it, not the next one. */
+export function cycleRuns(logs, today = todayISO(), minGap = MIN_CYCLE_GAP) {
+  const out = [];
+  for (const run of periodRuns(logs, today)) {
+    const last = out[out.length - 1];
+    if (last && daysBetween(last.start, run[0]) < minGap) {
+      last.spotting = (last.spotting || 0) + run.length;
+      continue;
+    }
+    out.push({ start: run[0], bleed: run.length, spotting: 0 });
+  }
+  return out;
+}
+
+/** Each cycle with its length. The last one is still running, so it carries how
+ *  far in it is (today included) rather than a finished length. */
 export function cyclesFrom(logs, today = todayISO()) {
-  const runs = periodRuns(logs, today);
-  return runs.map((run, i) => {
-    const next = runs[i + 1];
+  const cycles = cycleRuns(logs, today);
+  return cycles.map((c, i) => {
+    const next = cycles[i + 1];
     return {
-      start: run[0],
-      bleed: run.length,
-      days: next ? daysBetween(run[0], next[0]) : daysBetween(run[0], today) + 1,
+      start: c.start,
+      bleed: c.bleed,
+      spotting: c.spotting || 0,
+      days: next ? daysBetween(c.start, next.start) : daysBetween(c.start, today) + 1,
       open: !next,
     };
   });
@@ -75,12 +96,16 @@ export function pastLengths(logs, today = todayISO()) {
  *  the phase boundaries don't lurch every time a bleeding day is added — one
  *  tapped day should not shrink the menstrual phase to a single day. */
 export function typicalBleed(logs, today = todayISO()) {
-  const runs = periodRuns(logs, today);
-  const finished = runs.slice(0, -1).map((r) => r.length);
-  const pool = finished.length ? finished : runs.map((r) => r.length);
-  if (!pool.length) return 5;
-  const sorted = [...pool].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
+  const cycles = cycleRuns(logs, today);
+  const finished = cycles.slice(0, -1).map((c) => c.bleed);
+  if (finished.length) {
+    const sorted = [...finished].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+  // A period still going is a floor, not a length: one day logged today does
+  // not mean this person bleeds for one day, so assume the usual five until
+  // there is a finished period to go on.
+  return Math.max(5, cycles.length ? cycles[cycles.length - 1].bleed : 0);
 }
 
 export const PHASE_KEYS = ["menstrual", "follicular", "ovulatory", "luteal"];

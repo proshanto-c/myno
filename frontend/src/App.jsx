@@ -7,7 +7,8 @@ import {
 } from "lucide-react";
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
-  phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO, DAY_MS } from "./cycles.js";
+  phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
+  cycleRuns, DAY_MS } from "./cycles.js";
 
 /* ===========================================================================
    Tawazzun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
@@ -1359,6 +1360,9 @@ function CycleCalendar({ logs, onSet }) {
   // start-to-start is the cycle length, and it is what makes two bleeds read as
   // two cycles rather than one broken stretch.
   const runs = periodRuns(logs);
+  // Only a real cycle start gets the marker: bleeding again a few days later is
+  // the same cycle, and marking it as a new one is what made the ring reset.
+  const cycleStartSet = new Set(cycleRuns(logs).map((c) => c.start));
   const lastRun = runs.length ? runs[runs.length - 1] : null;
   const gapDays = runs.length > 1
     ? daysBetween(runs[runs.length - 2][0], runs[runs.length - 1][0])
@@ -1398,7 +1402,7 @@ function CycleCalendar({ logs, onSet }) {
       // just a circle. Bleeds that cross a Saturday cap at the row edge — the
       // line under the grid is what states the real dates.
       const linkPrev = isPeriod && shown(d - 1), linkNext = isPeriod && shown(d + 1);
-      const startsRun = isPeriod && !linkPrev;
+      const startsRun = isPeriod && !linkPrev && (isDraft || cycleStartSet.has(iso(d)));
       return (<div key={i} style={{ position: "relative", aspectRatio: "1", display: "grid", placeItems: "center" }}>
         {isPeriod && <span style={{ position: "absolute", top: "50%", height: 34, transform: "translateY(-50%)",
           // only the outer ends of a run are rounded; a joined end is square, or

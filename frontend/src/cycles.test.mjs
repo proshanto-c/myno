@@ -8,6 +8,7 @@
 import {
   periodRuns, cyclesFrom, currentCycle, pastLengths,
   phaseSpans, phaseAt, ringLength, daysBetween, typicalBleed, addDays,
+  cycleRuns, MIN_CYCLE_GAP,
 } from "./cycles.js";
 
 const TODAY = "2026-08-20";
@@ -74,7 +75,7 @@ test("no logs, no runs", () => {
 // ---- cycles: runs plus the gap between them -------------------------------
 test("one run is one open cycle counting from its first day", () => {
   eq(cyclesFrom(run("2026-08-14", 4), TODAY),
-     [{ start: "2026-08-14", bleed: 4, days: 7, open: true }]);
+     [{ start: "2026-08-14", bleed: 4, spotting: 0, days: 7, open: true }]);
 });
 
 test("bleeding today is day 1, not day 0", () => {
@@ -84,8 +85,8 @@ test("bleeding today is day 1, not day 0", () => {
 test("two runs give one finished cycle measured start to start", () => {
   const l = [...run("2026-07-01", 4), ...run("2026-08-01", 5)];
   eq(cyclesFrom(l, TODAY), [
-    { start: "2026-07-01", bleed: 4, days: 31, open: false },
-    { start: "2026-08-01", bleed: 5, days: 20, open: true },
+    { start: "2026-07-01", bleed: 4, spotting: 0, days: 31, open: false },
+    { start: "2026-08-01", bleed: 5, spotting: 0, days: 20, open: true },
   ]);
 });
 
@@ -211,15 +212,66 @@ test("marking today as a period day puts you back in menstrual", () => {
   eq(phaseAt(cur.days, ringLength(cur.days, 28), cur.bleed), "menstrual");
 });
 
+// ---- spotting is not a new cycle -----------------------------------------
+test("bleeding again a few days later belongs to the same cycle", () => {
+  const l = [...run("2026-08-01", 4), ...run("2026-08-08", 2)];
+  const cycles = cyclesFrom(l, TODAY);
+  eq(cycles.length, 1);
+  eq(cycles[0].start, "2026-08-01");
+  eq(cycles[0].bleed, 4);
+  eq(cycles[0].spotting, 2);
+  eq(cycles[0].days, 20);          // still counting from 1 Aug, not 8 Aug
+});
+
+test("bleeding after the floor starts a new cycle", () => {
+  const l = [...run("2026-08-01", 4), ...run("2026-08-11", 2)];
+  const cycles = cyclesFrom(l, TODAY);
+  eq(cycles.length, 2);
+  eq(cycles[1].start, "2026-08-11");
+  eq(pastLengths(l, TODAY), [10]);
+});
+
+test("the floor is measured from the cycle start, not the last spotting", () => {
+  // 1 Aug, then spots on the 6th and the 9th: all one cycle, because each is
+  // within ten days of the 1st
+  const l = [...run("2026-08-01", 4), ...run("2026-08-06", 1), ...run("2026-08-09", 1)];
+  eq(cyclesFrom(l, TODAY).length, 1);
+  eq(cyclesFrom(l, TODAY)[0].spotting, 2);
+});
+
+test("marking a day right after a period does not reset the ring to day 1", () => {
+  const history = [...run("2026-06-02", 4), ...run("2026-07-04", 4)];
+  const withSpot = [...history, ...run("2026-07-10", 1)];
+  eq(currentCycle(history, TODAY).days, currentCycle(withSpot, TODAY).days);
+});
+
+test("the frontend floor matches the backend's minCycleGapDays", () => {
+  eq(MIN_CYCLE_GAP, 10);
+});
+
+test("cycle starts are the merged ones, not every run", () => {
+  const l = [...run("2026-06-01", 4), ...run("2026-06-06", 1), ...run("2026-07-05", 4)];
+  eq(cycleRuns(l, TODAY).map((c) => c.start), ["2026-06-01", "2026-07-05"]);
+});
+
 // ---- typical bleed: why the phases must not follow the run in progress ----
 test("the typical bleed is the median of finished periods", () => {
   const l = [...run("2026-05-01", 3), ...run("2026-06-01", 5), ...run("2026-07-01", 4), ...run("2026-08-14", 1)];
   eq(typicalBleed(l, TODAY), 4);
 });
 
-test("with nothing finished it uses what there is, then falls back to five", () => {
-  eq(typicalBleed(run("2026-08-14", 6), TODAY), 6);
+test("a period still in progress is a floor, not a length", () => {
+  // one day tapped today: assume the usual five, not a one-day period
+  eq(typicalBleed(logs(TODAY), TODAY), 5);
+  eq(typicalBleed(run("2026-08-14", 6), TODAY), 6);   // already longer than five
   eq(typicalBleed([], TODAY), 5);
+});
+
+test("a first period ever logged still gets a full menstrual phase", () => {
+  const cur = currentCycle(logs(TODAY), TODAY);
+  const bleed = Math.max(cur.bleed, typicalBleed(logs(TODAY), TODAY));
+  eq(phaseAt(1, 28, bleed), "menstrual");
+  eq(phaseAt(3, 28, bleed), "menstrual");     // was follicular before
 });
 
 test("one tapped day does not shrink the menstrual phase to a single day", () => {
@@ -350,6 +402,7 @@ test("five years of daily logs stay fast and correct", () => {
   const ms = Date.now() - t0;
   eq(cycles.length, 61);
   eq(cycles.filter((c) => !c.open).every((c) => c.days === 30), true, "every gap is 30 days: ");
+  eq(cycles.every((c) => c.spotting === 0), true, "no run merged: ");
   eq(ms < 400, true, `took ${ms}ms: `);
 });
 
