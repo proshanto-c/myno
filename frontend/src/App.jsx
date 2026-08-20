@@ -36,6 +36,15 @@ const FONTS = `
 @keyframes spin{ to{ transform:rotate(360deg); } }
 @keyframes pulse{ 0%,100%{ opacity:1 } 50%{ opacity:.45 } }
 @keyframes rise{ from{ opacity:0; transform:translateY(8px) } to{ opacity:1; transform:none } }
+@keyframes halo{ 0%{ r:7; opacity:.55 } 70%{ r:15; opacity:0 } 100%{ r:15; opacity:0 } }
+@keyframes breathe{ 0%,100%{ opacity:1 } 50%{ opacity:.82 } }
+@keyframes fadeUp{ from{ opacity:0; transform:translateY(4px) } to{ opacity:1; transform:none } }
+.halo{ animation:halo 2.8s ease-out infinite; }
+.breathe{ animation:breathe 4s ease-in-out infinite; }
+.fade-up{ animation:fadeUp .45s ease-out both; }
+@media (prefers-reduced-motion: reduce){
+  .halo,.breathe,.fade-up,.spin{ animation:none !important }
+}
 input[type=range].slider{ -webkit-appearance:none; appearance:none; width:100%; height:10px; border-radius:9999px; outline:none; }
 input[type=range].slider::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:30px; height:30px; border-radius:50%; background:#fff; border:4px solid ${C.plum}; box-shadow:0 2px 8px rgba(92,75,125,.28); cursor:pointer; margin-top:-1px; }
 input[type=range].slider::-moz-range-thumb{ width:30px; height:30px; border-radius:50%; background:#fff; border:4px solid ${C.plum}; cursor:pointer; }
@@ -969,38 +978,94 @@ function arcPath(cx, cy, rO, rI, a0, a1) {
   const [x0, y0] = pt(rO, a0), [x1, y1] = pt(rO, a1), [x2, y2] = pt(rI, a1), [x3, y3] = pt(rI, a0);
   return `M${x0.toFixed(2)},${y0.toFixed(2)} A${rO},${rO} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} L${x2.toFixed(2)},${y2.toFixed(2)} A${rI},${rI} 0 ${large} 0 ${x3.toFixed(2)},${y3.toFixed(2)} Z`;
 }
-// WHERE YOU ARE, ON YOUR OWN SCALE.
+// WHERE YOU ARE IN THIS CYCLE.
 //
-// The ring this replaces painted four named phases, placing ovulation at
-// cycle length minus fourteen. For cycles that run 24 to 41 days that is a
-// textbook assumption, not something these logs can support — and it was the
-// one claim on the screen the app couldn't stand behind.
+// Four phases around a ring, sized from this person's own average rather than
+// a stock 28 days: bleeding for the first days, ovulation placed fourteen days
+// before the end, and the rest divided either side. That placement is an
+// estimate — the app can't see ovulation — so the ring says so underneath and
+// the phase never appears anywhere a clinical claim is made.
 //
-// So the shaded arc is where THEIR periods have actually started. A regular
-// cycle draws a narrow band; an irregular one draws a wide one, and the width
-// is the finding rather than a number to read.
-function CycleWindowRing({ day, bleed, avg, lo, hi }) {
-  const S = 196, cx = S / 2, cy = S / 2, rO = 84, rI = 62;
-  const span = Math.max((hi || 0) + 3, (day || 0) + 2, (avg || 28) + 3);
-  const ang = (d) => (d / span) * 2 * Math.PI;
-  const arc = (a0, a1, ro, ri, fill, op) => (
-    <path d={arcPath(cx, cy, ro, ri, Math.max(0.001, a0), Math.min(2 * Math.PI - 0.001, a1))} fill={fill} fillOpacity={op} />);
-  const mr = (rO + rI) / 2;
-  const mx = cx + mr * Math.sin(ang(day || 0)), my = cy - mr * Math.cos(ang(day || 0));
-  return (<svg viewBox={`0 0 ${S} ${S}`} width="100%" style={{ maxWidth: 216, display: "block" }}>
-    <circle cx={cx} cy={cy} r={(rO + rI) / 2} fill="none" stroke={C.low} strokeWidth={rO - rI} />
-    {lo != null && hi != null && hi > lo && arc(ang(lo), ang(hi), rO + 9, rO + 3, C.lilac, 0.85)}
-    {day > 0 && arc(0, ang(day), rO, rI, C.high, 1)}
-    {bleed > 0 && arc(0, ang(bleed), rO, rI, C.roseOn, 1)}
-    {/* the average sits outside the ring: a tick, not a line through the middle */}
-    {avg > 0 && (<line x1={cx + (rO + 1) * Math.sin(ang(avg))} y1={cy - (rO + 1) * Math.cos(ang(avg))}
-      x2={cx + (rO + 11) * Math.sin(ang(avg))} y2={cy - (rO + 11) * Math.cos(ang(avg))}
-      stroke={C.plum} strokeWidth={1.5} strokeDasharray="2 2.5" />)}
-    <circle cx={mx} cy={my} r={7} fill="#fff" stroke={C.plum} strokeWidth={3} />
-    <text x={cx} y={cy - 2} textAnchor="middle" style={{ fontFamily: head, fontWeight: 700, fontSize: 32, fill: C.ink }}>
-      {day == null ? "—" : `Day ${day}`}</text>
-    <text x={cx} y={cy + 18} textAnchor="middle" style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12.5, fill: C.inkVar }}>
-      {avg ? `of about ${avg}` : "start tracking"}</text>
+// The arc sweeps out to today on load, the phase you're in glows and breathes
+// while the others sit back, and the marker carries a slow halo. All of it
+// stops under prefers-reduced-motion.
+const PHASES = [
+  { key: "menstrual",  name: "Menstrual",  from: C.roseDeep, to: C.roseOn,  note: "bleeding" },
+  { key: "follicular", name: "Follicular", from: C.lilac,    to: C.lilacDim, note: "building up" },
+  { key: "ovulatory",  name: "Ovulatory",  from: "#f2d7ab",  to: "#e0b077",  note: "mid-cycle" },
+  { key: "luteal",     name: "Luteal",     from: C.lilacDim, to: C.plumC,   note: "winding down" },
+];
+
+// Boundaries in days, from the cycle length. Luteal is the steady one at about
+// fourteen days, so everything else is measured back from the end.
+function phaseBounds(cyc, bleed) {
+  const bleedEnd = Math.max(1, Math.min(bleed || 5, Math.round(cyc * 0.3)));
+  const ovuMid = Math.max(bleedEnd + 3, cyc - 14);
+  return [
+    { ...PHASES[0], a: 0, b: bleedEnd },
+    { ...PHASES[1], a: bleedEnd, b: Math.max(bleedEnd + 1, ovuMid - 2) },
+    { ...PHASES[2], a: Math.max(bleedEnd + 1, ovuMid - 2), b: Math.min(cyc, ovuMid + 2) },
+    { ...PHASES[3], a: Math.min(cyc, ovuMid + 2), b: cyc },
+  ].filter((p) => p.b > p.a);
+}
+
+// Eases a number to its target once, on mount and on change.
+function useCountUp(target, ms = 950) {
+  const [v, setV] = useState(target || 0);
+  const still = typeof window !== "undefined" && window.matchMedia
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  useEffect(() => {
+    if (target == null) return;
+    if (still) { setV(target); return; }
+    let raf, t0 = 0;
+    const from = 0;
+    const step = (t) => {
+      t0 = t0 || t;
+      const k = Math.min(1, (t - t0) / ms);
+      setV(from + (target - from) * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms, still]);
+  return v;
+}
+
+function CycleRing({ day, bleed, avg }) {
+  const S = 200, cx = S / 2, cy = S / 2, rO = 86, rI = 62, mr = (rO + rI) / 2;
+  const cyc = Math.max(Math.round(avg || 28), (day || 0) + 1);
+  const segs = phaseBounds(cyc, bleed);
+  const shown = useCountUp(day == null ? null : day);
+  const ang = (d) => (d / cyc) * 2 * Math.PI;
+  const here = day == null ? null : (segs.find((p) => day > p.a && day <= p.b) || segs[segs.length - 1]);
+  const mx = cx + mr * Math.sin(ang(shown)), my = cy - mr * Math.cos(ang(shown));
+
+  return (<svg viewBox={`0 0 ${S} ${S}`} width="100%" style={{ maxWidth: 220, display: "block", overflow: "visible" }}>
+    <defs>
+      {segs.map((p) => (<linearGradient key={p.key} id={`g-${p.key}`} x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stopColor={p.from} /><stop offset="100%" stopColor={p.to} />
+      </linearGradient>))}
+      <filter id="softglow" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="4" />
+      </filter>
+    </defs>
+    <circle cx={cx} cy={cy} r={mr} fill="none" stroke={C.low} strokeWidth={rO - rI} />
+    {here && (<path d={arcPath(cx, cy, rO + 2, rI - 2, ang(here.a) + 0.02, ang(here.b) - 0.02)}
+      fill={`url(#g-${here.key})`} filter="url(#softglow)" opacity={0.5} />)}
+    {segs.map((p) => { const on = here && here.key === p.key; return (
+      <path key={p.key} className={on ? "breathe" : undefined}
+        d={arcPath(cx, cy, on ? rO + 1 : rO - 1, on ? rI - 1 : rI + 1, ang(p.a) + 0.03, ang(p.b) - 0.03)}
+        fill={`url(#g-${p.key})`} opacity={on ? 1 : 0.34}
+        style={{ transition: "opacity .6s ease" }} />); })}
+    {day != null && (<g>
+      <circle className="halo" cx={mx} cy={my} r={7} fill={C.plum} opacity={0.4} />
+      <circle cx={mx} cy={my} r={7} fill="#fff" stroke={C.plum} strokeWidth={3} />
+    </g>)}
+    <text x={cx} y={cy - 2} textAnchor="middle" style={{ fontFamily: head, fontWeight: 700, fontSize: 34, fill: C.ink }}>
+      {day == null ? "—" : `Day ${Math.max(1, Math.round(shown))}`}</text>
+    <text key={here ? here.key : "none"} className="fade-up" x={cx} y={cy + 20} textAnchor="middle"
+      style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, fill: C.inkVar }}>
+      {here ? here.name : avg ? `of about ${avg}` : "start tracking"}</text>
   </svg>);
 }
 
@@ -1048,7 +1113,6 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   // the arc: the shortest and longest cycle they have actually had
   const past = cycles.filter((c) => !c.open).map((c) => c.days);
   const span = past.length >= 2 ? [Math.min(...past), Math.max(...past)] : [null, null];
-  const cband = assessment?.cycles?.band;
   const cycleNote = (() => {
     if (!current) return "Mark a period on the calendar and this fills in.";
     if (current.days <= current.bleed) return `Day ${current.days} of your period.`;
@@ -1064,21 +1128,19 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   const phaseTiles = (
     <Card style={{ padding: 20, boxShadow: SH_SM }}>
       <Label>This cycle</Label>
-      {/* the ring, the bar and the note all read the same current cycle */}
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}>
-        <CycleWindowRing day={current?.days} bleed={current?.bleed} avg={avg} lo={span[0]} hi={span[1]} /></div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 6 }}>
-        {[["bleeding", C.roseOn], ["so far", C.high], ["when yours have started", C.lilac]].map(([n, col]) => (
-          <span key={n} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
-            <span style={{ width: 9, height: 9, borderRadius: "50%", background: col }} /> {n}</span>))}
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
+        <CycleRing day={current?.days} bleed={current?.bleed} avg={avg} /></div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 12 }}>
+        {PHASES.map((p) => (<span key={p.key} style={{ display: "inline-flex", alignItems: "center", gap: 5,
+          fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
+          <span style={{ width: 9, height: 9, borderRadius: "50%", background: `linear-gradient(135deg, ${p.from}, ${p.to})` }} /> {p.name}</span>))}
       </div>
-      {current && (<div style={{ marginTop: 14 }}>
-        <CurrentCycleBar cycle={current} avg={avg} hi={cband?.longDays} />
-      </div>)}
-      <div style={{ textAlign: "center", fontSize: 12.5, lineHeight: 1.5, marginTop: 8,
+      <div style={{ textAlign: "center", fontSize: 13.5, lineHeight: 1.55, marginTop: 12,
         color: late ? C.roseOn : C.inkVar }}>{cycleNote}</div>
-      {span[0] != null && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 4 }}>
-        Your last {past.length} started between day {span[0]} and day {span[1]}.</div>}
+      {span[0] != null && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 12, color: C.outline, marginTop: 6 }}>
+        Yours have started anywhere from day {span[0]} to day {span[1]}.</div>}
+      <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 6 }}>
+        Phases are estimated from your average — ovulation isn't something the app can see.</div>
     </Card>);
   const recordCTA = (
     <button onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
