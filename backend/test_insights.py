@@ -36,9 +36,22 @@ def test_runs_of_period_days_never_become_one_day_cycles():
     assert ins.cycle_gaps(logs) == []
     assert ins.average_cycle_days(logs) is None
 
-def test_gaps_shorter_than_the_floor_are_dropped():
+def test_a_missed_day_inside_a_period_does_not_split_it():
+    # bled on days 0-1, missed day 2, bled again on day 3: one period
+    logs = days(30, period=[i in (0, 1, 3, 20) for i in range(30)])
+    assert ins.cycle_starts(logs) == ["2026-01-01", "2026-01-21"]
+    assert ins.cycle_gaps(logs) == [20]
+
+def test_a_short_cycle_is_reported_not_filtered_away():
+    # bleeding again a week later is a 7-day cycle — a finding, not noise
+    logs = days(30, period=[i in (0, 7, 20) for i in range(30)])
+    assert ins.cycle_gaps(logs) == [7, 13]
+
+def test_the_tolerance_is_configurable_and_small():
+    assert ins.RULES["sameBleedGapDays"] == 2
+    loose = {**ins.RULES, "sameBleedGapDays": 6}
     logs = days(30, period=[i in (0, 5, 20) for i in range(30)])
-    assert ins.cycle_gaps(logs) == [15]      # the 5-day gap is the same bleed
+    assert ins.cycle_gaps(logs, loose) == [20]
 
 def test_cycle_stats_need_two_gaps():
     one = ins.summarise(days(40, period=[i == 0 or i == 28 for i in range(40)]))
@@ -206,9 +219,11 @@ def test_every_day_a_period_day_is_one_run():
     s = ins.summarise(days(60, period=True))
     assert s["periodsLogged"] == 1 and s["cycleCount"] == 0 and s["cycle"] is None
 
-def test_alternate_day_bleeding_is_not_a_string_of_cycles():
+def test_alternate_day_bleeding_is_one_long_bleed():
+    # every other day for two months is one continuous bleed, not 30 cycles
     logs = days(60, period=[i % 2 == 0 for i in range(60)])
-    assert ins.cycle_gaps(logs) == []          # every gap is 2 days, under the floor
+    assert ins.cycle_starts(logs) == ["2026-01-01"]
+    assert ins.cycle_gaps(logs) == []
 
 def test_out_of_order_logs_are_read_in_order():
     logs = list(reversed(days(70, period=[i in (0, 28, 56) for i in range(70)])))

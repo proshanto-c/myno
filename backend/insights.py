@@ -28,10 +28,13 @@ RULES = {
     "highSugar": 3,
     "severePain": 7,
 
-    # Bleeding runs several days; anything closer together than this is the
-    # same period, not a new cycle. Without it a 5-day bleed looks like four
-    # one-day cycles and drags the average to nonsense.
-    "minCycleGapDays": 10,
+    # How many unlogged days can sit inside one period. People miss a day, or
+    # bleed too lightly to mark it, so 1 Aug + 4 Aug is one period. This is a
+    # logging tolerance, not a claim about bodies — and it is deliberately
+    # small, because bleeding again a week later is a short cycle, which is a
+    # finding criteria.py should raise rather than something to absorb. The
+    # clinical numbers (21/35/45 days) live there, from the 2023 guideline.
+    "sameBleedGapDays": 2,
 
     # A straight line through fewer points than this is noise, and a drift
     # smaller than this per week is not worth telling anyone about.
@@ -135,25 +138,30 @@ def slope_per_week(ys, rules=None):
 
 
 # ---- cycles ----------------------------------------------------------------
-def cycle_starts(logs):
-    """The first day of each bleed. A period day whose day before was also one
-    continues the same period; it does not start a new cycle."""
+def cycle_starts(logs, rules=None):
+    """The first day of each period. Days that run together are one period, and
+    so are days separated by no more than the logging tolerance — a missed day
+    in the middle of a bleed should not split it into two."""
+    R = rules or RULES
     days = sorted({l["date"] for l in logs if l.get("period")})
     starts, prev = [], None
     for d in days:
         day = dt.date.fromisoformat(d)
-        if prev is None or (day - prev).days > 1:
+        if prev is None or (day - prev).days - 1 > R["sameBleedGapDays"]:
             starts.append(d)
         prev = day
     return starts
 
 
 def cycle_gaps(logs, rules=None):
-    """Days between consecutive cycle starts, with same-period runs dropped."""
-    R = rules or RULES
-    starts = [dt.date.fromisoformat(d) for d in cycle_starts(logs)]
-    gaps = [(starts[i] - starts[i - 1]).days for i in range(1, len(starts))]
-    return [g for g in gaps if g >= R["minCycleGapDays"]]
+    """Days between consecutive period starts.
+
+    Short gaps are kept. A seven-day cycle is not noise to be filtered out, it
+    is the short-cycle finding the criteria exist to raise; dropping it here
+    would hide it from the person and from their doctor.
+    """
+    starts = [dt.date.fromisoformat(d) for d in cycle_starts(logs, rules)]
+    return [(starts[i] - starts[i - 1]).days for i in range(1, len(starts))]
 
 
 def average_cycle_days(logs, rules=None):

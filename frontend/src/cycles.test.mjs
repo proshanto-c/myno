@@ -8,7 +8,7 @@
 import {
   periodRuns, cyclesFrom, currentCycle, pastLengths,
   phaseSpans, phaseAt, ringLength, daysBetween, typicalBleed, addDays,
-  cycleRuns, MIN_CYCLE_GAP,
+  cycleRuns, SAME_BLEED_GAP,
 } from "./cycles.js";
 
 const TODAY = "2026-08-20";
@@ -75,7 +75,7 @@ test("no logs, no runs", () => {
 // ---- cycles: runs plus the gap between them -------------------------------
 test("one run is one open cycle counting from its first day", () => {
   eq(cyclesFrom(run("2026-08-14", 4), TODAY),
-     [{ start: "2026-08-14", bleed: 4, spotting: 0, days: 7, open: true }]);
+     [{ start: "2026-08-14", bleed: 4, gapDays: 0, days: 7, open: true }]);
 });
 
 test("bleeding today is day 1, not day 0", () => {
@@ -85,8 +85,8 @@ test("bleeding today is day 1, not day 0", () => {
 test("two runs give one finished cycle measured start to start", () => {
   const l = [...run("2026-07-01", 4), ...run("2026-08-01", 5)];
   eq(cyclesFrom(l, TODAY), [
-    { start: "2026-07-01", bleed: 4, spotting: 0, days: 31, open: false },
-    { start: "2026-08-01", bleed: 5, spotting: 0, days: 20, open: true },
+    { start: "2026-07-01", bleed: 4, gapDays: 0, days: 31, open: false },
+    { start: "2026-08-01", bleed: 5, gapDays: 0, days: 20, open: true },
   ]);
 });
 
@@ -212,46 +212,48 @@ test("marking today as a period day puts you back in menstrual", () => {
   eq(phaseAt(cur.days, ringLength(cur.days, 28), cur.bleed), "menstrual");
 });
 
-// ---- spotting is not a new cycle -----------------------------------------
-test("bleeding again a few days later belongs to the same cycle", () => {
-  const l = [...run("2026-08-01", 4), ...run("2026-08-08", 2)];
+// ---- one period, however patchily it was logged ------------------------
+test("a missed day in the middle of a period keeps it one period", () => {
+  const l = [...run("2026-08-01", 2), ...run("2026-08-04", 2)];   // 3 Aug missed
   const cycles = cyclesFrom(l, TODAY);
   eq(cycles.length, 1);
   eq(cycles[0].start, "2026-08-01");
   eq(cycles[0].bleed, 4);
-  eq(cycles[0].spotting, 2);
-  eq(cycles[0].days, 20);          // still counting from 1 Aug, not 8 Aug
+  eq(cycles[0].gapDays, 1);
 });
 
-test("bleeding after the floor starts a new cycle", () => {
-  const l = [...run("2026-08-01", 4), ...run("2026-08-11", 2)];
-  const cycles = cyclesFrom(l, TODAY);
-  eq(cycles.length, 2);
-  eq(cycles[1].start, "2026-08-11");
-  eq(pastLengths(l, TODAY), [10]);
+test("three clear days is two bleeds, not one", () => {
+  const l = [...run("2026-08-01", 2), ...run("2026-08-06", 2)];   // 3 clear days
+  eq(cyclesFrom(l, TODAY).length, 2);
 });
 
-test("the floor is measured from the cycle start, not the last spotting", () => {
-  // 1 Aug, then spots on the 6th and the 9th: all one cycle, because each is
-  // within ten days of the 1st
-  const l = [...run("2026-08-01", 4), ...run("2026-08-06", 1), ...run("2026-08-09", 1)];
+test("bleeding a week later is a short cycle, not something to absorb", () => {
+  // the old ten-day floor swallowed this; a 7-day cycle is exactly the kind of
+  // finding the criteria are meant to raise
+  const l = [...run("2026-08-01", 3), ...run("2026-08-08", 3)];
+  eq(cyclesFrom(l, TODAY).length, 2);
+  eq(pastLengths(l, TODAY), [7]);
+});
+
+test("the tolerance is measured from the end of the bleed, not its start", () => {
+  // a 6-day period (1-6 Aug), two clear days, then more on the 9th: one period,
+  // even though the 9th is eight days after it began
+  const l = [...run("2026-08-01", 6), ...run("2026-08-09", 2)];
   eq(cyclesFrom(l, TODAY).length, 1);
-  eq(cyclesFrom(l, TODAY)[0].spotting, 2);
+  eq(cyclesFrom(l, TODAY)[0].bleed, 8);
+  // one day further out and it is its own bleed
+  eq(cyclesFrom([...run("2026-08-01", 6), ...run("2026-08-10", 2)], TODAY).length, 2);
 });
 
-test("marking a day right after a period does not reset the ring to day 1", () => {
-  const history = [...run("2026-06-02", 4), ...run("2026-07-04", 4)];
-  const withSpot = [...history, ...run("2026-07-10", 1)];
-  eq(currentCycle(history, TODAY).days, currentCycle(withSpot, TODAY).days);
+test("the tolerance is a logging allowance, kept small", () => {
+  eq(SAME_BLEED_GAP, 2);
 });
 
-test("the frontend floor matches the backend's minCycleGapDays", () => {
-  eq(MIN_CYCLE_GAP, 10);
-});
-
-test("cycle starts are the merged ones, not every run", () => {
+test("cycle starts are the merged periods, not every run", () => {
+  // 1-4 Jun, one clear day, a spot on the 6th: one period. July is the next.
   const l = [...run("2026-06-01", 4), ...run("2026-06-06", 1), ...run("2026-07-05", 4)];
   eq(cycleRuns(l, TODAY).map((c) => c.start), ["2026-06-01", "2026-07-05"]);
+  eq(cycleRuns(l, TODAY)[0].bleed, 5);
 });
 
 // ---- typical bleed: why the phases must not follow the run in progress ----
@@ -402,7 +404,7 @@ test("five years of daily logs stay fast and correct", () => {
   const ms = Date.now() - t0;
   eq(cycles.length, 61);
   eq(cycles.filter((c) => !c.open).every((c) => c.days === 30), true, "every gap is 30 days: ");
-  eq(cycles.every((c) => c.spotting === 0), true, "no run merged: ");
+  eq(cycles.every((c) => c.gapDays === 0), true, "no run merged: ");
   eq(ms < 400, true, `took ${ms}ms: `);
 });
 

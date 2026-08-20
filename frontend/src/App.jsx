@@ -8,7 +8,7 @@ import {
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
-  cycleRuns, MIN_CYCLE_GAP, DAY_MS } from "./cycles.js";
+  cycleRuns, SAME_BLEED_GAP, DAY_MS } from "./cycles.js";
 
 /* ===========================================================================
    Tawazzun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
@@ -1374,12 +1374,12 @@ function CycleCalendar({ logs, onSet }) {
     ? daysBetween(runs[runs.length - 2][0], runs[runs.length - 1][0])
     : null;
   const pretty = (d) => new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-  // A day marked within MIN_CYCLE_GAP of the cycle's start is more bleeding, not
-  // a new cycle — a six-day cycle doesn't exist. Left unsaid, the tap looks like
-  // it did nothing, so the calendar explains itself.
+  // A day marked a day or two after a bleed is the same period continuing, so
+  // it doesn't start a new cycle. Left unsaid, the tap looks like it did
+  // nothing, so the calendar explains itself.
   const cur = currentCycle(logs);
-  const spottingNote = cur && cur.spotting > 0
-    ? `Counted inside this cycle — a new one needs ${MIN_CYCLE_GAP} days between starts, and this began ${pretty(cur.start)}.`
+  const spottingNote = cur && cur.gapDays > 0
+    ? `Counted as the same period — up to ${SAME_BLEED_GAP} missed days are treated as one bleed. This one began ${pretty(cur.start)}.`
     : null;
   const runLine = lastRun && (() => {
     const a = lastRun[0], b = lastRun[lastRun.length - 1], n = lastRun.length;

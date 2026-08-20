@@ -44,22 +44,35 @@ export function periodRuns(logs, today = todayISO()) {
   return runs;
 }
 
-/** Bleeding again a few days after a period is that period, not a new cycle.
- *  The same floor the backend uses (insights.RULES.minCycleGapDays), so the
- *  ring, the ribbon and the server's statistics all count the same cycles. */
-export const MIN_CYCLE_GAP = 10;
+/**
+ * How many clear days can sit inside one period before it counts as two.
+ *
+ * This is a logging tolerance, not a claim about bodies: people miss a day, or
+ * bleed too lightly to mark it, and 1 Aug + 4 Aug is one period rather than
+ * two. Anything further apart is a separate bleed — including bleeding a week
+ * later, because a cycle that short is a finding the criteria are meant to
+ * raise, not something to quietly absorb.
+ *
+ * The clinical numbers (21/35/45 days, 90 days, 8 cycles a year) live in
+ * criteria.py and come from the 2023 international guideline. This one is ours,
+ * and it is about how people log, not about physiology.
+ */
+export const SAME_BLEED_GAP = 2;
 
-/** Runs grouped into cycles: a run beginning fewer than MIN_CYCLE_GAP days
- *  after the current cycle started is spotting within it, not the next one. */
-export function cycleRuns(logs, today = todayISO(), minGap = MIN_CYCLE_GAP) {
+/** Runs grouped into periods: two runs with no more than SAME_BLEED_GAP clear
+ *  days between them are one period, and each period opens a cycle. */
+export function cycleRuns(logs, today = todayISO(), tolerance = SAME_BLEED_GAP) {
   const out = [];
   for (const run of periodRuns(logs, today)) {
     const last = out[out.length - 1];
-    if (last && daysBetween(last.start, run[0]) < minGap) {
-      last.spotting = (last.spotting || 0) + run.length;
+    const clear = last ? daysBetween(last.lastDay, run[0]) - 1 : Infinity;
+    if (last && clear <= tolerance) {
+      last.bleed += run.length;
+      last.gapDays += clear;
+      last.lastDay = run[run.length - 1];
       continue;
     }
-    out.push({ start: run[0], bleed: run.length, spotting: 0 });
+    out.push({ start: run[0], lastDay: run[run.length - 1], bleed: run.length, gapDays: 0 });
   }
   return out;
 }
@@ -73,7 +86,7 @@ export function cyclesFrom(logs, today = todayISO()) {
     return {
       start: c.start,
       bleed: c.bleed,
-      spotting: c.spotting || 0,
+      gapDays: c.gapDays,
       days: next ? daysBetween(c.start, next.start) : daysBetween(c.start, today) + 1,
       open: !next,
     };
