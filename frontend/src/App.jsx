@@ -1719,28 +1719,33 @@ function InsightsScreen({ ins, logs, settings, wide }) {
   </div>);
 
 
-  // What someone came here to read, in the order they'd want it: the overview,
-  // then their sections — with the cycle detail sitting right under the cycle
-  // section rather than as a second, disconnected cycle card.
+  // Everything you read comes first — the overview, then your five sections
+  // with the cycle detail under the cycle one, then the highlights. The charts
+  // are a block at the end: you go looking for them, they don't lead.
   const readCards = [];
   (stats?.byCategory || []).forEach((g, i) => {
     readCards.push(sectionCards[i]);
     if (g.key === "cycle" && cycleCard) readCards.push(cycleCard);
   });
-  // The tools you reach for after reading, not before.
-  const toolCards = [trendsCard, explorerCard, highlights];
+  const chartCards = [trendsCard, explorerCard];
   const stack = (cards, gap) => cards.filter(Boolean).map((card, i) => (
     <div key={i} style={{ marginBottom: gap }}>{card}</div>));
+  const grid = (cards, cols) => (
+    <div style={{ display: "grid", gridTemplateColumns: cols, gap: 18, alignItems: "start" }}>
+      {cards.filter(Boolean).map((card, i) => <div key={i}>{card}</div>)}</div>);
+  const chartHeading = (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "26px 0 12px" }}>
+      <BarChart3 size={17} color={C.plum} /><Label>Charts</Label></div>);
 
   if (wide) return (<div>
     <H size={28} style={{ marginBottom: 16 }}>Insights</H>{subNav}
     {view === "track" ? (
       <div style={{ maxWidth: 760 }}>{suggestionsCard}<div style={{ marginTop: 20 }}>{disclaimer}</div></div>
     ) : (<>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
-        <div>{stack([summaryCard, ...readCards], 18)}</div>
-        <div>{stack([statsLoading && loadingCard, ...toolCards], 18)}</div>
-      </div>
+      {stack([summaryCard, statsLoading && loadingCard], 18)}
+      {grid([...readCards, highlights], "1fr 1fr")}
+      {chartHeading}
+      {grid(chartCards, "1fr 1fr")}
       <div style={{ marginTop: 20 }}>{disclaimer}</div>
     </>)}
   </div>);
@@ -1751,7 +1756,9 @@ function InsightsScreen({ ins, logs, settings, wide }) {
       {suggestionsCard}
       <div style={{ marginTop: 16 }}>{disclaimer}</div>
     </>) : (<>
-      {stack([summaryCard, statsLoading && loadingCard, ...readCards, ...toolCards], 18)}
+      {stack([summaryCard, statsLoading && loadingCard, ...readCards, highlights], 18)}
+      {chartHeading}
+      {stack(chartCards, 18)}
       <div style={{ marginTop: 16 }}>{disclaimer}</div>
     </>)}
   </div>);
