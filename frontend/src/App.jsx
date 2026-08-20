@@ -323,8 +323,11 @@ function BodyMap({ value, onChange }) {
   return (<div>
     <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
       {["front", "back"].map((v) => <Chip key={v} active={view === v} onClick={() => setView(v)}>{v}</Chip>)}
-      {points.length > 0 && <button onClick={() => onChange([])} style={{ marginLeft: "auto", background: "none", border: "none",
-        cursor: "pointer", fontFamily: bodyf, fontSize: 12.5, color: C.outline }}>clear {points.length}</button>}
+      {points.length > 0 && <button onClick={() => onChange([])} style={{ marginLeft: "auto",
+        display: "inline-flex", alignItems: "center", gap: 5, background: C.surface,
+        border: `1.5px solid ${C.bleed}`, borderRadius: 9999, padding: "5px 11px", cursor: "pointer",
+        fontFamily: bodyf, fontWeight: 700, fontSize: 12, color: C.bleed }}>
+        <X size={13} /> Clear {points.length === 1 ? "marker" : `all ${points.length}`}</button>}
     </div>
     <svg viewBox="0 0 100 205" onClick={add} style={{ width: "100%", maxWidth: 168, display: "block", margin: "0 auto",
       cursor: "crosshair", touchAction: "manipulation" }}>
@@ -2150,12 +2153,19 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   // Folded away by default: the sections above answer the question someone came
   // with, and the charts are for when they want to go digging.
   const chartHeading = (
-    <button onClick={() => setChartsOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 8,
-      margin: "26px 0 12px", background: "none", border: "none", padding: 0, width: "100%", cursor: "pointer",
-      textAlign: "left" }}>
-      <BarChart3 size={17} color={C.plum} /><Label>Charts</Label>
-      <span style={{ fontFamily: bodyf, fontSize: 11.5, color: C.outline }}>{chartCards.filter(Boolean).length}</span>
-      <ChevronRight size={16} color={C.outline} style={{ marginLeft: "auto",
+    <button onClick={() => setChartsOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 10,
+      margin: "26px 0 14px", width: "100%", cursor: "pointer", textAlign: "left", padding: "13px 16px",
+      borderRadius: 16, background: chartsOpen ? C.lilac : C.surface,
+      border: `1.5px solid ${chartsOpen ? C.plum : C.outlineVar}`, boxShadow: chartsOpen ? "none" : SH_SM,
+      transition: "background-color .2s ease, border-color .2s ease" }}>
+      <span style={{ width: 30, height: 30, borderRadius: 9, background: chartsOpen ? C.surface : C.low,
+        display: "grid", placeItems: "center", flexShrink: 0 }}><BarChart3 size={16} color={C.plum} /></span>
+      <span>
+        <span style={{ display: "block", fontFamily: head, fontWeight: 600, fontSize: 16, color: C.ink }}>Charts</span>
+        <span style={{ fontFamily: bodyf, fontSize: 12, color: C.inkVar }}>
+          {chartsOpen ? "Tap to hide" : "Explore any two things you track"}</span>
+      </span>
+      <ChevronRight size={18} color={C.plum} style={{ marginLeft: "auto", flexShrink: 0,
         transform: chartsOpen ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
     </button>);
 
