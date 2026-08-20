@@ -52,19 +52,10 @@ export default function Landing() {
       "radial-gradient(circle at top right, #f3e8f6 0%, #fbefef 45%, #ffe2e2 100%)",
       display: "grid", placeItems: "center", padding: "40px 22px" }}>
       <main style={{ width: "100%", maxWidth: 860 }}>
-        <header style={{ textAlign: "center", marginBottom: 34 }}>
-          <div style={{ fontFamily: head, fontWeight: 700, fontSize: 21, color: APP.plum,
-            letterSpacing: "-0.01em" }}>Polyendocrine Metabolic Ovarian Syndrome</div>
-          <p style={{ fontFamily: body, fontSize: 15, lineHeight: 1.55, color: APP.inkVar,
-            margin: "8px auto 0", maxWidth: 460 }}>
-            Track it, or read the evidence behind it.
-          </p>
-        </header>
-
         <div style={{ display: "grid", gap: 20, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
           <Door href="/tawaazun/" ring={APP.plum} border="#efe3ef" tint={APP.rose}
             wordmark="توازن" latin="Tawaazun"
-            who="If you are living with PMOS"
+            who="If you have PMOS, or think you might"
             what="Track your cycle, symptoms and days by talking. See the patterns in your own data, and find out whether what you are seeing is worth taking to a doctor." />
           <Door href="/dalil/" ring="#3e3159" border="#e6e0ee" tint="#eeeaf3"
             wordmark="دليل" latin="Dalīl"
