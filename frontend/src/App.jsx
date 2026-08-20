@@ -346,25 +346,6 @@ function genSyntheticLogs() {
   }
   return logs;
 }
-const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
-function computeInsights(logs) {
-  // periods can span several days; derive cycle STARTS (a period day whose prior
-  // day wasn't one) so cycle length is correct even with multi-day bleeding.
-  const periodDates = logs.filter((l) => l.period).map((l) => l.date).sort();
-  const starts = periodDates.filter((d, i) => i === 0 || (new Date(d) - new Date(periodDates[i - 1])) / 86400000 > 1.5);
-  const gaps = [];
-  for (let i = 1; i < starts.length; i++) gaps.push(Math.round((new Date(starts[i]) - new Date(starts[i - 1])) / 86400000));
-  const avgGap = gaps.length ? Math.round(mean(gaps)) : null;
-  const hiNext = [], loNext = []; for (let i = 1; i < logs.length; i++) (logs[i - 1].sugar >= 7 ? hiNext : loNext).push(logs[i].pain);
-  const painHi = mean(hiNext), painLo = mean(loNext);
-  const bloatPain = mean(logs.filter((l) => l.bloating).map((l) => l.pain)); const noBloatPain = mean(logs.filter((l) => !l.bloating).map((l) => l.pain));
-  const last = logs[logs.length - 1]; const lastStart = starts.length ? starts[starts.length - 1] : null;
-  const dayN = (last && lastStart) ? Math.round((new Date(last.date) - new Date(lastStart)) / 86400000) : null;
-  let highPainGap = 0; for (let i = logs.length - 1; i >= 0; i--) { if (logs[i].pain >= 7) break; highPainGap++; }
-  return { avgGap, minGap: gaps.length ? Math.min(...gaps) : null, maxGap: gaps.length ? Math.max(...gaps) : null, gaps,
-    painHi, painLo, bloatPain, noBloatPain, hairGrowthRate: mean(logs.map((l) => l.hairGrowth ? 1 : 0)), hairLossRate: mean(logs.map((l) => l.hairLoss ? 1 : 0)),
-    avgPain: mean(logs.map((l) => l.pain)), avgMood: mean(logs.map((l) => l.mood)), periodsLogged: starts.length, dayN, highPainGap, loggedDays: logs.length };
-}
 // ---- diagnostic criteria ---------------------------------------------------
 // The rules live in backend/criteria.py — thresholds, bands, the lot — so the
 // indicator, the cycle labels and the advocacy talking points cannot drift
@@ -453,26 +434,33 @@ function CriterionRow({ title, source, result }) {
 }
 
 function DoctorIndicator({ assessment }) {
+  const [open, setOpen] = useState(true);
   const { recommendation: rec, cycles, androgen } = assessment;
   const tone = TONE[rec.tone]; const Icon = tone.Icon;
   return (<Card style={{ marginBottom: 14 }}>
-    <Label>Should you see a doctor?</Label>
+    <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", padding: 0, width: "100%",
+      cursor: "pointer", display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+      <Label>Should you see a doctor?</Label>
+      <ChevronRight size={18} color={C.outline} style={{ marginLeft: "auto", transform: open ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
+    </button>
     <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: 14, borderRadius: 14, background: tone.bg, margin: "10px 0 4px" }}>
       <Icon size={20} color={tone.fg} style={{ flexShrink: 0, marginTop: 2 }} />
       <div>
         <div style={{ fontFamily: head, fontWeight: 700, fontSize: 16, color: tone.fg }}>{rec.headline}</div>
-        <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 13.5, lineHeight: 1.5, color: tone.fg }}>
+        {open && <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 13.5, lineHeight: 1.5, color: tone.fg }}>
           {rec.why.map((w, i) => <li key={i}>{w}</li>)}
-        </ul>
+        </ul>}
       </div>
     </div>
-    <CriterionRow title="Irregular cycles" source="From your logged period dates" result={cycles} />
-    <CriterionRow title="Hair & skin signs" source="Self-reported — a clinician confirms by examination" result={androgen} />
-    <div style={{ padding: "12px 0 0", borderTop: `1px solid ${C.high}`, fontSize: 12, lineHeight: 1.5, color: C.outline }}>
-      This is not a diagnosis and can't become one. Two further criteria — blood androgens, and
-      ovarian imaging or AMH — can only be assessed in a clinic, and thyroid, prolactin, CAH and
-      Cushing's have to be ruled out before anyone can name a condition.
-    </div>
+    {open && <>
+      <CriterionRow title="Irregular cycles" source="From your logged period dates" result={cycles} />
+      <CriterionRow title="Hair & skin signs" source="Self-reported — a clinician confirms by examination" result={androgen} />
+      <div style={{ padding: "12px 0 0", borderTop: `1px solid ${C.high}`, fontSize: 12, lineHeight: 1.5, color: C.outline }}>
+        This is not a diagnosis. Blood androgens and ovarian imaging or AMH can only be assessed in a
+        clinic, and thyroid, prolactin, CAH and Cushing's have to be ruled out before anyone can name
+        a condition.
+      </div>
+    </>}
   </Card>);
 }
 
@@ -567,16 +555,37 @@ function CriteriaLab({ derived, lab, setLab, rules, labRules, setLabRules }) {
   </Card>);
 }
 
-// ---- Rotterdam triad (Prepare/Clinician) -----------------------------------
+// ---- the three criteria ----------------------------------------------------
+// A real Venn: the three centres sit on an equilateral triangle one radius
+// apart, so every pair overlaps and all three share a middle. That middle is
+// the point — a diagnosis needs two of the three, and the third can only be
+// assessed in a clinic, so it is drawn dashed and never filled.
+const TRIAD = (() => {
+  const r = 52, side = 52, cx = 120, cy = 104, R = side / Math.sqrt(3), h = Math.cos(Math.PI / 6);
+  const at = [[cx, cy - R], [cx - side / 2, cy + R / 2], [cx + side / 2, cy + R / 2]];
+  const out = [[0, -1], [-h, 0.5], [h, 0.5]];
+  return { r, at, label: at.map(([x, y], i) => [x + out[i][0] * r * 0.66, y + out[i][1] * r * 0.66 + 3]) };
+})();
+
 function Triad({ axes }) {
-  const s = 220, r = 54, cx = s / 2; const p1 = { x: cx, y: s * 0.36 }, p2 = { x: cx - r * 0.78, y: s * 0.6 }, p3 = { x: cx + r * 0.78, y: s * 0.6 };
-  const circ = (p, met, locked) => (<circle cx={p.x} cy={p.y} r={r} fill={locked ? "rgba(115,102,136,0.06)" : met ? "rgba(223,163,168,0.30)" : "rgba(92,75,125,0.08)"} stroke={locked ? C.outline : met ? C.roseDeep : C.plumC} strokeWidth={met ? 2.5 : 1.5} strokeDasharray={locked ? "5 5" : "none"} />);
-  return (<svg viewBox={`0 0 ${s} ${s}`} width="100%" style={{ maxWidth: 240 }}>
-    {circ(p1, axes.ovulatory.met)}{circ(p2, axes.androgen.met)}{circ(p3, axes.morphology.met, true)}
-    <text x={p1.x} y={p1.y - r * 0.3} textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 9, fontWeight: 600, fill: C.ink }}>OVULATION</text>
-    <text x={p2.x} y={p2.y + r * 0.5} textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 9, fontWeight: 600, fill: C.ink }}>ANDROGEN</text>
-    <text x={p3.x} y={p3.y + r * 0.42} textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 9, fontWeight: 600, fill: C.outline }}>MORPHOLOGY</text>
-    <Lock x={p3.x - 6} y={p3.y + r * 0.52} width={12} height={12} color={C.outline} />
+  if (!axes) return null;
+  const parts = [{ key: "ovulatory", text: "CYCLES" }, { key: "androgen", text: "ANDROGEN" }, { key: "morphology", text: "OVARIES" }];
+  const skin = (met) => met === null
+    ? { fill: "rgba(115,102,136,0.05)", stroke: C.outline, width: 1.5, dash: "5 5" }
+    : met ? { fill: "rgba(223,163,168,0.30)", stroke: C.roseDeep, width: 2.5, dash: "none" }
+          : { fill: "rgba(92,75,125,0.08)", stroke: C.plumC, width: 1.5, dash: "none" };
+  return (<svg viewBox="0 0 240 205" width="100%" style={{ maxWidth: 260 }}>
+    {parts.map(({ key }, i) => {
+      const k = skin(axes[key].met), [x, y] = TRIAD.at[i];
+      return <circle key={key} cx={x} cy={y} r={TRIAD.r} fill={k.fill} stroke={k.stroke} strokeWidth={k.width} strokeDasharray={k.dash} />;
+    })}
+    {parts.map(({ key, text }, i) => {
+      const [x, y] = TRIAD.label[i];
+      return <text key={key} x={x} y={y} textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 9, fontWeight: 700,
+        fill: axes[key].met === null ? C.outline : C.ink }}>{text}</text>;
+    })}
+    <text x="120" y="196" textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 8.5, fill: C.outline }}>
+      two of three — the third needs a clinic</text>
   </svg>);
 }
 
@@ -622,7 +631,20 @@ export default function App() {
   })(); }, []);
   useEffect(() => { if (ready) saveState({ profile, logs, settings }); }, [profile, logs, settings, ready]);
 
-  const ins = useMemo(() => computeInsights(logs), [logs]);
+  // Derived stats come from the backend (insights.py) so the client and the
+  // model never work from two different sets of numbers.
+  const [ins, setIns] = useState({ loggedDays: 0 });
+  useEffect(() => {
+    const pid = settings.patientId; if (!pid) return;
+    let stale = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API(settings)}/patients/${pid}/summary`);
+        if (r.ok && !stale) setIns(await r.json());
+      } catch (e) { /* keep the last good summary */ }
+    })();
+    return () => { stale = true; };
+  }, [settings.patientId, settings.backendUrl, logs]);
   // The verdict is the backend's to give. `lab` holds hypothetical inputs and
   // thresholds; when it is non-empty we ask /assess instead of the patient's
   // own assessment, so the panel can bend the rules without touching the logs.
@@ -831,7 +853,7 @@ function HomeScreen({ profile, logs, setLogs, ins, assessment, setTab, wide, set
     const pid = settings?.patientId;
     if (pid) { const b = (settings.backendUrl || "/api").replace(/\/$/, ""); fetch(`${b}/patients/${pid}/logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }).catch(() => {}); }
   };
-  const now = new Date(); const phase = ins.dayN == null ? "—" : ins.dayN <= 5 ? "Menstrual" : ins.dayN <= 13 ? "Follicular" : ins.dayN <= 16 ? "Ovulatory" : "Luteal";
+  const now = new Date(); const phase = ins.cycleDay == null ? "—" : ins.cycleDay <= 5 ? "Menstrual" : ins.cycleDay <= 13 ? "Follicular" : ins.cycleDay <= 16 ? "Ovulatory" : "Luteal";
   const chips = []; if (today) { if (today.pain >= 6) chips.push("High pain"); else if (today.pain > 0) chips.push("Mild pain"); if (today.hairGrowth || today.hairLoss) chips.push("Hair health"); if (today.bloating) chips.push("Bloating"); if (today.cravings) chips.push("Cravings"); if (today.mood <= 3) chips.push("Low mood"); }
 
   const periodCard = (
@@ -853,11 +875,11 @@ function HomeScreen({ profile, logs, setLogs, ins, assessment, setTab, wide, set
     </div>);
   const phaseTiles = (
     <Card style={{ padding: 20, boxShadow: SH_SM }}>
-      <div style={{ display: "flex", justifyContent: "center" }}><CyclePhaseRing dayN={ins.dayN} cycleLen={ins.avgGap} /></div>
+      <div style={{ display: "flex", justifyContent: "center" }}><CyclePhaseRing dayN={ins.cycleDay} cycleLen={ins.avgCycleDays} /></div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 8 }}>
         {PHASE_COLORS.map(([n, col]) => (<span key={n} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: col, opacity: 0.65 }} /> {n}</span>))}
       </div>
-      <div style={{ textAlign: "center", fontSize: 12.5, color: C.inkVar, marginTop: 10 }}>{ins.avgGap ? `~${ins.avgGap}-day cycle · ${ins.avgGap > 35 ? "irregular" : "stable"}` : "Log a few periods to map your cycle"}</div>
+      <div style={{ textAlign: "center", fontSize: 12.5, color: C.inkVar, marginTop: 10 }}>{ins.avgCycleDays ? `~${ins.avgCycleDays}-day cycle · ${ins.avgCycleDays > 35 ? "irregular" : "stable"}` : "Log a few periods to map your cycle"}</div>
     </Card>);
   const recordCTA = (
     <button onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
@@ -1431,7 +1453,7 @@ function InsightsScreen({ ins, logs, settings, wide }) {
   const highlights = (<Card style={{ background: C.low, boxShadow: "none" }}>
     <Label color={C.inkVar}>Historical highlights</Label>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-      <div style={{ background: C.surface, borderRadius: 14, padding: 16 }}><Microscope size={18} color={C.plum} /><div style={{ fontFamily: head, fontWeight: 700, fontSize: 24, marginTop: 8 }}>{ins.highPainGap} days</div><div style={{ fontSize: 12, color: C.inkVar }}>since last high-pain episode</div></div>
+      <div style={{ background: C.surface, borderRadius: 14, padding: 16 }}><Microscope size={18} color={C.plum} /><div style={{ fontFamily: head, fontWeight: 700, fontSize: 24, marginTop: 8 }}>{ins.daysSinceSeverePain} days</div><div style={{ fontSize: 12, color: C.inkVar }}>since last high-pain episode</div></div>
       <div style={{ background: C.surface, borderRadius: 14, padding: 16 }}><Heart size={18} color={C.roseOn} /><div style={{ fontFamily: head, fontWeight: 700, fontSize: 24, marginTop: 8 }}>{ins.loggedDays} days</div><div style={{ fontSize: 12, color: C.inkVar }}>consistent logging</div></div>
     </div></Card>);
   const disclaimer = (<div style={{ padding: 14, background: C.surface, borderRadius: 14, fontSize: 12, color: C.inkVar, lineHeight: 1.5, display: "flex", gap: 8 }}>
@@ -1612,15 +1634,15 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
   })(); }, [settings.patientId]);
 
   const standCard = (<>
+    <Card style={{ marginBottom: 14 }}>
+      <Label>The three criteria</Label>
+      <div style={{ display: "flex", justifyContent: "center", margin: "8px 0 0" }}><Triad axes={axes} /></div>
+    </Card>
     {assessment
       ? <DoctorIndicator assessment={assessment} />
       : <Card style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center", color: C.inkVar, fontSize: 14 }}>
           <Loader2 size={15} className="spin" color={C.outline} /> Checking your tracked data against the criteria…</Card>}
     {rules && <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules} labRules={labRules} setLabRules={setLabRules} />}
-    <Card style={{ marginBottom: 14 }}>
-      <Label>The three criteria</Label>
-      <div style={{ display: "flex", justifyContent: "center", margin: "8px 0" }}><Triad axes={axes} /></div>
-    </Card>
   </>);
 
   // FOR ME — the advocacy report (data-driven talking points)

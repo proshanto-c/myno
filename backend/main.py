@@ -27,6 +27,7 @@ from sqlalchemy import (create_engine, Column, Integer, String, Boolean, Float,
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 import criteria
+import insights
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg2://myno:myno@db:5432/myno")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -250,124 +251,33 @@ def seed(pid: int):
 
 # ----- insights: compute trends/correlations over the DB logs, then have Claude
 # narrate concrete, data-grounded insights for the Insights tab.
-def _mean(a):
-    a = [x for x in a if isinstance(x, (int, float))]
-    return round(sum(a) / len(a), 2) if a else None
+def _summarise(logs, patient=None):
+    """The derived summary, with the cycle carrying criteria.py's verdict.
 
-def _pearson(pairs):
-    """Pearson r (point-biserial when one var is a 0/1 flag). None if too few pairs."""
-    pairs = [(x, y) for x, y in pairs if isinstance(x, (int, float)) and isinstance(y, (int, float))]
-    n = len(pairs)
-    if n < 8:
-        return None
-    mx = sum(x for x, _ in pairs) / n
-    my = sum(y for _, y in pairs) / n
-    cov = sum((x - mx) * (y - my) for x, y in pairs)
-    vx = sum((x - mx) ** 2 for x, _ in pairs)
-    vy = sum((y - my) ** 2 for _, y in pairs)
-    if vx <= 0 or vy <= 0:
-        return None
-    return {"r": round(cov / math.sqrt(vx * vy), 2), "n": n}
+    Both halves live in their own modules: insights.py decides what counts as a
+    pattern, criteria.py decides what counts as irregular. This just introduces
+    them to each other.
+    """
+    summary = insights.summarise(logs, patient)
+    if summary.get("cycle"):
+        insights.label_cycle(summary, criteria.assess_cycles(
+            criteria.derive_inputs(patient, logs, summary)))
+    return summary
 
-def _strength(r):
-    a = abs(r)
-    return ("very strong" if a >= 0.8 else "strong" if a >= 0.6 else
-            "moderate" if a >= 0.4 else "weak" if a >= 0.2 else "negligible")
+def _patient_logs(s, pid):
+    rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
+    return [_log_dict(r) for r in rows]
 
-def _slope_per_week(ys):
-    """Least-squares slope over the index (days), expressed as units per week."""
-    pts = [(i, y) for i, y in enumerate(ys) if isinstance(y, (int, float))]
-    n = len(pts)
-    if n < 8:
-        return None
-    mx = sum(i for i, _ in pts) / n
-    my = sum(y for _, y in pts) / n
-    den = sum((i - mx) ** 2 for i, _ in pts)
-    if den <= 0:
-        return None
-    return round(sum((i - mx) * (y - my) for i, y in pts) / den * 7, 2)
-
-def _insight_summary(logs, patient=None):
-    def col(k): return [l.get(k) for l in logs if isinstance(l.get(k), (int, float))]
-    hi, lo = [], []
-    for i in range(1, len(logs)):
-        ps, pn = logs[i - 1].get("sugar"), logs[i].get("pain")
-        if isinstance(ps, (int, float)) and isinstance(pn, (int, float)):
-            (hi if ps >= 3 else lo).append(pn)
-    bloat = [l.get("pain") for l in logs if l.get("bloating")]
-    nobloat = [l.get("pain") for l in logs if not l.get("bloating")]
-    starts = [l["date"] for l in logs if l.get("period")]
-    gaps = [(dt.date.fromisoformat(starts[i]) - dt.date.fromisoformat(starts[i - 1])).days for i in range(1, len(starts))]
-    gaps = [g for g in gaps if g > 10]
-    cat_trend = {}
-    for l in logs:
-        for c in (l.get("categories") or []):
-            if c.get("scale"):
-                cat_trend.setdefault(c["key"], {"label": c.get("label", c["key"]), "vals": []})["vals"].append(c["scale"]["value"])
-    cats = []
-    for k, v in cat_trend.items():
-        vals = v["vals"]
-        if len(vals) >= 3:
-            h = len(vals) // 2
-            pw = _slope_per_week(vals)
-            cats.append({"key": k, "label": v["label"], "avg": _mean(vals), "earlier": _mean(vals[:h]),
-                         "recent": _mean(vals[h:]), "n": len(vals), "perWeek": pw})
-
-    # --- Pearson correlations (point-biserial for binary flags), ranked by |r| ---
-    def lag(a, b): return [(logs[i - 1].get(a), logs[i].get(b)) for i in range(1, len(logs))]
-    def same(a, b): return [(logs[i].get(a), logs[i].get(b)) for i in range(len(logs))]
-    def flagp(flag, b): return [(1 if logs[i].get(flag) else 0, logs[i].get(b)) for i in range(len(logs))]
-    candidates = [
-        ("Higher sugar → next-day pain", lag("sugar", "pain")),
-        ("Less sleep → more brain fog", same("sleep", "brainFog")),
-        ("Less sleep → lower energy", same("sleep", "energy")),
-        ("Higher pain → lower mood", same("pain", "mood")),
-        ("Bloating days → higher pain", flagp("bloating", "pain")),
-        ("Higher sugar → next-day cravings", [(logs[i - 1].get("sugar"), 1 if logs[i].get("cravings") else 0) for i in range(1, len(logs))]),
-    ]
-    corrs = []
-    for label, pairs in candidates:
-        p = _pearson(pairs)
-        if p and abs(p["r"]) >= 0.2:
-            corrs.append({"label": label, "r": p["r"], "n": p["n"], "strength": _strength(p["r"]),
-                          "direction": "positive" if p["r"] > 0 else "negative"})
-    corrs.sort(key=lambda c: -abs(c["r"]))
-
-    # --- cycle variability (mean ± SD, coefficient of variation) ---
-    cycle = None
-    if len(gaps) >= 2:
-        m = statistics.mean(gaps); sd = statistics.pstdev(gaps)
-        # "Regular" is not decided here: criteria.py owns that word, so this
-        # label, the doctor indicator and the advocacy report always agree.
-        cycle = {"meanDays": round(m, 1), "sdDays": round(sd, 1), "cv": round(sd / m * 100, 1) if m else None,
-                 "min": min(gaps), "max": max(gaps), "cycles": len(gaps) + 1,
-                 "regular": None, "label": "Cycle length recorded"}
-
-    # --- linear trends (units/week) for the standard metrics ---
-    trends = []
-    for k, lbl in [("pain", "Pain"), ("mood", "Mood"), ("energy", "Energy"), ("sleep", "Sleep"), ("brainFog", "Brain fog")]:
-        pw = _slope_per_week([l.get(k) for l in logs])
-        if pw is not None and abs(pw) >= 0.05:
-            trends.append({"key": k, "label": lbl, "perWeek": pw, "direction": "up" if pw > 0 else "down"})
-
-    out = {
-        "loggedDays": len(logs),
-        "avgPain": _mean(col("pain")), "avgMood": _mean(col("mood")), "avgEnergy": _mean(col("energy")),
-        "avgSleep": _mean(col("sleep")), "avgBrainFog": _mean(col("brainFog")), "avgSugar": _mean(col("sugar")),
-        "painAfterHighSugar": _mean(hi), "painAfterLowSugar": _mean(lo),
-        "painWithBloating": _mean(bloat), "painWithoutBloating": _mean(nobloat),
-        "avgCycleDays": _mean(gaps), "cycleMin": (min(gaps) if gaps else None), "cycleMax": (max(gaps) if gaps else None),
-        "cycleCount": len(gaps),
-        "correlations": corrs, "cycle": cycle, "trends": trends,
-        "categoryTrends": cats,
-        "recent": {k: [l.get(k) for l in logs[-30:]] for k in ["pain", "mood", "energy", "sleep", "brainFog"]},
-    }
-    if cycle is not None:
-        verdict = criteria.assess(criteria.derive_inputs(patient, logs, out))["cycles"]
-        cycle["regular"] = None if verdict["state"] == "unknown" else verdict["state"] != "met"
-        cycle["label"] = {"met": "Irregular", "clear": "Regular", "unknown": "Not assessable"}[verdict["state"]]
-        cycle["why"] = verdict["reasons"]
-    return out
+@app.get("/patients/{pid}/summary")
+def patient_summary(pid: int):
+    """Everything derived from the logs — no model call, so it is cheap enough
+    for the client to refetch whenever a day is saved."""
+    s = Session()
+    p = s.get(Patient, pid)
+    if not p:
+        s.close(); raise HTTPException(404, "no such patient")
+    logs = _patient_logs(s, pid); s.close()
+    return _summarise(logs, p)
 
 @app.post("/patients/{pid}/insights")
 async def patient_insights(pid: int):
@@ -375,7 +285,7 @@ async def patient_insights(pid: int):
     rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
     p = s.get(Patient, pid); blocked = (p.blacklist or []) if p else []
     logs = [_log_dict(r) for r in rows]; s.close()
-    stats = _insight_summary(logs)
+    stats = _summarise(logs)
     block_line = ", ".join(FEATURES[f]["label"] for f in blocked if f in FEATURES) or "none"
     sys = (
         "You are Tawazzun, a practical PMOS companion. From this person's own tracking summary, produce 2-4 "
@@ -609,7 +519,7 @@ def _advocacy_metrics(logs, patient):
         "period_days": days,
         # the same verdict the indicator shows, so talking points can't disagree
         "cycles_irregular": criteria.assess(criteria.derive_inputs(
-            patient, logs, _insight_summary(logs, patient)))["cycles"]["state"] == "met",
+            patient, logs, _summarise(logs, patient)))["cycles"]["state"] == "met",
         "cycle_length_avg": round(statistics.mean(gaps), 1) if gaps else None,
         "cycle_length_std_dev": round(statistics.pstdev(gaps), 1) if len(gaps) >= 2 else 0,
         "cycle_length_min": min(gaps) if gaps else None,
@@ -697,7 +607,7 @@ def patient_assessment(pid: int):
         s.close(); raise HTTPException(404, "no such patient")
     rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
     logs = [_log_dict(r) for r in rows]; s.close()
-    inputs = criteria.derive_inputs(p, logs, _insight_summary(logs, p))
+    inputs = criteria.derive_inputs(p, logs, _summarise(logs, p))
     return criteria.assess(inputs)
 
 class AssessIn(BaseModel):
@@ -858,7 +768,7 @@ class ChatboxChatIn(BaseModel):
     turns: list[ChatboxTurnIn] = []
 
 def _insight_brief(ins: dict) -> str:
-    """A compact, prompt-friendly digest of _insight_summary for the chat model."""
+    """A compact, prompt-friendly digest of the derived summary for the chat model."""
     if not ins or not ins.get("loggedDays"):
         return "no tracked history yet"
     parts = [f"{ins['loggedDays']} days logged"]
@@ -914,7 +824,7 @@ async def chatbox_chat(pid: int, body: ChatboxChatIn):
 
     avg_gap = _avg_cycle(s, pid)
     log_rows = s.query(DailyLog).filter_by(patient_id=pid).order_by(DailyLog.date).all()
-    insight_brief = _insight_brief(_insight_summary([_log_dict(r) for r in log_rows]))
+    insight_brief = _insight_brief(_summarise([_log_dict(r) for r in log_rows]))
 
     system = f"""You are Tawazzun, a warm, practical PMOS companion. You are talking WITH this person, and you can see their own tracked data — use it to give grounded, specific, actionable guidance.
 
@@ -1098,10 +1008,9 @@ async def advise(body: AdviseIn):
         return {}
 
 def _avg_cycle(s, pid):
-    rows = s.query(DailyLog).filter_by(patient_id=pid).filter(DailyLog.period == True).order_by(DailyLog.date).all()
-    if len(rows) < 2: return None
-    gaps = [(rows[i].date - rows[i-1].date).days for i in range(1, len(rows))]
-    return round(sum(gaps) / len(gaps))
+    """Mean cycle length. Goes through insights.py so a five-day bleed counts as
+    one cycle start, not five one-day cycles."""
+    return insights.average_cycle_days(_patient_logs(s, pid))
 
 # ----- TTS proxy (single origin for the browser)
 @app.post("/tts")
