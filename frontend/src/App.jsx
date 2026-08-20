@@ -3,7 +3,7 @@ import {
   Home, SquarePen, BarChart3, MessageCircle, Settings as Cog, Plus,
   ChevronRight, Mic, MicOff, Volume2, VolumeX, Sparkles, Check, Lock, ArrowLeft, ArrowRight,
   Printer, Stethoscope, AlertTriangle, Info, Heart, Moon, Loader2, X, Target,
-  Brain, HeartPulse, Microscope, Droplet, Activity
+  Brain, HeartPulse, Microscope, Droplet, Activity, ChevronLeft, Pill as Pill2
 } from "lucide-react";
 
 /* ===========================================================================
@@ -149,29 +149,38 @@ const PSTYLE = {
 };
 const pstyle = (p) => PSTYLE[p] || PSTYLE.direct;
 const SCALE_MAX = 10;
+// Fallback wording if the backend schema hasn't loaded. The first word belongs
+// to 0 alone and the last to the top of the scale alone — see scaleWord.
 const scaleLabels = {
-  pain: ["none", "moderate", "extreme"],
-  mood: ["very low", "mixed", "very good"],
-  energy: ["depleted", "moderate", "very high"],
-  sleep: ["awful", "moderate", "great"],
-  brainFog: ["none", "moderate", "severe"],
-  sexDrive: ["none", "moderate", "very high"],
-  sugar: ["none", "moderate", "extreme"],
-  foodDrive: ["none", "moderate", "intense"],
+  pain: ["none", "mild", "moderate", "severe", "extreme"],
+  mood: ["very low", "low", "mixed", "good", "very good"],
+  energy: ["depleted", "low", "moderate", "high", "very high"],
+  sleep: ["awful", "poor", "patchy", "good", "great"],
+  brainFog: ["clear", "slight", "moderate", "heavy", "severe"],
+  sexDrive: ["none", "low", "moderate", "high", "very high"],
+  sugar: ["none", "a little", "some", "a lot", "constant"],
+  foodDrive: ["no appetite", "low", "normal", "high", "ravenous"],
 };
 const clampScale = (value, fallback = 0, max = SCALE_MAX) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(0, Math.min(max, Math.round(n)));
 };
+// The ends of a scale mean something exact: "none" is 0, not 0-to-3, and the
+// top word is the top of the scale. Only the words in between share the range.
+const scaleWord = (v, max, words) => {
+  if (!Array.isArray(words) || words.length < 2) return "";
+  if (words.length === max + 1) return words[v];
+  if (v <= 0) return words[0];
+  if (v >= max) return words[words.length - 1];
+  const inner = words.slice(1, -1);
+  if (!inner.length) return v * 2 <= max ? words[0] : words[1];
+  return inner[Math.min(inner.length - 1, Math.floor(((v - 1) / (max - 1)) * inner.length))];
+};
 const scaleDisplay = (value, max = SCALE_MAX, words = null) => {
   const v = clampScale(value, 0, max);
-  if (Array.isArray(words) && words.length === max + 1 && words[v]) return `${v}/${max} ${words[v]}`;
-  if (Array.isArray(words) && words.length >= 3) {
-    const i = v <= Math.floor(max / 3) ? 0 : v >= Math.ceil((max * 2) / 3) ? 2 : 1;
-    return `${v}/${max} ${words[i]}`;
-  }
-  return `${v}/${max}`;
+  const word = scaleWord(v, max, words);
+  return word ? `${v}/${max} ${word}` : `${v}/${max}`;
 };
 const normalizedScale = (scale) => {
   if (!scale || typeof scale.value !== "number") return null;
@@ -191,42 +200,43 @@ const normalizedCategory = (cat) => {
 // The saved daily log is JSON shaped by this schema. Speech fills what it can;
 // the rest is filled in the "End conversation" sheet. Users can also add their
 // own free-form categories on top (entry.categories).
-// Mood reads faster as a face than as a number, but it is still stored on the
-// same 0–10 scale the correlations run on.
-const MOODS = [["😞", 1, "low"], ["🙁", 3, "down"], ["😐", 5, "okay"], ["🙂", 7, "good"], ["😄", 9, "great"]];
-
-const LOG_SCHEMA = [
-  { group: "Period tracker", fields: [
+// The questions themselves live in the backend (record.py) and arrive from
+// GET /record/schema, so the app, the voice extractor and the insight
+// categories can never drift apart. This copy is only what we draw while that
+// request is in flight, or if there is no backend to ask.
+const FALLBACK_SCHEMA = [
+  { key: "cycle", group: "Menstrual cycle", fields: [
     { key: "period", label: "Started your period?", type: "bool" },
     { key: "flow", label: "Flow", type: "select", options: ["none", "spotting", "light", "medium", "heavy"] },
     { key: "birthControl", label: "On birth control?", type: "bool" },
-    // Only hormonal methods make a bleed a withdrawal bleed, so the type is
-    // what decides whether the cycle criterion can be read at all.
     { key: "birthControlType", label: "Type", type: "select", options: ["natural", "mechanical", "hormonal"],
-      showIf: (e) => e.birthControl === true },
+      showIf: { field: "birthControl", equals: true } },
   ] },
-  { group: "Wellbeing", fields: [
-    { key: "mood", label: "Mood", type: "emoji", options: MOODS },
+  { key: "wellbeing", group: "Wellbeing", fields: [
+    { key: "mood", label: "Mood", type: "emoji", options: [
+      { value: 1, emoji: "😭", label: "Awful" }, { value: 3, emoji: "😞", label: "Low" },
+      { value: 5, emoji: "😐", label: "Flat" }, { value: 7, emoji: "🙂", label: "Good" },
+      { value: 9, emoji: "😄", label: "Great" }] },
     { key: "energy", label: "Energy", type: "scale", max: SCALE_MAX, words: scaleLabels.energy },
     { key: "sleep", label: "Sleep", type: "scale", max: SCALE_MAX, words: scaleLabels.sleep },
     { key: "brainFog", label: "Brain fog", type: "scale", max: SCALE_MAX, words: scaleLabels.brainFog },
   ] },
-  { group: "Body", fields: [
+  { key: "body", group: "Body", fields: [
     { key: "pain", label: "Pain", type: "scale", max: SCALE_MAX, words: scaleLabels.pain },
     { key: "painPoints", label: "Where it hurts", type: "bodymap" },
     { key: "morningWeight", label: "Morning weight (kg)", type: "number", placeholder: "kg" },
     { key: "sugar", label: "Sugar", type: "scale", max: SCALE_MAX, words: scaleLabels.sugar },
     { key: "foodDrive", label: "Food drive", type: "scale", max: SCALE_MAX, words: scaleLabels.foodDrive },
   ] },
-  { group: "Lifestyle", fields: [
+  { key: "lifestyle", group: "Lifestyle", fields: [
     { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive },
     { key: "cravings", label: "Cravings", type: "bool" },
     { key: "cravingType", label: "Craving for", type: "select", options: ["salty", "sugary"],
-      showIf: (e) => e.cravings === true },
+      showIf: { field: "cravings", equals: true } },
     { key: "exercise", label: "Exercise", type: "select", options: ["inactive", "fairly active", "active", "very active"] },
     { key: "diet", label: "Diet", type: "select", options: ["higher carbohydrates", "higher fats", "higher proteins"] },
   ] },
-  { group: "Skin & hair", fields: [
+  { key: "skin", group: "Skin & hair", fields: [
     { key: "acne", label: "Acne (new breakouts)", type: "bool" },
     { key: "hairGrowth", label: "Hair growth", type: "bool" },
     { key: "hairLoss", label: "Hair loss", type: "bool" },
@@ -234,6 +244,32 @@ const LOG_SCHEMA = [
     { key: "hyperpigmentation", label: "Hyperpigmentation", type: "bool" },
   ] },
 ];
+const SCHEMA_CACHE = "myno:record-schema:v1";
+
+// One fetch at boot, remembered between visits so a slow or missing backend
+// never leaves the Record screen blank.
+function useRecordSchema(settings) {
+  const [schema, setSchema] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(SCHEMA_CACHE)) || FALLBACK_SCHEMA; }
+    catch (e) { return FALLBACK_SCHEMA; }
+  });
+  useEffect(() => {
+    let stale = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API(settings)}/record/schema`);
+        if (!r.ok) return;
+        const body = await r.json();
+        if (stale || !Array.isArray(body.schema) || !body.schema.length) return;
+        setSchema(body.schema);
+        try { localStorage.setItem(SCHEMA_CACHE, JSON.stringify(body.schema)); } catch (e) {}
+      } catch (e) { /* keep the cached questions */ }
+    })();
+    return () => { stale = true; };
+  }, [settings.backendUrl]);
+  return schema;
+}
+
 const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, sugar: 5, flow: null, birthControl: null, birthControlType: null,
   sleep: 5, brainFog: 0, sexDrive: 5, painPoints: [], morningWeight: null, foodDrive: 5, cravings: null, cravingType: null,
   exercise: null, diet: null, acne: false, hairGrowth: false, hairLoss: false, dryPatches: false, hyperpigmentation: false };
@@ -485,7 +521,7 @@ function CriterionRow({ title, source, result }) {
 
 function DoctorIndicator({ assessment }) {
   const [open, setOpen] = useState(true);
-  const { recommendation: rec, cycles, androgen } = assessment;
+  const { recommendation: rec, cycles, androgen, context } = assessment;
   const tone = TONE[rec.tone]; const Icon = tone.Icon;
   return (<Card style={{ marginBottom: 14 }}>
     <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", padding: 0, width: "100%",
@@ -505,6 +541,12 @@ function DoctorIndicator({ assessment }) {
     {open && <>
       <CriterionRow title="Irregular cycles" source="From your logged period dates" result={cycles} />
       <CriterionRow title="Hair & skin signs" source="Self-reported — a clinician confirms by examination" result={androgen} />
+      {(context || []).length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "10px 12px", marginBottom: 12,
+          borderRadius: 12, background: C.low, fontSize: 12.5, lineHeight: 1.5, color: C.inkVar }}>
+          <Info size={14} color={C.plum} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>{context.join(" ")} Worth mentioning either way — untangling the two is the clinic's job.</span>
+        </div>)}
       <div style={{ padding: "12px 0 0", borderTop: `1px solid ${C.high}`, fontSize: 12, lineHeight: 1.5, color: C.outline }}>
         This is not a diagnosis. Blood androgens and ovarian imaging or AMH can only be assessed in a
         clinic, and thyroid, prolactin, CAH and Cushing's have to be ruled out before anyone can name
@@ -640,7 +682,7 @@ function Triad({ axes }) {
 // ============================================================================
 //  APP
 // ============================================================================
-const BLANK = { onboarded: false, name: "", age: "", menarcheAge: "", heightCm: "", weightKg: "", familyHistory: false, acne: false, skinDarkening: false, weightGain: false, goals: [], integrations: [] };
+const BLANK = { onboarded: false, name: "", age: "", menarcheAge: "", heightCm: "", weightKg: "", familyHistory: false, acne: false, skinDarkening: false, weightGain: false, goals: [], integrations: [], conditions: [], mfg: {}, drugs: [] };
 
 function useViewport() {
   const [w, setW] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
@@ -656,6 +698,7 @@ export default function App() {
   const [settings, setSettings] = useState({ apiKey: "", nemoEndpoint: "", backendUrl: "", voice: true, blacklist: [], patientId: null, personality: "direct" });
   const vw = useViewport();
   const wide = vw >= 1024;
+  const schema = useRecordSchema(settings);
 
   useEffect(() => { (async () => {
     const s = await loadState();
@@ -679,6 +722,29 @@ export default function App() {
   })(); }, []);
   useEffect(() => { if (ready) saveState({ profile, logs, settings }); }, [profile, logs, settings, ready]);
 
+  // The profile is edited in the browser but read by the rules in the backend —
+  // conditions, the mFG sheet and drug therapy all feed criteria.py. Sync it,
+  // then bump `synced` so the indicator is re-asked with the new facts.
+  const [synced, setSynced] = useState(0);
+  useEffect(() => {
+    const pid = settings.patientId; if (!ready || !pid) return;
+    const num = (v) => (v === "" || v == null ? null : Number(v));
+    const body = {
+      name: profile.name || "", age: num(profile.age), menarche_age: num(profile.menarcheAge),
+      height_cm: num(profile.heightCm), weight_kg: num(profile.weightKg),
+      family_history: !!profile.familyHistory, acne: !!profile.acne,
+      skin_darkening: !!profile.skinDarkening, weight_gain: !!profile.weightGain,
+      goals: profile.goals || [], integrations: profile.integrations || [],
+      conditions: profile.conditions || [], mfg: profile.mfg || {}, drugs: profile.drugs || [],
+    };
+    let stale = false;
+    const t = setTimeout(() => {
+      fetch(`${API(settings)}/patients/${pid}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) }).then(() => { if (!stale) setSynced((n) => n + 1); }).catch(() => {});
+    }, 400);
+    return () => { stale = true; clearTimeout(t); };
+  }, [ready, settings.patientId, settings.backendUrl, profile]);
+
   // Derived stats come from the backend (insights.py) so the client and the
   // model never work from two different sets of numbers.
   const [ins, setIns] = useState({ loggedDays: 0 });
@@ -692,7 +758,7 @@ export default function App() {
       } catch (e) { /* keep the last good summary */ }
     })();
     return () => { stale = true; };
-  }, [settings.patientId, settings.backendUrl, logs]);
+  }, [settings.patientId, settings.backendUrl, logs, synced]);
   // The verdict is the backend's to give. `lab` holds hypothetical inputs and
   // thresholds; when it is non-empty we ask /assess instead of the patient's
   // own assessment, so the panel can bend the rules without touching the logs.
@@ -728,11 +794,11 @@ export default function App() {
     // debounced so typing in the lab doesn't fire a request per keystroke
     const t = setTimeout(go, hypothetical ? 150 : 0);
     return () => clearTimeout(t);
-  }, [settings.patientId, settings.backendUrl, logs, lab, labRules]);
+  }, [settings.patientId, settings.backendUrl, logs, lab, labRules, synced]);
 
   const axes = assessment?.axes;
   const ctx = { profile, setProfile, logs, setLogs, settings, setSettings, ins, assessment, axes,
-    derived, lab, setLab, rules, labRules, setLabRules, setTab, wide };
+    derived, lab, setLab, rules, labRules, setLabRules, setTab, wide, schema };
 
   const screen = () => (<>
     {tab === "home" && <HomeScreen {...ctx} />}
@@ -845,13 +911,16 @@ function Onboarding({ profile, setProfile }) {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
           {[["familyHistory", "Family history"], ["acne", "Persistent acne"], ["skinDarkening", "Skin darkening"], ["weightGain", "Weight gain"]].map(([k, l]) => (
             <Chip key={k} active={profile[k]} onClick={() => set(k, !profile[k])}>{l}</Chip>))}</div></>)}
-      {step === 2 && (<><Label>Connect your data</Label><H size={24} style={{ margin: "10px 0 8px" }}>Bring it together</H>
+      {step === 2 && (<><Label>Your health</Label><H size={24} style={{ margin: "10px 0 8px" }}>Anything already diagnosed?</H>
+        <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 16 }}>Only what a clinician has told you. It changes how we read your tracking — and you can change it any time in Settings.</p>
+        <ConditionsPanel profile={profile} setProfile={setProfile} compact /></>)}
+      {step === 3 && (<><Label>Connect your data</Label><H size={24} style={{ margin: "10px 0 8px" }}>Bring it together</H>
         <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 16 }}>Fold in cycles, sleep, and activity you already log (demo connections).</p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{APPS.map((a) => (<Chip key={a} active={profile.integrations.includes(a)} onClick={() => tog("integrations", a)}>{a}</Chip>))}</div>
         <div style={{ marginTop: 16, padding: 14, background: C.lilac, borderRadius: 14, fontSize: 14, color: C.onLilac, lineHeight: 1.5 }}>We've pre-loaded three months of sample tracking so your twin has something to learn from right away.</div></>)}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 24 }}>
         <Pill variant="soft" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0} style={{ padding: "13px 18px" }}><ArrowLeft size={16} /> Back</Pill>
-        <Pill onClick={() => step < 2 ? setStep(step + 1) : set("onboarded", true)} disabled={step === 0 && profile.goals.length === 0}>{step < 2 ? "Continue" : <>Enter <Brand /></>} <ArrowRight size={16} /></Pill>
+        <Pill onClick={() => step < 3 ? setStep(step + 1) : set("onboarded", true)} disabled={step === 0 && profile.goals.length === 0}>{step < 3 ? "Continue" : <>Enter <Brand /></>} <ArrowRight size={16} /></Pill>
       </div>
     </Card>
   </div>);
@@ -890,28 +959,30 @@ function CyclePhaseRing({ dayN, cycleLen }) {
   </svg>);
 }
 
-function HomeScreen({ profile, logs, setLogs, ins, assessment, setTab, wide, settings }) {
+function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTab, wide, settings }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = logs.find((l) => l.date === todayStr);
-  const setPeriod = (v) => {
-    // preserve today's full entry (categories, sleep, etc.); only set period, and persist to the DB
-    const base = today || { date: todayStr, pain: 0, sugar: 2, mood: 2, energy: 2, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [] };
-    const entry = { ...base, date: todayStr, period: v };
-    setLogs([...logs.filter((l) => l.date !== todayStr), entry].sort((a, b) => a.date.localeCompare(b.date)));
+  // Marking period days from the calendar. Each date keeps whatever else was
+  // logged that day; only `period` moves, and the day is persisted as it is set.
+  const setPeriodDays = (dates, value) => {
+    const touched = new Set(dates);
+    const kept = logs.filter((l) => !touched.has(l.date));
+    const entries = dates.map((date) => ({
+      ...(logs.find((l) => l.date === date) || { date, pain: 0, sugar: 2, mood: 5, energy: 5,
+        hairGrowth: false, hairLoss: false, cravings: false, note: "", categories: [] }),
+      date, period: value,
+    }));
+    setLogs([...kept, ...entries].sort((a, b) => a.date.localeCompare(b.date)));
     const pid = settings?.patientId;
-    if (pid) { const b = (settings.backendUrl || "/api").replace(/\/$/, ""); fetch(`${b}/patients/${pid}/logs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }).catch(() => {}); }
+    if (pid) {
+      const b = API(settings);
+      entries.forEach((entry) => fetch(`${b}/patients/${pid}/logs`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }).catch(() => {}));
+    }
   };
   const now = new Date(); const phase = ins.cycleDay == null ? "—" : ins.cycleDay <= 5 ? "Menstrual" : ins.cycleDay <= 13 ? "Follicular" : ins.cycleDay <= 16 ? "Ovulatory" : "Luteal";
   const chips = []; if (today) { if (today.pain >= 6) chips.push("High pain"); else if (today.pain > 0) chips.push("Mild pain"); if (today.hairGrowth || today.hairLoss) chips.push("Hair health"); if (today.bloating) chips.push("Bloating"); if (today.cravings) chips.push("Cravings"); if (today.mood <= 3) chips.push("Low mood"); }
 
-  const periodCard = (
-    <Card style={{ borderRadius: 20, padding: 24, boxShadow: SH }}>
-      <H size={22} style={{ textAlign: "center", marginBottom: 18 }}>Did you start your period today?</H>
-      <div style={{ display: "flex", gap: 12 }}>
-        <Pill variant={today?.period === true ? "filled" : "outline"} onClick={() => setPeriod(true)} style={{ flex: 1 }}>Yes</Pill>
-        <Pill variant={today?.period === false ? "filled" : "outline"} onClick={() => setPeriod(false)} style={{ flex: 1, borderColor: today?.period === false ? "transparent" : C.outlineVar, color: today?.period === false ? "#fff" : C.inkVar }}>No</Pill>
-      </div>
-    </Card>);
   const calendarBlock = (
     <div>
       <Label>{now.toLocaleString(undefined, { month: "long", year: "numeric" })}</Label>
@@ -919,8 +990,10 @@ function HomeScreen({ profile, logs, setLogs, ins, assessment, setTab, wide, set
         <H size={24}>Your Cycle</H>
         <button onClick={() => setTab("insights")} style={{ background: "none", border: "none", color: C.plum, fontFamily: bodyf, fontWeight: 600, fontSize: 14, cursor: "pointer", display: "inline-flex", gap: 3, alignItems: "center" }}>View history <ChevronRight size={15} /></button>
       </div>
-      <Card style={{ marginTop: 12, padding: 16, background: C.low, boxShadow: "none" }}><CycleCalendar logs={logs} /></Card>
+      <Card style={{ marginTop: 12, padding: 16, background: C.low, boxShadow: "none" }}>
+        <CycleCalendar logs={logs} onSet={setPeriodDays} /></Card>
     </div>);
+  const drugCard = <DrugTherapy profile={profile} setProfile={setProfile} />;
   const phaseTiles = (
     <Card style={{ padding: 20, boxShadow: SH_SM }}>
       <div style={{ display: "flex", justifyContent: "center" }}><CyclePhaseRing dayN={ins.cycleDay} cycleLen={ins.avgCycleDays} /></div>
@@ -953,32 +1026,78 @@ function HomeScreen({ profile, logs, setLogs, ins, assessment, setTab, wide, set
   if (wide) return (<div>
     <H size={30} style={{ marginBottom: 22 }}>{profile.name ? `Welcome back, ${profile.name}` : "Welcome back"}</H>
     <div style={{ display: "grid", gridTemplateColumns: "1.05fr 0.95fr", gap: 24, alignItems: "start" }}>
-      <div style={{ display: "grid", gap: 20 }}>{periodCard}{calendarBlock}</div>
+      <div style={{ display: "grid", gap: 20 }}>{calendarBlock}{drugCard}</div>
       <div style={{ display: "grid", gap: 18 }}>{phaseTiles}{recordCTA}{trackedToday}{prepareCard}</div>
     </div>
   </div>);
 
   return (<div>
-    <div style={{ marginTop: 6 }}>{periodCard}</div>
-    <div style={{ marginTop: 22 }}>{calendarBlock}</div>
+    <div style={{ marginTop: 6 }}>{calendarBlock}</div>
     <div style={{ marginTop: 18 }}>{phaseTiles}</div>
     <div style={{ marginTop: 18 }}>{recordCTA}</div>
+    <div style={{ marginTop: 18 }}>{drugCard}</div>
     {trackedToday && <div style={{ marginTop: 20 }}>{trackedToday}</div>}
     <div style={{ marginTop: 20 }}>{prepareCard}</div>
   </div>);
 }
-function CycleCalendar({ logs }) {
-  const now = new Date(); const y = now.getFullYear(), m = now.getMonth(); const first = new Date(y, m, 1).getDay(); const days = new Date(y, m + 1, 0).getDate(); const todayD = now.getDate();
-  const periodSet = new Set(logs.filter((l) => l.period).map((l) => { const d = new Date(l.date); return d.getFullYear() === y && d.getMonth() === m ? d.getDate() : null; }).filter(Boolean));
-  const cells = []; for (let i = 0; i < first; i++) cells.push(null); for (let d = 1; d <= days; d++) cells.push(d);
+// Tap a day to log it as a period day, tap it again to take it off. "Range"
+// marks a whole bleed in two taps, which is how most people remember it: the
+// day it started and the day it stopped.
+function CycleCalendar({ logs, onSet }) {
+  const now = new Date();
+  const [month, setMonth] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  const [range, setRange] = useState(false);
+  const [anchor, setAnchor] = useState(null);
+  const { y, m } = month;
+  const iso = (d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+  const isThisMonth = y === now.getFullYear() && m === now.getMonth();
+  const todayD = isThisMonth ? now.getDate() : null;
+  const periodSet = new Set(logs.filter((l) => l.period).map((l) => l.date));
+  const step = (n) => { setAnchor(null); setMonth(({ y: yy, m: mm }) => {
+    const d = new Date(yy, mm + n, 1); return { y: d.getFullYear(), m: d.getMonth() }; }); };
+  const tap = (d) => {
+    if (!onSet) return;
+    const date = iso(d);
+    if (!range) return onSet([date], !periodSet.has(date));
+    if (!anchor) return setAnchor(d);
+    const [lo, hi] = anchor <= d ? [anchor, d] : [d, anchor];
+    onSet(Array.from({ length: hi - lo + 1 }, (_, i) => iso(lo + i)), true);
+    setAnchor(null);
+  };
+  const cells = [];
+  for (let i = 0; i < first; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(d);
+  const navBtn = (dir, Ico) => (
+    <button onClick={() => step(dir)} style={{ background: "none", border: "none", cursor: "pointer", color: C.plum,
+      display: "grid", placeItems: "center", padding: 4 }}><Ico size={16} /></button>);
   return (<div>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 6 }}>{["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.outline }}>{d}</div>))}</div>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+      {navBtn(-1, ChevronLeft)}
+      <span style={{ flex: 1, textAlign: "center", fontFamily: head, fontWeight: 600, fontSize: 14, color: C.ink }}>
+        {new Date(y, m, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}</span>
+      {navBtn(1, ChevronRight)}
+      {onSet && <button onClick={() => { setRange((r) => !r); setAnchor(null); }}
+        style={{ fontFamily: bodyf, fontSize: 11.5, fontWeight: 600, padding: "5px 10px", borderRadius: 9999,
+          cursor: "pointer", background: range ? C.plum : C.surface, color: range ? "#fff" : C.plum,
+          border: `1.5px solid ${range ? C.plum : C.outlineVar}` }}>Range</button>}
+    </div>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 6 }}>
+      {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, fontWeight: 600, color: C.outline }}>{d}</div>))}</div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>{cells.map((d, i) => {
-      const isToday = d === todayD, isPeriod = periodSet.has(d);
+      const isToday = d === todayD, isPeriod = d && periodSet.has(iso(d)), isAnchor = d && anchor === d;
       return (<div key={i} style={{ aspectRatio: "1", display: "grid", placeItems: "center" }}>
-        {d && <span style={{ width: 34, height: 34, borderRadius: "50%", display: "grid", placeItems: "center", fontFamily: bodyf, fontSize: 14, fontWeight: isToday ? 700 : 500,
-          background: isToday ? C.plum : isPeriod ? C.rose : "transparent", color: isToday ? "#fff" : isPeriod ? C.roseOn : C.ink }}>{d}</span>}
+        {d && <span onClick={() => tap(d)} style={{ width: 34, height: 34, borderRadius: "50%", display: "grid",
+          placeItems: "center", fontFamily: bodyf, fontSize: 14, fontWeight: isToday ? 700 : 500,
+          cursor: onSet ? "pointer" : "default", userSelect: "none",
+          background: isAnchor ? C.roseOn : isToday ? C.plum : isPeriod ? C.rose : "transparent",
+          border: isAnchor ? "none" : isPeriod && isToday ? `2px solid ${C.rose}` : "none",
+          color: isAnchor || isToday ? "#fff" : isPeriod ? C.roseOn : C.ink }}>{d}</span>}
       </div>); })}</div>
+    {onSet && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 8 }}>
+      {range ? (anchor ? `From ${anchor} ${new Date(y, m, 1).toLocaleString(undefined, { month: "short" })} — tap the last day`
+                       : "Tap the first day of the bleed")
+             : "Tap a day to mark or unmark a period day"}</div>}
   </div>);
 }
 
@@ -1000,7 +1119,7 @@ function PersonalityPicker({ value, onChange }) {
     </div>)}
   </div>);
 }
-function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins }) {
+function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins, schema }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const existing = logs.find((l) => l.date === todayStr);
   const [e, setE] = useState(existing ? { ...SCHEMA_DEFAULTS, ...existing } : { date: todayStr, period: null, pain: 0, sugar: 5, mood: 5, energy: 5, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [], ...SCHEMA_DEFAULTS });
@@ -1065,14 +1184,14 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     const wrap = { padding: "10px 12px", borderRadius: 12, background: on ? C.lilac : "transparent", transition: "background-color .3s ease" };
     const labelEl = (<span style={{ fontFamily: bodyf, fontSize: 14, color: C.ink, display: "inline-flex", alignItems: "center", gap: 6 }}>{f.label}{on && <span style={{ fontFamily: bodyf, fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", color: C.plum, background: "#fff", borderRadius: 9999, padding: "2px 7px" }}>HEARD</span>}</span>);
     // a field can depend on another answer (birth-control type, craving type)
-    if (f.showIf && !f.showIf(e)) return null;
+    if (f.showIf && e[f.showIf.field] !== f.showIf.equals) return null;
     if (f.type === "emoji") {
       return (<div key={f.key} style={wrap}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>{labelEl}
           <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.plum }}>
-            {(f.options.find(([, val]) => val === v) || [])[2] || ""}</span></div>
+            {(f.options.find((o) => o.value === v) || {}).label || ""}</span></div>
         <div style={{ display: "flex", gap: 6, justifyContent: "space-between" }}>
-          {f.options.map(([face, val, word]) => (
+          {f.options.map(({ emoji: face, value: val, label: word }) => (
             <button key={val} onClick={() => set(f.key, val)} title={word} style={{ flex: 1, cursor: "pointer",
               fontSize: 24, lineHeight: 1.1, padding: "6px 0", borderRadius: 12, background: v === val ? C.lilac : C.low,
               border: `1.5px solid ${v === val ? C.plum : "transparent"}`, filter: v === val ? "none" : "grayscale(0.6)",
@@ -1292,7 +1411,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
           <button onClick={() => setModal(false)} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><X size={22} /></button>
         </div>
         <p style={{ color: C.inkVar, fontSize: 14, marginBottom: 14 }}>Optional — add anything you didn't say out loud. You can keep talking after.</p>
-        {LOG_SCHEMA.map((g) => (<div key={g.group} style={{ marginBottom: 14 }}>
+        {schema.map((g) => (<div key={g.key || g.group} style={{ marginBottom: 14 }}>
           <Label color={C.inkVar}>{g.group}</Label>
           <div style={{ marginTop: 4 }}>{g.fields.map(field)}</div>
         </div>))}
@@ -1412,40 +1531,61 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     return () => { stop = true; };
   }, [settings.patientId]);
 
-  const analysisCard = (<Card>
+  const summaryCard = (<Card>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: head, fontWeight: 600, fontSize: 17 }}><Sparkles size={18} color={C.roseOn} /> Analysis from <Brand /></span>
       {loadingA && <Loader2 size={14} className="spin" color={C.outline} />}
     </div>
-    {analysis?.summary && <p style={{ fontSize: 14, lineHeight: 1.5, color: C.ink, margin: "0 0 12px" }}>{analysis.summary}</p>}
-    {analysis?.insights?.length > 0 ? (<div style={{ display: "grid", gap: 12 }}>{analysis.insights.map((it, i) => (
-      <div key={i}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}><span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 14, color: C.plum }}>{it.title}</span><span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.plum }}>{Math.round(it.strength ?? 0)}%</span></div>
-        <div style={{ height: 6, borderRadius: 9999, background: C.high, marginBottom: 6 }}><div style={{ width: `${Math.max(0, Math.min(100, it.strength ?? 0))}%`, height: "100%", borderRadius: 9999, background: C.plum }} /></div>
-        <p style={{ fontSize: 13, lineHeight: 1.45, color: C.inkVar, margin: 0 }}>{it.detail}</p>
-      </div>))}</div>
-    ) : errA ? (
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, lineHeight: 1.45, color: C.roseOn }}>
-        <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /><span>{errA}</span></div>
-    ) : (!loadingA && <p style={{ fontSize: 13, color: C.inkVar }}>Keep logging — <Brand /> analyses your trends here.</p>)}
+    {analysis?.summary ? <p style={{ fontSize: 14, lineHeight: 1.5, color: C.ink, margin: 0 }}>{analysis.summary}</p>
+      : errA ? (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, lineHeight: 1.45, color: C.roseOn }}>
+          <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /><span>{errA}</span></div>
+      ) : (!loadingA && <p style={{ fontSize: 13, color: C.inkVar, margin: 0 }}>Keep logging — <Brand /> analyses your trends here.</p>)}
   </Card>);
 
-  // Real Pearson correlations computed over the DB logs
-  const correlationsCard = stats?.correlations?.length > 0 && (<Card>
-    <Label color={C.inkVar}>Correlations in your data</Label>
-    <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-      {stats.correlations.slice(0, 4).map((c, i) => { const a = Math.abs(c.r); return (
-        <div key={i}>
+  // Everything found in the data, filed under the section of the Record screen
+  // it came from — so an insight sits where the question that produced it was.
+  const SECTION_ICONS = { cycle: Droplet, wellbeing: Heart, body: Activity, lifestyle: HeartPulse, skin: Sparkles };
+  const sectionCards = (stats?.byCategory || []).map((g) => {
+    const Ico = SECTION_ICONS[g.key] || Info;
+    const mine = (analysis?.insights || []).filter((it) => it.category === g.key);
+    const empty = !mine.length && !g.correlations.length && !g.trends.length && !g.facts.length;
+    return (<Card key={g.key}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <span style={{ width: 30, height: 30, borderRadius: 9, background: C.lilac, display: "grid", placeItems: "center" }}>
+          <Ico size={16} color={C.plumDark} /></span>
+        <span style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>{g.label}</span>
+        {g.count > 0 && <span style={{ marginLeft: "auto", fontFamily: bodyf, fontSize: 11.5, fontWeight: 700, color: C.plum, background: C.low, borderRadius: 9999, padding: "3px 9px" }}>{g.count} found</span>}
+      </div>
+      {empty && <p style={{ fontSize: 13, color: C.outline, margin: 0 }}>Nothing to report here yet — a few more logged days and this fills in.</p>}
+      {mine.map((it, i) => (<div key={`ai${i}`} style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+          <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 14, color: C.plum }}>{it.title}</span>
+          <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.plum }}>{Math.round(it.strength ?? 0)}%</span></div>
+        <div style={{ height: 6, borderRadius: 9999, background: C.high, marginBottom: 6 }}>
+          <div style={{ width: `${Math.max(0, Math.min(100, it.strength ?? 0))}%`, height: "100%", borderRadius: 9999, background: C.plum }} /></div>
+        <p style={{ fontSize: 13, lineHeight: 1.45, color: C.inkVar, margin: 0 }}>{it.detail}</p>
+      </div>))}
+      {g.correlations.map((c, i) => { const a = Math.abs(c.r); return (
+        <div key={`c${i}`} style={{ marginBottom: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 14, color: C.ink }}>{c.label}</span>
-            <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.plum }}>r {c.r > 0 ? "+" : ""}{c.r.toFixed(2)}</span>
-          </div>
-          <div style={{ height: 6, borderRadius: 9999, background: C.high }}><div style={{ width: `${Math.round(a * 100)}%`, height: "100%", borderRadius: 9999, background: a >= 0.6 ? C.plum : C.plumC }} /></div>
-          <div style={{ fontSize: 11.5, color: C.outline, marginTop: 3 }}>{c.strength} correlation · {c.n} days</div>
+            <span style={{ fontSize: 13.5, color: C.ink }}>{c.label}</span>
+            <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.plum }}>r {c.r > 0 ? "+" : ""}{c.r.toFixed(2)}</span></div>
+          <div style={{ height: 6, borderRadius: 9999, background: C.high }}>
+            <div style={{ width: `${Math.round(a * 100)}%`, height: "100%", borderRadius: 9999, background: a >= 0.6 ? C.plum : C.plumC }} /></div>
+          <div style={{ fontSize: 11.5, color: c.holds === false ? C.roseOn : C.outline, marginTop: 3 }}>
+            {c.strength} correlation · {c.n} days{c.holds === false ? " · runs the other way in your data" : ""}</div>
         </div>); })}
-    </div>
-    <div style={{ fontSize: 11.5, color: C.outline, marginTop: 12, lineHeight: 1.5 }}>Pearson r ranges −1 to +1; |r| ≥ 0.6 is strong, 0.4–0.6 moderate. Association, not proof of cause.</div>
-  </Card>);
+      {g.trends.length > 0 && (<div style={{ display: "grid", gap: 6, marginTop: g.correlations.length ? 4 : 0 }}>
+        {g.trends.map((t, i) => (<div key={`t${i}`} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+          <span style={{ color: C.ink }}>{t.label} over time</span>
+          <span style={{ fontFamily: head, fontWeight: 700, color: t.direction === "down" ? C.plum : C.roseOn }}>{t.direction === "up" ? "↑" : "↓"} {Math.abs(t.perWeek)}/wk</span>
+        </div>))}</div>)}
+      {g.facts.length > 0 && (<div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+        {g.facts.map((f, i) => (<span key={`f${i}`} style={{ fontFamily: bodyf, fontSize: 12, color: C.inkVar, background: C.low, borderRadius: 10, padding: "7px 11px" }}>
+          {f.label} <b style={{ color: C.plum }}>{f.value}{f.unit}</b></span>))}</div>)}
+    </Card>);
+  });
 
   // Cycle variability: mean ± SD and coefficient of variation
   const cy = stats?.cycle;
@@ -1461,16 +1601,6 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     <div style={{ fontSize: 13, color: C.inkVar, marginTop: 8 }}>Range {cy.min}–{cy.max} days across {cy.cycles} cycles · variability (CV) {cy.cv}%</div>
     {gaps.length > 0 && <div style={{ marginTop: 12 }}><CycleBars gaps={gaps} /></div>}
     <div style={{ fontSize: 11.5, color: C.outline, marginTop: 10, lineHeight: 1.5 }}>Typical adult cycles run 21–35 days. Consistently longer or highly variable cycles are a common PMOS sign — worth raising with a clinician.</div>
-  </Card>);
-
-  const trendCard = stats?.trends?.length > 0 && (<Card>
-    <Label color={C.inkVar}>Direction over time</Label>
-    <div style={{ display: "grid", gap: 8, marginTop: 10 }}>{stats.trends.map((t, i) => (
-      <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-        <span style={{ color: C.ink }}>{t.label}</span>
-        <span style={{ fontFamily: head, fontWeight: 700, color: t.direction === "down" ? C.plum : C.roseOn }}>{t.direction === "up" ? "↑" : "↓"} {Math.abs(t.perWeek)}/wk</span>
-      </div>))}</div>
-    <div style={{ fontSize: 11.5, color: C.outline, marginTop: 10 }}>Least-squares slope over your logged days.</div>
   </Card>);
 
   const explorerCard = (<Card>
@@ -1544,8 +1674,8 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     ) : (<>
       {chipsRow}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
-        <div style={{ display: "grid", gap: 18 }}>{analysisCard}{cycleCard}{explorerCard}</div>
-        <div style={{ display: "grid", gap: 18 }}>{statsLoading && loadingCard}{trendsCard}{correlationsCard}{trendCard}{highlights}</div>
+        <div style={{ display: "grid", gap: 18 }}>{summaryCard}{sectionCards}{explorerCard}</div>
+        <div style={{ display: "grid", gap: 18 }}>{statsLoading && loadingCard}{cycleCard}{trendsCard}{highlights}</div>
       </div>
       <div style={{ marginTop: 20 }}>{disclaimer}</div>
     </>)}
@@ -1558,13 +1688,12 @@ function InsightsScreen({ ins, logs, settings, wide }) {
       <div style={{ marginTop: 16 }}>{disclaimer}</div>
     </>) : (<>
       {chipsRow}
-      <div style={{ marginBottom: 18 }}>{analysisCard}</div>
+      <div style={{ marginBottom: 18 }}>{summaryCard}</div>
       {statsLoading && <div style={{ marginBottom: 18 }}>{loadingCard}</div>}
+      {sectionCards.map((card, i) => <div key={i} style={{ marginBottom: 18 }}>{card}</div>)}
       {cycleCard && <div style={{ marginBottom: 18 }}>{cycleCard}</div>}
       <div style={{ marginBottom: 18 }}>{trendsCard}</div>
-      {correlationsCard && <div style={{ marginBottom: 18 }}>{correlationsCard}</div>}
       <div style={{ marginBottom: 18 }}>{explorerCard}</div>
-      {trendCard && <div style={{ marginBottom: 18 }}>{trendCard}</div>}
       {highlights}
       <div style={{ marginTop: 16 }}>{disclaimer}</div>
     </>)}
@@ -1756,11 +1885,166 @@ function Mini({ label, value, flag, amber }) {
   return (<Card style={{ padding: 16 }}><div style={{ fontFamily: bodyf, fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: C.inkVar, textTransform: "uppercase" }}>{label}</div><div style={{ fontFamily: head, fontWeight: 700, fontSize: 26, color: c }}>{value}</div></Card>);
 }
 
+// ---- conditions, the mFG sheet, and drug therapy ---------------------------
+// Keys are the backend's: criteria.py reads "hirsutism" as clinical
+// hyperandrogenism already established, and treats the thyroid ones as
+// alternative explanations worth naming.
+const CONDITIONS = [
+  ["infertility", "Infertility", "Trying to conceive without success"],
+  ["hirsutism", "Hirsutism", "Diagnosed excess hair growth"],
+  ["diabetes1", "Diabetes type 1", ""],
+  ["diabetes2", "Diabetes type 2", ""],
+  ["hypothyroidism", "Hypothyroidism", "Underactive thyroid"],
+  ["hyperthyroidism", "Hyperthyroidism", "Overactive thyroid"],
+];
+
+// The nine areas of the modified Ferriman-Gallwey sheet, each scored 0-4, with
+// where each one sits on the drawing and how big its marker is — the two on the
+// face share a head 11 units across, so they take a smaller dot to fit.
+// Same keys as criteria.MFG_AREAS.
+const FG_AREAS = [
+  ["upperLip", "Upper lip", "front", 50, 14, 3.5],
+  ["chin", "Chin", "front", 50, 21.5, 3.5],
+  ["chest", "Chest", "front", 50, 58, 5.5],
+  ["upperAbdomen", "Upper abdomen", "front", 50, 84, 5.5],
+  ["lowerAbdomen", "Lower abdomen", "front", 50, 104, 5.5],
+  ["upperArms", "Upper arms", "front", 33, 66, 4.2],
+  ["thighs", "Thighs", "front", 42, 133, 4.5],
+  ["upperBack", "Upper back", "back", 50, 60, 5.5],
+  ["lowerBack", "Lower back", "back", 50, 95, 5.5],
+];
+const FG_MAX = 4;
+const FG_WORDS = ["none", "a few hairs", "scattered", "spread", "thick"];
+const fgTotal = (mfg) => FG_AREAS.reduce((t, [k]) => t + (Number(mfg?.[k]) || 0), 0);
+const fgScored = (mfg) => FG_AREAS.filter(([k]) => mfg?.[k] != null).length;
+
+function FerrimanGallwey({ value, onChange, threshold = 4 }) {
+  const mfg = value || {};
+  const [focus, setFocus] = useState(null);
+  const set = (k, v) => onChange({ ...mfg, [k]: mfg[k] === v ? undefined : v });
+  const total = fgTotal(mfg), scored = fgScored(mfg);
+  const shade = (v) => (v ? `rgba(158,79,94,${0.25 + 0.18 * v})` : "rgba(255,255,255,0.85)");
+  const figure = (view) => (
+    <svg key={view} viewBox="0 0 100 205" style={{ width: "48%", maxWidth: 130, display: "block" }}>
+      <g fill={C.rose} stroke={C.lilacDim} strokeWidth={1.3} strokeLinejoin="round">
+        <circle cx="50" cy="15" r="11" /><path d={BODY_OUTLINE} />
+      </g>
+      {FG_AREAS.filter(([, , w]) => w === view).map(([k, label, , x, y, r]) => {
+        const v = Number(mfg[k]) || 0, on = focus === k;
+        return (<g key={k} onClick={() => setFocus(k)} style={{ cursor: "pointer" }}>
+          <title>{label}</title>
+          <circle cx={x} cy={y} r={on ? r + 1 : r} fill={shade(v)} stroke={on ? C.plum : C.roseOn}
+            strokeWidth={on ? 2 : 1.2} />
+          <text x={x} y={y + r * 0.48} textAnchor="middle" fontSize={r * 1.28} fontWeight={700}
+            fill={v ? "#fff" : C.outline} style={{ pointerEvents: "none", fontFamily: bodyf }}>{v}</text>
+        </g>);
+      })}
+      <text x="50" y="203" textAnchor="middle" fontSize={7} fill={C.outline} style={{ fontFamily: bodyf }}>{view}</text>
+    </svg>);
+  return (<div>
+    <div style={{ display: "flex", justifyContent: "center", gap: 10 }}>{figure("front")}{figure("back")}</div>
+    <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
+      {FG_AREAS.map(([k, label]) => {
+        const v = mfg[k], on = focus === k;
+        return (<div key={k} onMouseEnter={() => setFocus(k)} style={{ display: "flex", alignItems: "center", gap: 8,
+          padding: "5px 8px", borderRadius: 10, background: on ? C.lilac : "transparent" }}>
+          <span style={{ flex: 1, fontFamily: bodyf, fontSize: 13, color: on ? C.onLilac : C.inkVar }}>{label}</span>
+          {Array.from({ length: FG_MAX + 1 }, (_, n) => (
+            <button key={n} onClick={() => { setFocus(k); set(k, n); }} title={FG_WORDS[n]}
+              style={{ width: 26, height: 26, borderRadius: 8, cursor: "pointer", fontFamily: bodyf, fontSize: 12.5,
+                fontWeight: v === n ? 700 : 500, background: v === n ? C.plum : C.low,
+                color: v === n ? "#fff" : C.inkVar, border: `1px solid ${v === n ? C.plum : C.outlineVar}` }}>{n}</button>))}
+        </div>);
+      })}
+    </div>
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 12, padding: "10px 12px",
+      borderRadius: 12, background: C.low }}>
+      <span style={{ fontFamily: head, fontWeight: 700, fontSize: 20, color: C.plum }}>{total}</span>
+      <span style={{ fontFamily: bodyf, fontSize: 12.5, color: C.inkVar }}>
+        out of 36 · {scored}/9 areas scored{scored < 9 ? " (unscored areas count as 0)" : ""}</span>
+      <span style={{ marginLeft: "auto", fontFamily: bodyf, fontSize: 12, color: total >= threshold ? C.roseOn : C.outline }}>
+        {total >= threshold ? `at or above ${threshold}` : `below ${threshold}`}</span>
+    </div>
+    <p style={{ fontFamily: bodyf, fontSize: 12, color: C.outline, lineHeight: 1.5, marginTop: 8 }}>
+      Score each area for how much coarse, dark hair grows there: 0 none, 4 thick. Scored by you, so it is a
+      screening signal a clinician would repeat, not a measurement.</p>
+  </div>);
+}
+
+function ConditionsPanel({ profile, setProfile, compact }) {
+  const have = profile.conditions || [];
+  const toggle = (k) => setProfile({ ...profile, conditions: have.includes(k) ? have.filter((x) => x !== k) : [...have, k] });
+  return (<div>
+    <div style={{ display: "grid", gap: 8 }}>
+      {CONDITIONS.map(([k, label, note]) => { const on = have.includes(k); return (
+        <button key={k} onClick={() => toggle(k)} style={{ textAlign: "left", padding: compact ? "11px 14px" : 14,
+          borderRadius: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
+          background: on ? C.lilac : C.low, border: `1.5px solid ${on ? C.plum : "transparent"}` }}>
+          <span style={{ flex: 1 }}>
+            <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15, color: on ? C.onLilac : C.ink }}>{label}</div>
+            {note && <div style={{ fontFamily: bodyf, fontSize: 12, color: on ? C.plumDark : C.inkVar }}>{note}</div>}
+          </span>
+          {on && <Check size={17} color={C.plum} />}
+        </button>); })}
+    </div>
+    {have.includes("hirsutism") && (
+      <div style={{ marginTop: 14, padding: 14, borderRadius: 16, border: `1.5px solid ${C.outlineVar}` }}>
+        <Label>Ferriman-Gallwey score</Label>
+        <FerrimanGallwey value={profile.mfg} onChange={(mfg) => setProfile({ ...profile, mfg })} />
+      </div>)}
+  </div>);
+}
+
+// Ongoing treatment. Kept on the profile, not the daily log: it is a course
+// someone is on, and the pill also tells the cycle criterion what it is reading.
+const DRUGS = [
+  ["glp1", "GLP-1", "e.g. semaglutide, liraglutide"],
+  ["letrozole", "Letrozole", "ovulation induction"],
+  ["ocp", "Oral contraceptive pill", "cycle control, acne, excess hair"],
+];
+
+function DrugTherapy({ profile, setProfile }) {
+  const on = profile.drugs || [];
+  const toggle = (k) => setProfile({ ...profile, drugs: on.includes(k) ? on.filter((x) => x !== k) : [...on, k] });
+  return (<Card style={{ padding: 20, boxShadow: SH_SM }}>
+    <Label>Drug therapy</Label>
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 12px" }}>
+      <H size={20}>What you're taking</H>
+      <span style={{ fontFamily: bodyf, fontSize: 12.5, color: C.inkVar, marginLeft: "auto" }}>
+        {on.length ? `${on.length} active` : "none logged"}</span>
+    </div>
+    <div style={{ display: "grid", gap: 8 }}>
+      {DRUGS.map(([k, label, note]) => { const active = on.includes(k); return (
+        <button key={k} onClick={() => toggle(k)} style={{ textAlign: "left", padding: "12px 14px", borderRadius: 14,
+          cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
+          background: active ? C.lilac : C.low, border: `1.5px solid ${active ? C.plum : "transparent"}` }}>
+          <span style={{ width: 30, height: 30, borderRadius: 9, background: active ? C.plum : C.surface,
+            display: "grid", placeItems: "center", flexShrink: 0 }}>
+            <Pill2 size={15} color={active ? "#fff" : C.outline} /></span>
+          <span style={{ flex: 1 }}>
+            <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15, color: active ? C.onLilac : C.ink }}>{label}</div>
+            <div style={{ fontFamily: bodyf, fontSize: 12, color: active ? C.plumDark : C.inkVar }}>{note}</div>
+          </span>
+          {active && <Check size={17} color={C.plum} />}
+        </button>); })}
+    </div>
+  </Card>);
+}
+
 // ---- SETTINGS --------------------------------------------------------------
-function SettingsScreen({ settings, setSettings, setLogs, profile, setTab }) {
+function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, setTab }) {
   const set = (k, v) => setSettings({ ...settings, [k]: v });
+  const have = profile.conditions || [];
   return (<div>
     <H size={28} style={{ margin: "8px 0 16px" }}>Settings</H>
+    <Card style={{ marginBottom: 14 }}>
+      <Label color={C.inkVar}>Conditions — what a clinician has already diagnosed</Label>
+      <p style={{ fontSize: 12, color: C.inkVar, margin: "8px 0 12px", lineHeight: 1.5 }}>
+        These change how your tracking is read: a hirsutism diagnosis already settles one of the criteria, and
+        thyroid conditions can explain irregular cycles on their own.</p>
+      <ConditionsPanel profile={profile} setProfile={setProfile} compact />
+      {have.length === 0 && <p style={{ fontSize: 11.5, color: C.outline, marginTop: 10 }}>Nothing selected — leave it empty if none apply.</p>}
+    </Card>
     <Card style={{ marginBottom: 14 }}>
       <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.plum, width: 18, height: 18 }} /><span style={{ fontSize: 15 }}>Speak replies aloud</span></label>
     </Card>

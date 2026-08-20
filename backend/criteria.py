@@ -60,6 +60,33 @@ def merge_rules(overrides):
     return r
 
 
+# The modified Ferriman-Gallwey sheet: nine areas, each scored 0-4, so the
+# total runs 0-36. Self-scored here, which is why it stays a screening signal.
+MFG_AREAS = [
+    ("upperLip", "Upper lip"), ("chin", "Chin"), ("chest", "Chest"),
+    ("upperAbdomen", "Upper abdomen"), ("lowerAbdomen", "Lower abdomen"),
+    ("upperArms", "Upper arms"), ("thighs", "Thighs"),
+    ("upperBack", "Upper back"), ("lowerBack", "Lower back"),
+]
+
+def mfg_total(scores):
+    """Sum of the nine areas, or None when the sheet has not been filled in."""
+    if not scores:
+        return None
+    vals = [scores.get(key) for key, _ in MFG_AREAS]
+    vals = [v for v in vals if isinstance(v, (int, float))]
+    return sum(vals) if vals else None
+
+
+# Drug therapy that hides the cycle. Letrozole and GLP-1s do not: they change
+# what the cycle does, which is exactly what we still want to read.
+HORMONAL_DRUGS = {"ocp", "oral contraceptive pill", "combined pill", "the pill"}
+
+def is_hormonal_drug(name):
+    key = str(name).strip().lower()
+    return key in HORMONAL_DRUGS or "contracept" in key
+
+
 def _band_for(years, rules):
     if years is None:
         return None
@@ -129,6 +156,10 @@ def assess_androgen(x, rules=None):
     clinician scores hirsutism by examination and confirms with bloods."""
     R = rules or RULES
     reasons = []
+    conditions = [str(c).lower() for c in (x.get("conditions") or [])]
+    if "hirsutism" in conditions:
+        # already assessed by a clinician — no need to infer it from day counts
+        return {"state": "met", "alerts": [], "reasons": ["Hirsutism is already on your record."]}
     mfg = x.get("mfgScore")
     hair_pct = x.get("hirsutismDaysPct") or 0
     if mfg is not None:
@@ -169,11 +200,25 @@ def recommend(cycles, androgen):
     return {"key": "none", **ADVICE["none"], "why": cycles["reasons"] + androgen["reasons"], "met": 0}
 
 
+# Thyroid disease causes irregular cycles in its own right, so a criterion met
+# on top of one means less than it looks like. We say so rather than adjusting
+# the verdict — deciding what explains what is the clinician's job.
+CONFOUNDERS = {
+    "hypothyroidism": "Hypothyroidism can itself lengthen or stop cycles.",
+    "hyperthyroidism": "Hyperthyroidism can itself shorten or stop cycles.",
+}
+
+def context_notes(x):
+    have = [str(c).lower() for c in (x.get("conditions") or [])]
+    return [note for key, note in CONFOUNDERS.items() if key in have]
+
+
 def assess(x, rules=None):
     R = rules or RULES
     cycles = assess_cycles(x, R)
     androgen = assess_androgen(x, R)
     return {
+        "context": context_notes(x),
         "cycles": cycles,
         "androgen": androgen,
         "recommendation": recommend(cycles, androgen),
@@ -197,6 +242,10 @@ def derive_inputs(patient, logs, summary):
     # cycle tracking leave ovulation — and so the criterion — perfectly readable.
     last = logs[-1] if logs else {}
     method = str(last.get("birthControlType") or "").strip().lower()
+    # A pill listed under drug therapy is still hormonal contraception, whether
+    # or not the person thinks of it that way when logging a day.
+    if any(is_hormonal_drug(d) for d in (getattr(patient, "drugs", None) or [])):
+        method = "hormonal"
     if not method and last.get("birthControl"):
         # older logs stored a free-text method; read it the same way
         method = "hormonal" if any(w in str(last["birthControl"]).lower()
@@ -222,7 +271,8 @@ def derive_inputs(patient, logs, summary):
         "avgCycle": summary.get("avgCycleDays"),
         # "cycles per year" only means anything with about a year of logs behind it
         "cyclesPerYear": (observed + 1) if days >= 330 else None,
-        "mfgScore": getattr(patient, "mfg_score", None),
+        "mfgScore": mfg_total(getattr(patient, "mfg", None)),
+        "conditions": list(getattr(patient, "conditions", None) or []),
         "hirsutismDaysPct": pct("hairGrowth"),
         "hairLossDaysPct": pct("hairLoss"),
         "persistentAcne": bool(getattr(patient, "acne", False)),

@@ -65,10 +65,21 @@ def test_weak_correlations_are_not_reported():
     labels = [c["label"] for c in ins.summarise(logs)["correlations"]]
     assert "Less sleep → lower energy" not in labels
 
+def test_a_label_that_reads_backwards_is_marked_as_reversed():
+    # "Less sleep -> more brain fog" is confirmed by a NEGATIVE r; here sleep and
+    # fog rise together, so the claim does not hold even though |r| is high
+    logs = days(30, sleep=[i % 10 for i in range(30)], brainFog=[i % 10 for i in range(30)])
+    hit = next(c for c in ins.summarise(logs)["correlations"] if c["label"] == "Less sleep → more brain fog")
+    assert hit["r"] == 1.0 and hit["holds"] is False
+
+def test_every_correlation_declares_which_sign_confirms_it():
+    assert all(c.get("expect") in ("+", "-") for c in ins.CORRELATIONS)
+
 def test_a_real_correlation_is_reported_with_its_strength():
     logs = days(30, sleep=[i % 10 for i in range(30)], energy=[i % 10 for i in range(30)])
     hit = next(c for c in ins.summarise(logs)["correlations"] if c["label"] == "Less sleep → lower energy")
     assert hit["r"] == 1.0 and hit["strength"] == "very strong" and hit["direction"] == "positive"
+    assert hit["holds"] is True
 
 def test_strength_wording_tracks_the_bands():
     assert (ins.strength(0.85), ins.strength(0.65), ins.strength(0.45),
@@ -130,6 +141,31 @@ def test_a_tracker_needs_a_few_readings():
     assert ins.summarise(cat(2))["categoryTrends"] == []
     got = ins.summarise(cat(6))["categoryTrends"][0]
     assert got["key"] == "fog" and got["n"] == 6 and got["earlier"] < got["recent"]
+
+
+# ---- categories mirror the Record screen -----------------------------------
+def test_categories_come_from_the_record_schema():
+    import record
+    assert ins.CATEGORIES == record.CATEGORIES
+    assert [k for k, _ in ins.CATEGORIES] == ["cycle", "wellbeing", "body", "lifestyle", "skin"]
+
+def test_every_correlation_is_filed_under_a_real_section():
+    known = {k for k, _ in ins.CATEGORIES}
+    for c in ins.CORRELATIONS:
+        assert c.get("category", ins.category_of(c["b"])) in known, c["label"]
+    for _, _, cat in ins.TRENDED:
+        assert cat in known
+
+def test_a_finding_lands_in_its_own_section():
+    logs = days(30, sleep=[i % 10 for i in range(30)], energy=[i % 10 for i in range(30)])
+    groups = {g["key"]: g for g in ins.summarise(logs)["byCategory"]}
+    assert "Less sleep → lower energy" in [c["label"] for c in groups["wellbeing"]["correlations"]]
+    assert groups["skin"]["correlations"] == []
+
+def test_all_sections_are_listed_even_when_empty():
+    groups = ins.summarise([])["byCategory"]
+    assert [g["key"] for g in groups] == [k for k, _ in ins.CATEGORIES]
+    assert all(g["count"] == 0 and g["facts"] == [] for g in groups)
 
 
 # ---- the cycle label belongs to criteria.py --------------------------------

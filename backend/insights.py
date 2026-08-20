@@ -16,6 +16,8 @@ import datetime as dt
 import math
 import statistics
 
+import record
+
 RULES = {
     # A correlation is only shown when it clears both bars: enough paired days
     # to mean anything, and enough strength to be worth a sentence.
@@ -43,22 +45,46 @@ RULES = {
 # |r| at or above the cut → the word we use for it.
 STRENGTH_BANDS = [(0.8, "very strong"), (0.6, "strong"), (0.4, "moderate"), (0.2, "weak")]
 
-# The correlations we look for, and how each pairs its two columns:
+# Insights are grouped the same way the Record screen is, so a finding lands
+# under the heading the person filled in to produce it. Both the sections and
+# the field-to-section mapping come from the schema rather than a second list.
+CATEGORIES = record.CATEGORIES
+CATEGORY_LABELS = dict(CATEGORIES)
+FIELD_CATEGORY = record.FIELD_CATEGORY
+
+
+def category_of(key, default="body"):
+    return FIELD_CATEGORY.get(key, default)
+
+
+# The correlations we look for. "pairing" says how the two columns line up:
 #   "same"   both readings from the same day
 #   "lagged" yesterday's first reading against today's second
 #   "flag"   a yes/no flag against a number, from the same day
 #   "toflag" a number against tomorrow's yes/no flag
+# "category" is where the finding is shown; it is the section the *outcome*
+# belongs to, except where a cross-section pattern reads better elsewhere.
+# "expect" is the sign of r that CONFIRMS the label: "Less sleep -> more brain
+# fog" is confirmed by a negative r, since it pairs sleep against fog. Without
+# it a reader sees "r -0.69" under a claim and cannot tell which way it went.
 CORRELATIONS = [
-    ("Higher sugar → next-day pain",     "lagged", "sugar",    "pain"),
-    ("Less sleep → more brain fog",      "same",   "sleep",    "brainFog"),
-    ("Less sleep → lower energy",        "same",   "sleep",    "energy"),
-    ("Higher pain → lower mood",         "same",   "pain",     "mood"),
-    ("Bloating days → higher pain",      "flag",   "bloating", "pain"),
-    ("Higher sugar → next-day cravings", "toflag", "sugar",    "cravings"),
+    {"label": "Period days → higher pain", "expect": "+",       "pairing": "flag",   "a": "period", "b": "pain",      "category": "cycle"},
+    {"label": "Period days → lower energy", "expect": "-",      "pairing": "flag",   "a": "period", "b": "energy",    "category": "cycle"},
+    {"label": "Less sleep → more brain fog", "expect": "-",     "pairing": "same",   "a": "sleep",  "b": "brainFog",  "category": "wellbeing"},
+    {"label": "Less sleep → lower energy", "expect": "+",       "pairing": "same",   "a": "sleep",  "b": "energy",    "category": "wellbeing"},
+    {"label": "Higher pain → lower mood", "expect": "-",        "pairing": "same",   "a": "pain",   "b": "mood",      "category": "wellbeing"},
+    {"label": "Higher sugar → next-day pain", "expect": "+",    "pairing": "lagged", "a": "sugar",  "b": "pain",      "category": "body"},
+    {"label": "Higher food drive → higher sugar", "expect": "+","pairing": "same",   "a": "foodDrive", "b": "sugar",  "category": "body"},
+    {"label": "Higher sugar → next-day cravings", "expect": "+","pairing": "toflag", "a": "sugar",  "b": "cravings",  "category": "lifestyle"},
+    {"label": "Higher pain → lower sex drive", "expect": "-",   "pairing": "same",   "a": "pain",   "b": "sexDrive",  "category": "lifestyle"},
+    {"label": "Lower energy → lower sex drive", "expect": "+",  "pairing": "same",   "a": "energy", "b": "sexDrive",  "category": "lifestyle"},
+    {"label": "Higher sugar → next-day acne", "expect": "+",    "pairing": "toflag", "a": "sugar",  "b": "acne",      "category": "skin"},
 ]
 
-TRENDED = [("pain", "Pain"), ("mood", "Mood"), ("energy", "Energy"),
-           ("sleep", "Sleep"), ("brainFog", "Brain fog")]
+TRENDED = [("pain", "Pain", "body"), ("sugar", "Sugar", "body"),
+           ("mood", "Mood", "wellbeing"), ("energy", "Energy", "wellbeing"),
+           ("sleep", "Sleep", "wellbeing"), ("brainFog", "Brain fog", "wellbeing"),
+           ("sexDrive", "Sex drive", "lifestyle"), ("morningWeight", "Morning weight", "body")]
 
 
 # ---- small statistics ------------------------------------------------------
@@ -169,19 +195,23 @@ def summarise(logs, patient=None, rules=None, cycle_verdict=None):
     starts = cycle_starts(logs)
 
     correlations = []
-    for label, kind, a, b in CORRELATIONS:
-        p = pearson(_pairs(logs, kind, a, b), R)
+    for c in CORRELATIONS:
+        p = pearson(_pairs(logs, c["pairing"], c["a"], c["b"]), R)
         if p and abs(p["r"]) >= R["minAbsR"]:
-            correlations.append({"label": label, "r": p["r"], "n": p["n"],
+            correlations.append({"label": c["label"], "r": p["r"], "n": p["n"],
+                                 "category": c.get("category", category_of(c["b"])),
                                  "strength": strength(p["r"]),
+                                 # does the data run the way the label claims?
+                                 "holds": (p["r"] > 0) == (c.get("expect", "+") == "+"),
                                  "direction": "positive" if p["r"] > 0 else "negative"})
     correlations.sort(key=lambda c: -abs(c["r"]))
 
     trends = []
-    for key, label in TRENDED:
+    for key, label, category in TRENDED:
         per_week = slope_per_week([l.get(key) for l in logs], R)
         if per_week is not None and abs(per_week) >= R["minTrendPerWeek"]:
-            trends.append({"key": key, "label": label, "perWeek": per_week,
+            trends.append({"key": key, "label": label, "category": category,
+                           "perWeek": per_week,
                            "direction": "up" if per_week > 0 else "down"})
 
     # trackers the person named themselves, halved to show then-versus-now
@@ -226,11 +256,48 @@ def summarise(logs, patient=None, rules=None, cycle_verdict=None):
         "hairLossDaysPct": _pct(logs, "hairLoss"),
         "correlations": correlations, "cycle": cycle, "trends": trends,
         "categoryTrends": categories,
-        "recent": {k: [l.get(k) for l in logs[-R["recentDays"]:]] for k, _ in TRENDED},
+        "recent": {k: [l.get(k) for l in logs[-R["recentDays"]:]] for k, _, _ in TRENDED},
     }
+    summary["byCategory"] = by_category(summary)
     if cycle_verdict:
         label_cycle(summary, cycle_verdict)
     return summary
+
+
+def by_category(summary):
+    """The findings regrouped under the Record sections, each with the handful of
+    averages that belong to it, so a section is never an empty heading."""
+    if not summary.get("loggedDays"):
+        # 0% and "0 days since" are arithmetic on nothing, not facts about anyone
+        return [{"key": k, "label": l, "correlations": [], "trends": [], "facts": [], "count": 0}
+                for k, l in CATEGORIES]
+    facts = {
+        "cycle": [("Average cycle", summary.get("avgCycleDays"), "days"),
+                  ("Cycles logged", summary.get("cycleCount") or None, ""),
+                  ("Day of cycle", summary.get("cycleDay"), "")],
+        "wellbeing": [("Average mood", summary.get("avgMood"), "/10"),
+                      ("Average energy", summary.get("avgEnergy"), "/10"),
+                      ("Average sleep", summary.get("avgSleep"), "/10"),
+                      ("Average brain fog", summary.get("avgBrainFog"), "/10")],
+        "body": [("Average pain", summary.get("avgPain"), "/10"),
+                 ("Days since severe pain", summary.get("daysSinceSeverePain"), ""),
+                 ("Average sugar", summary.get("avgSugar"), "/10")],
+        "lifestyle": [("Pain after high-sugar days", summary.get("painAfterHighSugar"), "/10"),
+                      ("Pain after low-sugar days", summary.get("painAfterLowSugar"), "/10")],
+        "skin": [("Days with hair growth", summary.get("hairGrowthDaysPct"), "%"),
+                 ("Days with hair loss", summary.get("hairLossDaysPct"), "%")],
+    }
+    out = []
+    for key, label in CATEGORIES:
+        group = {
+            "key": key, "label": label,
+            "correlations": [c for c in summary["correlations"] if c.get("category") == key],
+            "trends": [t for t in summary["trends"] if t.get("category") == key],
+            "facts": [{"label": l, "value": v, "unit": u} for l, v, u in facts[key] if v is not None],
+        }
+        group["count"] = len(group["correlations"]) + len(group["trends"])
+        out.append(group)
+    return out
 
 
 def label_cycle(summary, verdict):

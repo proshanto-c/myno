@@ -28,6 +28,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 import criteria
 import insights
+import record
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg2://myno:myno@db:5432/myno")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -55,6 +56,9 @@ class Patient(Base):
     integrations = Column(JSON, default=list)
     blacklist = Column(JSON, default=list)          # blocked feature keys
     adapt_state = Column(JSON, default=dict)        # inferred prefs (tone, length, distress)
+    conditions = Column(JSON, default=list)         # already-diagnosed conditions (settings)
+    mfg = Column(JSON, default=dict)                # modified Ferriman-Gallwey, per body area
+    drugs = Column(JSON, default=list)              # current drug therapy (home)
     suggestions = Column(JSON, default=list)        # research-backed tracker suggestions (daily)
     suggestions_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
@@ -105,6 +109,9 @@ with engine.begin() as _conn:
     _conn.execute(text("ALTER TABLE daily_logs ADD COLUMN IF NOT EXISTS data JSON DEFAULT '{}'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions JSON DEFAULT '[]'::json"))
     _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS suggestions_at TIMESTAMP"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS conditions JSON DEFAULT '[]'::json"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS mfg JSON DEFAULT '{}'::json"))
+    _conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS drugs JSON DEFAULT '[]'::json"))
 
 # ---------------------------------------------------------------- app
 app = FastAPI(title="Tawazzun backend")
@@ -130,6 +137,7 @@ class PatientIn(BaseModel):
     height_cm: Optional[float] = None; weight_kg: Optional[float] = None
     family_history: bool = False; acne: bool = False; skin_darkening: bool = False
     weight_gain: bool = False; goals: list = []; integrations: list = []
+    conditions: list = []; mfg: dict = {}; drugs: list = []
 
 def patient_dict(p: Patient):
     return {c.name: getattr(p, c.name) for c in p.__table__.columns}
@@ -287,20 +295,41 @@ async def patient_insights(pid: int):
     logs = [_log_dict(r) for r in rows]; s.close()
     stats = _summarise(logs)
     block_line = ", ".join(FEATURES[f]["label"] for f in blocked if f in FEATURES) or "none"
+    sections = ", ".join(f'"{k}" ({l})' for k, l in record.CATEGORIES)
     sys = (
-        "You are Tawazzun, a practical PMOS companion. From this person's own tracking summary, produce 2-4 "
+        "You are Tawazzun, a practical PMOS companion. From this person's own tracking summary, produce "
         "concrete, data-grounded insights — each a real trend or correlation in THEIR numbers — with brief, "
         "actionable, non-diagnostic advice. Never diagnose or give drug doses. "
+        "The summary has a 'byCategory' block: the sections of their Record screen, with the findings and "
+        "averages belonging to each. Write AT MOST ONE insight per section, and only for sections that have "
+        "enough data to say something specific — a section with nothing to report gets no insight. "
+        f"'category' must be one of: {sections}.\n"
         f"NEVER reference anything blocked: {block_line}.\n"
         'Return ONLY JSON: {"summary":str (<=40 words overview), '
-        '"insights":[{"title":str (<=8 words),"detail":str (<=35 words),"strength":0-100}]}.'
+        '"insights":[{"category":str,"title":str (<=8 words),"detail":str (<=35 words),"strength":0-100}]}.'
     )
     raw = await claude(sys, [{"role": "user", "content": json.dumps(stats)}], max_tokens=700)
     try:
         a, b = raw.index("{"), raw.rindex("}"); analysis = json.loads(raw[a:b + 1])
     except Exception:
         analysis = {"summary": "", "insights": []}
-    return {"stats": stats, "analysis": analysis}
+    analysis["insights"] = [_categorise(i) for i in (analysis.get("insights") or []) if isinstance(i, dict)]
+    return {"stats": stats, "analysis": analysis,
+            "categories": [{"key": k, "label": l} for k, l in record.CATEGORIES]}
+
+
+def _categorise(insight: dict) -> dict:
+    """Keep every insight under one of the Record sections. If the model names a
+    section we do not have, we go by whichever field it talks about."""
+    known = dict(record.CATEGORIES)
+    key = str(insight.get("category") or "").strip().lower()
+    if key in known:
+        return {**insight, "category": key}
+    text = f"{insight.get('title', '')} {insight.get('detail', '')}".lower()
+    for field, label in record.FIELD_LABEL.items():
+        if label.lower() in text or field.lower() in text:
+            return {**insight, "category": record.FIELD_CATEGORY[field]}
+    return {**insight, "category": "body"}
 
 # ----- research-backed "what else to track" suggestions (regenerated daily in
 # the background over each patient's data; surfaced dynamically in the UI)
@@ -514,6 +543,10 @@ def _advocacy_metrics(logs, patient):
     for l in reversed(logs):
         if l.get("diagnoses"):
             diag = str(l["diagnoses"]); break
+    # What a clinician has already established. Since the Conditions section
+    # replaced the free-text "diagnoses" box, read both: old logs still carry it.
+    known = [str(c).lower() for c in (getattr(patient, "conditions", None) or [])]
+    diag_text = " ".join(known + [diag.lower()])
     goals = (patient.goals or []) if patient else []
     return {
         "period_days": days,
@@ -529,17 +562,18 @@ def _advocacy_metrics(logs, patient):
         "fatigue_days_per_week": round(cnt(lambda l: isinstance(l.get("energy"), (int, float)) and l["energy"] <= 1) / days * 7, 1),
         "mood_low_days_per_month": round(cnt(lambda l: isinstance(l.get("mood"), (int, float)) and l["mood"] <= 1) / days * 30, 1),
         "energy_avg_score": round((avg("energy") or 0) * 2.5, 1),
-        "hirsutism_descriptor_present": (cnt(lambda l: l.get("hairGrowth")) / days) > 0.15,
+        "hirsutism_descriptor_present": "hirsutism" in known or (cnt(lambda l: l.get("hairGrowth")) / days) > 0.15,
         "hirsutism_areas": "the areas you've noted", "hirsutism_duration": "recent months",
         "acne_flare_frequency_per_month": round(cnt(lambda l: l.get("acne")) / days * 30, 1),
         "weight_change_kg_3mo": round(wlogs[-1]["morningWeight"] - wlogs[0]["morningWeight"], 1) if len(wlogs) >= 2 else 0,
         "insulin_resistance_symptoms_present": ir,
         "insulin_resistance_symptom_description": "frequent sugar cravings and afternoon energy dips" if ir else None,
         "sleep_disturbance_nights_per_week": round(cnt(lambda l: isinstance(l.get("sleep"), (int, float)) and l["sleep"] <= 1) / days * 7, 1),
-        "fertility_concern_flag": any("concei" in str(g).lower() or "fertil" in str(g).lower() for g in goals),
+        "fertility_concern_flag": "infertility" in known or any(
+            "concei" in str(g).lower() or "fertil" in str(g).lower() for g in goals),
         "prior_dismissal_flag": False,
         # patients write the condition either way, so accept both spellings
-        "no_formal_pmos_diagnosis": not any(k in diag.lower() for k in ("pmos", "pcos")),
+        "no_formal_pmos_diagnosis": not any(k in diag_text for k in ("pmos", "pcos")),
     }
 
 ADVOCACY_SYSTEM = (
@@ -593,6 +627,12 @@ async def get_suggestions(pid: int):
     return {"suggestions": sugg, "refreshing": False, "generatedAt": at.isoformat()}
 
 # ----- diagnostic criteria (rules live in criteria.py; nothing here diagnoses)
+@app.get("/record/schema")
+def record_schema():
+    """What the Record screen asks and how to render it. The frontend draws
+    whatever comes back rather than keeping its own copy of the questions."""
+    return {"schema": record.SCHEMA, "categories": [{"key": k, "label": l} for k, l in record.CATEGORIES]}
+
 @app.get("/criteria/rules")
 def criteria_rules():
     """The thresholds the rules read — the experiment panel renders these."""
@@ -895,7 +935,7 @@ class ExtractIn(BaseModel):
     categories: list[dict] = []
     personality: str = "direct"
 
-_SCALE_10_FIELDS = {"pain", "mood", "energy", "sleep", "brainFog", "sexDrive", "sugar", "foodDrive"}
+_SCALE_10_FIELDS = record.SCALE_FIELDS   # every 0-10 field in the record schema
 
 def _clamp_10(value):
     try:
@@ -953,7 +993,8 @@ def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
         f"- NEVER create a category for, ask about, or volunteer anything in this blocked list: {block_line}.\n"
         "- Also fill any standard tracking fields ONLY when clearly implied by what they said; otherwise use null/false. Never force a value.\n"
         "Return ONLY JSON, no prose, no code fences: "
-        '{"period":true|false|null,"flow":"none|spotting|light|medium|heavy"|null,"birthControl":true|false|null,"birthControlType":"natural|mechanical|hormonal"|null,"pain":0-10|null,"mood":0-10|null,"energy":0-10|null,"sleep":0-10|null,"brainFog":0-10|null,"sexDrive":0-10|null,"sugar":0-10|null,"foodDrive":0-10|null,"cravings":bool,"cravingType":"salty|sugary"|null,"exercise":"inactive|fairly active|active|very active"|null,"diet":"higher carbohydrates|higher fats|higher proteins"|null,"morningWeight":number|null,"hairGrowth":bool,"hairLoss":bool,"acne":bool,"dryPatches":bool,"hyperpigmentation":bool,"bloating":bool,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. '
+        "{" + record.extract_shape() +
+        ',"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. ' 
         "Use null/false for fields not mentioned; omit 'scale' where it doesn't fit."
     )
 

@@ -106,6 +106,47 @@ def test_hair_loss_and_acne_count():
     assert cr.assess(case(persistentAcne=True))["androgen"]["state"] == "met"
 
 
+# ---- what a clinician has already established ------------------------------
+class Profile:
+    age = 28; menarche_age = 13; acne = False
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+def _from(profile, **summary):
+    base = {"loggedDays": 200, "cycleCount": 4, "cycleMin": 26, "cycleMax": 31, "avgCycleDays": 28}
+    return cr.derive_inputs(profile, [{"period": True}], {**base, **summary})
+
+def test_a_hirsutism_diagnosis_settles_the_androgen_criterion():
+    a = cr.assess(case(conditions=["hirsutism"], mfgScore=0, hirsutismDaysPct=0))
+    assert a["androgen"]["state"] == "met"
+    assert "already on your record" in a["androgen"]["reasons"][0]
+
+def test_other_conditions_do_not_settle_it():
+    assert cr.assess(case(conditions=["infertility", "diabetes2"]))["androgen"]["state"] == "clear"
+
+def test_the_mfg_sheet_totals_the_nine_areas():
+    x = _from(Profile(mfg={"chin": 3, "upperLip": 2, "thighs": 1}))
+    assert x["mfgScore"] == 6
+    assert _from(Profile(mfg={}))["mfgScore"] is None      # unfilled, not zero
+    assert cr.assess(x)["androgen"]["state"] == "met"
+
+def test_thyroid_conditions_are_named_as_another_explanation():
+    a = cr.assess(case(conditions=["hypothyroidism"], maxCycle=50))
+    assert a["cycles"]["state"] == "met"                   # the finding stands
+    assert any("Hypothyroidism" in n for n in a["context"])
+    assert cr.assess(case())["context"] == []
+
+def test_the_pill_under_drug_therapy_blocks_the_cycle_criterion():
+    x = _from(Profile(drugs=["ocp"]), cycleMax=50)
+    assert x["onContraception"] is True
+    assert cr.assess(x)["cycles"]["state"] == "unknown"
+
+def test_other_drug_therapy_leaves_the_cycle_readable():
+    for drug in ("glp1", "letrozole"):
+        assert _from(Profile(drugs=[drug]))["onContraception"] is False, drug
+
+
 # ---- the recommendation ----------------------------------------------------
 def test_self_reported_signs_alone_only_earn_a_mention():
     a = cr.assess(case(mfgScore=6))
