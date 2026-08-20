@@ -95,6 +95,35 @@ const KEY = "myno:serene:v1";
 async function loadState() { try { const r = await window.storage.get(KEY); return r?.value ? JSON.parse(r.value) : null; } catch (e) { return null; } }
 async function saveState(s) { try { await window.storage.set(KEY, JSON.stringify(s)); } catch (e) {} }
 
+// ---- a tap you can hear ----------------------------------------------------
+// Synthesised rather than shipped: a hundred-millisecond blip needs no asset,
+// no network and no licence. Marking a day rises, clearing one falls, so the
+// sound says which of the two just happened without looking.
+let audioCtx = null;
+function tapSound(kind = "on", enabled = true) {
+  if (!enabled || typeof window === "undefined") return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = audioCtx || new AC();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const t = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const from = kind === "off" ? 520 : 640;
+    const to = kind === "off" ? 360 : 950;
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(from, t);
+    osc.frequency.exponentialRampToValueAtTime(to, t + 0.055);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(kind === "off" ? 0.06 : 0.09, t + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.12);
+  } catch (e) { /* no audio here, no matter */ }
+}
+
 // ---- feature blacklist -----------------------------------------------------
 const FEATURES = {
   mood: { label: "Mood & mental health", fields: ["mood"] },
@@ -1241,7 +1270,8 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
           <div key={phaseKey} className="phase-wash" style={{ background:
             `radial-gradient(120% 90% at 15% 0%, ${ph.from}33, transparent 62%),
              radial-gradient(120% 90% at 85% 100%, ${ph.to}26, transparent 62%)` }} />) : null; })()}
-        <div style={{ position: "relative" }}><CycleCalendar logs={logs} onSet={setPeriodDays} /></div></Card>
+        <div style={{ position: "relative" }}>
+          <CycleCalendar logs={logs} onSet={setPeriodDays} sound={settings?.sounds !== false} /></div></Card>
     </div>);
   const drugCard = <DrugTherapy profile={profile} setProfile={setProfile} />;
   const phaseTiles = (
@@ -1338,7 +1368,7 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
 // Tap a day to log it as a period day, tap it again to take it off. "Range"
 // marks a whole bleed in two taps, which is how most people remember it: the
 // day it started and the day it stopped.
-function CycleCalendar({ logs, onSet }) {
+function CycleCalendar({ logs, onSet, sound = true }) {
   const now = new Date();
   const [month, setMonth] = useState({ y: now.getFullYear(), m: now.getMonth() });
   const [range, setRange] = useState(false);
@@ -1373,8 +1403,13 @@ function CycleCalendar({ logs, onSet }) {
   const tap = (d) => {
     if (!onSet || future(d)) return;
     if (skipClick.current) { skipClick.current = false; return; }
-    if (!range) return onSet([iso(d)], !periodSet.has(iso(d)));
-    if (!anchor) return setAnchor(d);
+    if (!range) {
+      const on = !periodSet.has(iso(d));
+      tapSound(on ? "on" : "off", sound);
+      return onSet([iso(d)], on);
+    }
+    if (!anchor) { tapSound("on", sound); return setAnchor(d); }
+    tapSound("on", sound);
     onSet(span(anchor, d), true);
     setAnchor(null);
   };
@@ -1390,7 +1425,11 @@ function CycleCalendar({ logs, onSet }) {
   const endDrag = () => {
     if (!drag) return;
     const to = hover == null ? drag.from : hover;
-    if (to !== drag.from) { onSet(span(drag.from, to), drag.value); skipClick.current = true; }
+    if (to !== drag.from) {
+      tapSound(drag.value ? "on" : "off", sound);
+      onSet(span(drag.from, to), drag.value);
+      skipClick.current = true;
+    }
     setDrag(null);
   };
   useEffect(() => {
@@ -2647,6 +2686,10 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, s
       {have.length === 0 && <p style={{ fontSize: 11.5, color: C.outline, marginTop: 10 }}>Nothing selected — leave it empty if none apply.</p>}
     </Card>
     <Card style={{ marginBottom: 14 }}>
+      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 10 }}>
+        <input type="checkbox" checked={settings.sounds !== false} onChange={(e) => set("sounds", e.target.checked)}
+          style={{ width: 18, height: 18, accentColor: C.plum }} />
+        <span style={{ fontFamily: bodyf, fontSize: 15 }}>Tap sounds</span></label>
       <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.plum, width: 18, height: 18 }} /><span style={{ fontSize: 15 }}>Speak replies aloud</span></label>
     </Card>
     <Card style={{ marginBottom: 14 }}>
