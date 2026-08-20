@@ -243,7 +243,7 @@ const FALLBACK_SCHEMA = [
     { key: "foodDrive", label: "Food drive", type: "scale", max: SCALE_MAX, words: scaleLabels.foodDrive },
   ] },
   { key: "lifestyle", group: "Lifestyle", fields: [
-    { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive, trend: false },
+    { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive, liveTrend: false },
     { key: "cravings", label: "Cravings", type: "bool" },
     { key: "cravingType", label: "Craving for", type: "select", options: ["salty", "sugary"],
       showIf: { field: "cravings", equals: true } },
@@ -266,9 +266,14 @@ const SCHEMA_CACHE = "myno:record-schema:v2";
 // What can be plotted over time: the form's own numeric questions, in the order
 // the form asks them. Nothing else — a tracker nobody put in the form is a
 // tracker nobody can review, and the model no longer invents them.
-const trendMetrics = (schema, settings) => (schema || [])
+//
+// `live` is the panel on the Record screen, which is open while someone is
+// speaking; a field marked liveTrend:false stays out of that one and remains
+// plottable in Insights, which is opened deliberately.
+const trendMetrics = (schema, settings, { live = false } = {}) => (schema || [])
   .flatMap((g) => g.fields)
-  .filter((f) => ["scale", "emoji", "number"].includes(f.type) && f.trend !== false)
+  .filter((f) => ["scale", "emoji", "number"].includes(f.type))
+  .filter((f) => !(live && f.liveTrend === false))
   .filter((f) => !fieldBlocked(settings, f.key))
   .map((f) => [f.key, f.label, f.max || SCALE_MAX]);
 
@@ -1771,7 +1776,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   // OPT-IN — live trends, correlations & advice from history + this conversation
   const toggleIns = () => { const nv = !insOn; setInsOn(nv); if (nv) runAdvise(); };
   // Trend metrics = the standard analytics fields PLUS any personalized
-  const METRICS = trendMetrics(schema, settings);
+  const METRICS = trendMetrics(schema, settings, { live: true });
   const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", SCALE_MAX];
   const mSel = mEntry[0];
   useEffect(() => { METRICS.forEach(([k]) => seenKeys.current.add(k)); });

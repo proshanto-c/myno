@@ -90,12 +90,13 @@ def test_the_extractor_is_told_to_invent_nothing():
 @test
 def test_what_can_be_plotted_is_what_the_form_asks():
     import record
-    plottable = [f["key"] for f in record.EXTRACTABLE
-                 if f["type"] in ("scale", "emoji", "number") and f.get("trend") is not False]
-    assert plottable == ["mood", "energy", "sleep", "brainFog", "pain", "morningWeight",
-                         "sugar", "foodDrive"]
-    # still asked, still read by the correlations — just not offered as a chart
-    assert record.field("sexDrive")["trend"] is False
+    numeric = [f for f in record.EXTRACTABLE if f["type"] in ("scale", "emoji", "number")]
+    assert [f["key"] for f in numeric] == ["mood", "energy", "sleep", "brainFog", "pain",
+                                           "morningWeight", "sugar", "foodDrive", "sexDrive"]
+    # the live panel on the Record screen drops the one marked for it
+    live = [f["key"] for f in numeric if f.get("liveTrend") is not False]
+    assert "sexDrive" not in live and len(live) == 8
+    assert record.field("sexDrive")["liveTrend"] is False
     assert "sexDrive" in record.extract_shape()
 
 @test

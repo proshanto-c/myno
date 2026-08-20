@@ -21,7 +21,8 @@ Field types the client knows how to render:
 `heading` on a field starts a labelled sub-group above it (the diet macros).
 
 `showIf` is declarative — {"field": ..., "equals": ...} — so it survives JSON.
-`trend: False` keeps a numeric field out of the charts while still asking it.
+`liveTrend: False` keeps a numeric field out of the live panel on the Record
+screen, while leaving it plottable in Insights.
 """
 SCALE_MAX = 10
 
@@ -81,10 +82,9 @@ SCHEMA = [
         _scale("foodDrive", "Food drive"),
     ]},
     {"key": "lifestyle", "group": "Lifestyle", "fields": [
-        # Asked for, and read by the correlations, but not offered as a chart:
-        # "trend": False keeps a field out of the plot pickers without taking it
-        # out of the form.
-        {**_scale("sexDrive", "Sex drive"), "trend": False},
+        # Charted on Insights, which someone opens on purpose, but not in the
+        # panel that sits open on screen while they are talking out loud.
+        {**_scale("sexDrive", "Sex drive"), "liveTrend": False},
         {"key": "cravings", "label": "Cravings", "type": "bool"},
         {"key": "cravingType", "label": "Craving for", "type": "select",
          "options": ["salty", "sugary"], "showIf": {"field": "cravings", "equals": True}},
