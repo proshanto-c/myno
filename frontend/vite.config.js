@@ -2,16 +2,20 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "path";
 
-// Two entries: the patient app at /, and Dalīl's researcher portal at
-// /research/. One build, one nginx, one origin — so the session cookie and the
-// /api proxy work for both without a second container.
+// Three entries, one build, one origin:
+//   /            the two doors
+//   /tawaazun/   the patient app
+//   /dalil/      the researcher portal
+// Assets stay at /assets/ for all of them, so the default base is correct and
+// each page's HTML can sit at whatever path nginx serves it from.
 export default defineConfig({
   plugins: [react()],
   build: {
     rollupOptions: {
       input: {
-        main: resolve(__dirname, "index.html"),
-        research: resolve(__dirname, "research/index.html"),
+        landing: resolve(__dirname, "index.html"),
+        tawaazun: resolve(__dirname, "tawaazun/index.html"),
+        dalil: resolve(__dirname, "dalil/index.html"),
       },
     },
   },

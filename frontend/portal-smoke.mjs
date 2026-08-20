@@ -8,7 +8,7 @@
  *
  *   docker cp myno-frontend-1:/usr/share/nginx/html/assets /tmp/dist/assets
  *   cp portal-smoke.mjs /tmp/ && docker run --rm -v /tmp:/t -w /t node:20-alpine \
- *     sh -c "npm i --silent jsdom && node /t/portal-smoke.mjs /t/dist/assets/research-*.js"
+ *     sh -c "npm i --silent jsdom && node /t/portal-smoke.mjs /t/dist/assets/dalil-*.js"
  *
  * The whole assets directory is needed, not just the entry: the portal shares a
  * vendor chunk with the patient app.
@@ -64,8 +64,8 @@ async function pass(name, { authRequired, signedIn }) {
   console.error = realError;
 
   const html = dom.window.document.getElementById("root").innerHTML;
-  const asked = seen.some((c) => c.includes("/dalil/auth/whoami"));
-  const loaded = seen.some((c) => c.includes("/dalil/corpus"));
+  const asked = seen.some((c) => c.includes("/dalil/api/auth/whoami"));
+  const loaded = seen.some((c) => c.includes("/dalil/api/corpus"));
   console.log(`[${name}] DOM ${html.length} chars · asked whoami: ${asked} · fetched corpus: ${loaded}`);
 
   if (errs.length) { console.log(`[${name}] RUNTIME ERROR:\n${errs[0]}`); return 4; }

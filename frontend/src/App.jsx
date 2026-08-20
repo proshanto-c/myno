@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
+import { autoFill, isEmpty, pick } from "./demofill.js";
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
   cycleRuns, DAY_MS } from "./cycles.js";
@@ -946,7 +947,28 @@ function BottomNav({ tab, setTab }) {
 
 // ---- onboarding ------------------------------------------------------------
 function Onboarding({ profile, setProfile }) {
-  const [step, setStep] = useState(0); const set = (k, v) => setProfile({ ...profile, [k]: v });
+  const [step, setStep] = useState(0);
+  const typed = useRef(false);          // a real keystroke happened
+  const cancelFill = useRef(null);
+  const pRef = useRef(profile);
+  useEffect(() => { pRef.current = profile; });
+
+  const set = (k, v) => setProfile({ ...pRef.current, [k]: v });
+  // A person touching the form owns it from then on.
+  const setByHand = (k, v) => { typed.current = true; cancelFill.current?.(); set(k, v); };
+
+  // The basics step fills itself in for recording: real setProfile calls, one
+  // per character, on an empty form only, cancelled by the first keystroke.
+  useEffect(() => {
+    if (step !== 1 || typed.current || !isEmpty(pRef.current)) return;
+    const person = pick();
+    cancelFill.current = autoFill(person, set, {
+      onDone: (who) => setProfile({ ...pRef.current, goals: who.goals,
+        ...Object.fromEntries(who.chips.map((c) => [c, true])) }),
+    });
+    return () => cancelFill.current?.();
+  }, [step]);
+
   const tog = (k, v) => set(k, profile[k].includes(v) ? profile[k].filter((x) => x !== v) : [...profile[k], v]);
   const GOALS = [["conceive", "Trying to conceive", Target], ["whatswrong", "Figure out what's wrong", Brain], ["manage", "Manage my symptoms", HeartPulse], ["prepare", "Prepare for an appointment", Stethoscope]];
   const APPS = ["Apple Health", "Google Fit", "Oura", "Fitbit", "Clue / Flo"];
@@ -960,11 +982,11 @@ function Onboarding({ profile, setProfile }) {
             <Ico size={22} color={C.plum} /><span style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{l}</span>{on && <Check size={18} color={C.plum} style={{ marginLeft: "auto" }} />}</button>); })}</div></>)}
       {step === 1 && (<><Label>About you</Label><H size={24} style={{ margin: "10px 0 18px" }}>The basics</H>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Field label="First name"><input style={input} value={profile.name} onChange={(e) => set("name", e.target.value)} placeholder="optional" /></Field>
-          <Field label="Age"><input style={input} type="number" value={profile.age} onChange={(e) => set("age", e.target.value)} /></Field>
-          <Field label="Age at first period"><input style={input} type="number" value={profile.menarcheAge} onChange={(e) => set("menarcheAge", e.target.value)} placeholder="e.g. 13" /></Field>
-          <Field label="Height (cm)"><input style={input} type="number" value={profile.heightCm} onChange={(e) => set("heightCm", e.target.value)} /></Field>
-          <Field label="Weight (kg)"><input style={input} type="number" value={profile.weightKg} onChange={(e) => set("weightKg", e.target.value)} /></Field>
+          <Field label="First name"><input style={input} value={profile.name} onChange={(e) => setByHand("name", e.target.value)} placeholder="optional" /></Field>
+          <Field label="Age"><input style={input} type="number" value={profile.age} onChange={(e) => setByHand("age", e.target.value)} /></Field>
+          <Field label="Age at first period"><input style={input} type="number" value={profile.menarcheAge} onChange={(e) => setByHand("menarcheAge", e.target.value)} placeholder="e.g. 13" /></Field>
+          <Field label="Height (cm)"><input style={input} type="number" value={profile.heightCm} onChange={(e) => setByHand("heightCm", e.target.value)} /></Field>
+          <Field label="Weight (kg)"><input style={input} type="number" value={profile.weightKg} onChange={(e) => setByHand("weightKg", e.target.value)} /></Field>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
           {[["familyHistory", "Family history"], ["acne", "Persistent acne"], ["skinDarkening", "Skin darkening"], ["weightGain", "Weight gain"]].map(([k, l]) => (

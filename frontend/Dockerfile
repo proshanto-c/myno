@@ -13,5 +13,6 @@ RUN apk add --no-cache openssl && mkdir -p /etc/nginx/certs && \
       -keyout /etc/nginx/certs/self.key -out /etc/nginx/certs/self.crt \
       -subj "/CN=myno" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY locations.conf /etc/nginx/locations.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80 443

@@ -6,7 +6,9 @@
  * already covers CSRF, and this makes a cross-site form post impossible to
  * construct even where a browser gets that wrong.
  */
-const BASE = "/dalil";
+// The portal is served from /dalil/, so its API lives one level in. nginx
+// matches the longer prefix first, which is what keeps them apart.
+const BASE = "/dalil/api";
 
 export class SignedOut extends Error {
   constructor() { super("Signed out"); this.signedOut = true; }
