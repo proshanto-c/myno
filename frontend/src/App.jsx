@@ -1019,6 +1019,35 @@ function CyclePhaseRing({ dayN, cycleLen }) {
   </svg>);
 }
 
+// The cycle you are in right now, as a single stretch of days: where day 1 was,
+// how much of it has been bleeding, where you are today, and where your own
+// average says the next one lands. The ghost past the marker is the part that
+// hasn't happened — it fills in as the days pass, and overshoots visibly when
+// a period is late, which is the thing worth noticing.
+function CurrentCycleBar({ cycle, avg, hi }) {
+  if (!cycle) return null;
+  const W = 300, H = 44, padL = 8, padR = 8, barY = 16, barH = 15;
+  const track = W - padL - padR;
+  const maxDays = Math.max(cycle.days + 3, (avg || 0) + 5, (hi || 35) + 3);
+  const x = (d) => padL + (d / maxDays) * track;
+  const day = cycle.days;
+  return (<svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
+    <rect x={padL} y={barY} width={track} height={barH} rx={barH / 2} fill={C.low} />
+    <rect x={padL} y={barY} width={Math.max(4, x(day) - padL)} height={barH} rx={barH / 2} fill={C.high} />
+    {/* past your own average the bar deepens: being late is something you see
+        happening, not a sentence you have to read */}
+    {avg > 0 && day > avg && <rect x={x(avg)} y={barY} width={x(day) - x(avg)} height={barH} fill={C.roseDeep} />}
+    <rect x={padL} y={barY} width={Math.max(5, x(cycle.bleed) - padL)} height={barH} rx={barH / 2} fill={C.roseOn} />
+    {avg > 0 && (<g>
+      <line x1={x(avg)} y1={barY - 6} x2={x(avg)} y2={barY + barH + 6} stroke={C.plum} strokeWidth={1.2} strokeDasharray="2 2.5" />
+      <text x={x(avg)} y={barY + barH + 13} textAnchor="middle" style={{ fontSize: 7, fill: C.plum }}>your average</text>
+    </g>)}
+    <circle cx={x(day)} cy={barY + barH / 2} r={6} fill="#fff" stroke={C.plum} strokeWidth={2.5} />
+    <text x={x(day)} y={barY - 7} textAnchor="middle" style={{ fontFamily: head, fontWeight: 700, fontSize: 9, fill: C.plum }}>day {day}</text>
+    <text x={padL} y={H - 2} style={{ fontSize: 7, fill: C.outline }}>day 1</text>
+  </svg>);
+}
+
 function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTab, wide, settings }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = logs.find((l) => l.date === todayStr);
@@ -1054,13 +1083,37 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
         <CycleCalendar logs={logs} onSet={setPeriodDays} /></Card>
     </div>);
   const drugCard = <DrugTherapy profile={profile} setProfile={setProfile} />;
+  // THIS CYCLE — the ring says which phase, the bar says how far in and what
+  // your own history expects. Together they answer "where am I?" without
+  // needing the calendar.
+  const cycles = cyclesFrom(logs);
+  const current = cycles.length ? cycles[cycles.length - 1] : null;
+  const avg = ins.avgCycleDays ? Math.round(ins.avgCycleDays) : null;
+  const cband = assessment?.cycles?.band;
+  const cycleNote = (() => {
+    if (!current) return "Mark a period on the calendar and this fills in.";
+    if (current.days <= current.bleed) return `Day ${current.days} of your period.`;
+    if (!avg) return "A couple more cycles and this will know your rhythm.";
+    const due = new Date(new Date(`${current.start}T00:00:00`).getTime() + avg * 86400000);
+    const left = avg - current.days;
+    const when = due.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    if (left > 0) return `On your average, the next one is around ${when} — ${left} day${left === 1 ? "" : "s"} away.`;
+    if (left === 0) return `On your average, the next one is due today.`;
+    return `${-left} day${left === -1 ? "" : "s"} past your ${avg}-day average.`;
+  })();
+  const late = current && avg && current.days > avg;
   const phaseTiles = (
     <Card style={{ padding: 20, boxShadow: SH_SM }}>
-      <div style={{ display: "flex", justifyContent: "center" }}><CyclePhaseRing dayN={ins.cycleDay} cycleLen={ins.avgCycleDays} /></div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 8 }}>
+      <Label>This cycle</Label>
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}><CyclePhaseRing dayN={ins.cycleDay} cycleLen={ins.avgCycleDays} /></div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 4 }}>
         {PHASE_COLORS.map(([n, col]) => (<span key={n} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}><span style={{ width: 9, height: 9, borderRadius: "50%", background: col, opacity: 0.65 }} /> {n}</span>))}
       </div>
-      <div style={{ textAlign: "center", fontSize: 12.5, color: C.inkVar, marginTop: 10 }}>{ins.avgCycleDays ? `~${ins.avgCycleDays}-day cycle · ${ins.avgCycleDays > 35 ? "irregular" : "stable"}` : "Log a few periods to map your cycle"}</div>
+      {current && (<div style={{ marginTop: 14 }}>
+        <CurrentCycleBar cycle={current} avg={avg} hi={cband?.longDays} />
+      </div>)}
+      <div style={{ textAlign: "center", fontSize: 12.5, lineHeight: 1.5, marginTop: 8,
+        color: late ? C.roseOn : C.inkVar }}>{cycleNote}</div>
     </Card>);
   const recordCTA = (
     <button onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
@@ -1644,6 +1697,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment }) {
   const METRICS = STD.concat(catList.slice(0, 5));
   const [metric, setMetric] = useState("pain");
   const [view, setView] = useState("insights"); // sub-view within Insights: "insights" | "track"
+  const [cycleView, setCycleView] = useState("ribbon");
   const [xKey, setXKey] = useState("sugar"); const [yKey, setYKey] = useState("pain"); const [lagDay, setLagDay] = useState(true);
   const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", false];
   const mSel = mEntry[0], mLbl = mEntry[1], mIsCat = mEntry[2];
@@ -1769,9 +1823,22 @@ function InsightsScreen({ ins, logs, settings, wide, assessment }) {
       <span style={{ fontSize: 14, color: C.inkVar }}>± {cy.sdDays} days (mean ± SD)</span>
     </div>
     <div style={{ fontSize: 13, color: C.inkVar, marginTop: 8 }}>Range {cy.min}–{cy.max} days across {cy.cycles} cycles · variability (CV) {cy.cv}%</div>
-    {/* the band is the one the rules judged them against — teens get wider
-        limits, so the shading has to follow the verdict, not a fixed 21-35 */}
-    <div style={{ marginTop: 14 }}><CycleRibbon cycles={cyclesFrom(logs)} lo={band[0]} hi={band[1]} /></div>
+    {/* Two readings of the same cycles: the ribbon shows each one as a stretch
+        of days, the lengths plot shows how the number drifts over time. The
+        band is the one the rules judged them against — teens get wider limits,
+        so the shading follows the verdict, not a fixed 21-35. */}
+    <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
+      {[["ribbon", "Ribbon"], ["lengths", "Lengths"]].map(([k, lbl]) => (
+        <button key={k} onClick={() => setCycleView(k)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12,
+          padding: "5px 12px", borderRadius: 9999, cursor: "pointer",
+          background: cycleView === k ? C.plum : C.low, color: cycleView === k ? "#fff" : C.inkVar,
+          border: `1.5px solid ${cycleView === k ? C.plum : "transparent"}` }}>{lbl}</button>))}
+    </div>
+    <div style={{ marginTop: 12 }}>
+      {cycleView === "ribbon"
+        ? <CycleRibbon cycles={cyclesFrom(logs)} lo={band[0]} hi={band[1]} />
+        : <CycleBars gaps={gaps} lo={band[0]} hi={band[1]} />}
+    </div>
     <div style={{ fontSize: 11.5, color: C.outline, marginTop: 10, lineHeight: 1.5 }}>Typical adult cycles run 21–35 days. Consistently longer or highly variable cycles are a common PMOS sign — worth raising with a clinician.</div>
   </Card>);
 
@@ -2013,6 +2080,25 @@ function CycleRibbon({ cycles, lo = 21, hi = 35, show = 7 }) {
   </div>);
 }
 
+// cycle lengths over time as dots, with the normal 21–35 day band + reference lines
+function CycleBars({ gaps, lo = 21, hi = 35 }) {
+  if (!gaps.length) return null;
+  const w = 300, h = 124, padL = 22, padB = 16, padT = 14;
+  const maxV = Math.max(hi + 8, ...gaps);
+  const X = (i) => padL + (gaps.length === 1 ? (w - padL - 10) / 2 : (i / (gaps.length - 1)) * (w - padL - 12));
+  const Y = (v) => padT + (1 - v / maxV) * (h - padT - padB);
+  const pts = gaps.map((g, i) => [X(i), Y(g)]);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  return (<svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ display: "block", maxWidth: 400, margin: "0 auto" }}>
+    <rect x={padL} y={Y(hi)} width={w - padL} height={Y(lo) - Y(hi)} fill={C.lilac} fillOpacity={0.5} />
+    {[lo, hi].map((v) => (<g key={v}><line x1={padL} y1={Y(v)} x2={w} y2={Y(v)} stroke={C.lilacDim} strokeDasharray="3 3" /><text x={0} y={Y(v) + 3} style={{ fontSize: 8, fill: C.outline }}>{v}</text></g>))}
+    {gaps.length > 1 && <path d={line} fill="none" stroke={C.outlineVar} strokeWidth={1.5} />}
+    {pts.map((p, i) => { const ok = gaps[i] >= lo && gaps[i] <= hi; return (<g key={i}>
+      <circle cx={p[0]} cy={p[1]} r={4.5} fill={ok ? C.plum : C.roseOn} />
+      <text x={p[0]} y={p[1] - 8} textAnchor="middle" style={{ fontSize: 9, fontWeight: 700, fill: ok ? C.plum : C.roseOn }}>{gaps[i]}</text></g>); })}
+    <text x={w} y={h - 3} textAnchor="end" style={{ fontSize: 8, fill: C.outline }}>each cycle, over time →</text>
+  </svg>);
+}
 // scatter with ordinary-least-squares regression line
 function Scatter({ points, xMax, yMax, xLabel, yLabel }) {
   if (points.length < 4) return null;
