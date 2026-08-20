@@ -1122,23 +1122,31 @@ function CycleCalendar({ logs, onSet }) {
 
   // The most recent bleed, said in words — the grid shows the run, this says
   // which dates it ran between and how long it lasted.
-  const lastRun = (() => {
+  // Every bleed, so a run can say how long after the previous one it began —
+  // start-to-start is the cycle length, and it is what makes two bleeds read as
+  // two cycles rather than one broken stretch.
+  const runs = (() => {
     const dates = [...new Set(logs.filter((l) => l.period).map((l) => l.date))].sort();
-    let run = [];
+    const out = [];
     for (const d of dates) {
-      const prev = run[run.length - 1];
+      const run = out[out.length - 1], prev = run && run[run.length - 1];
       if (prev && new Date(d) - new Date(prev) === 86400000) run.push(d);
-      else run = [d];
+      else out.push([d]);
     }
-    return run.length ? run : null;
+    return out;
   })();
+  const lastRun = runs.length ? runs[runs.length - 1] : null;
+  const gapDays = runs.length > 1
+    ? Math.round((new Date(runs[runs.length - 1][0]) - new Date(runs[runs.length - 2][0])) / 86400000)
+    : null;
   const pretty = (d) => new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" });
   const runLine = lastRun && (() => {
     const a = lastRun[0], b = lastRun[lastRun.length - 1], n = lastRun.length;
     const ongoing = (Date.now() - new Date(`${b}T00:00:00`)) < 2 * 86400000;
-    return ongoing
+    const head = ongoing
       ? `Bleeding since ${pretty(a)} · day ${n}`
       : `Last period ${n > 1 ? `${pretty(a)} – ${pretty(b)}` : pretty(a)} · ${n} day${n > 1 ? "s" : ""}`;
+    return gapDays ? `${head} · ${gapDays} days after the one before` : head;
   })();
   const navBtn = (dir, Ico) => (
     <button onClick={() => step(dir)} style={{ background: "none", border: "none", cursor: "pointer", color: C.plum,
@@ -1165,6 +1173,7 @@ function CycleCalendar({ logs, onSet }) {
       // just a circle. Bleeds that cross a Saturday cap at the row edge — the
       // line under the grid is what states the real dates.
       const linkPrev = isPeriod && shown(d - 1), linkNext = isPeriod && shown(d + 1);
+      const startsRun = isPeriod && !linkPrev;
       return (<div key={i} style={{ position: "relative", aspectRatio: "1", display: "grid", placeItems: "center" }}>
         {isPeriod && <span style={{ position: "absolute", top: "50%", height: 34, transform: "translateY(-50%)",
           // only the outer ends of a run are rounded; a joined end is square, or
@@ -1181,6 +1190,9 @@ function CycleCalendar({ logs, onSet }) {
             border: isToday ? `2px solid ${isPeriod ? "#fff" : C.plum}`
                             : isPeriod ? "2px solid transparent" : `1px solid ${C.outlineVar}`,
             color: isPeriod ? "#fff" : isToday ? C.plum : C.ink }}>{d}</span>}
+        {startsRun && <span title="cycle starts" style={{ position: "absolute", top: "calc(50% + 9px)", left: "50%",
+          transform: "translateX(-50%)", width: 5, height: 5, borderRadius: 9999,
+          background: "rgba(255,255,255,0.95)", pointerEvents: "none" }} />}
       </div>); })}</div>
     {runLine && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
       marginTop: 10, fontFamily: bodyf, fontSize: 12.5, color: C.roseOn }}>
@@ -1189,7 +1201,9 @@ function CycleCalendar({ logs, onSet }) {
     {onSet && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 6 }}>
       {range ? (anchor ? `Started ${anchor} ${new Date(y, m, 1).toLocaleString(undefined, { month: "short" })} — now tap the last day`
                        : "Tap the first day of the bleed")
-             : "Tap a day, or drag across several, to mark them"}</div>}
+             : runs.length
+               ? "Tap a day, or drag across several · a dot marks where a cycle starts"
+               : "Tap a day, or drag across several, to mark them"}</div>}
   </div>);
 }
 
