@@ -2090,7 +2090,7 @@ function ConditionsPanel({ profile, setProfile, compact }) {
 const DRUGS = [
   ["glp1", "GLP-1", "e.g. semaglutide, liraglutide"],
   ["letrozole", "Letrozole", "ovulation induction"],
-  ["ocp", "Oral contraceptive pill", "cycle control, acne, excess hair"],
+  ["ocp", "Oral contraceptive pill", ""],
 ];
 
 function DrugTherapy({ profile, setProfile }) {
@@ -2113,7 +2113,7 @@ function DrugTherapy({ profile, setProfile }) {
             <Pill2 size={15} color={active ? "#fff" : C.outline} /></span>
           <span style={{ flex: 1 }}>
             <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15, color: active ? C.onLilac : C.ink }}>{label}</div>
-            <div style={{ fontFamily: bodyf, fontSize: 12, color: active ? C.plumDark : C.inkVar }}>{note}</div>
+            {note && <div style={{ fontFamily: bodyf, fontSize: 12, color: active ? C.plumDark : C.inkVar }}>{note}</div>}
           </span>
           {active && <Check size={17} color={C.plum} />}
         </button>); })}
