@@ -36,22 +36,33 @@ def test_runs_of_period_days_never_become_one_day_cycles():
     assert ins.cycle_gaps(logs) == []
     assert ins.average_cycle_days(logs) is None
 
-def test_a_missed_day_inside_a_period_does_not_split_it():
-    # bled on days 0-1, missed day 2, bled again on day 3: one period
+def test_one_recorded_free_day_keeps_the_period_open():
+    # every day logged; day 2 recorded as no bleeding — Belsey keeps it one
     logs = days(30, period=[i in (0, 1, 3, 20) for i in range(30)])
     assert ins.cycle_starts(logs) == ["2026-01-01", "2026-01-21"]
     assert ins.cycle_gaps(logs) == [20]
 
+def test_two_recorded_free_days_end_the_period():
+    logs = days(30, period=[i in (0, 1, 4, 20) for i in range(30)])
+    assert ins.cycle_starts(logs) == ["2026-01-01", "2026-01-05", "2026-01-21"]
+    assert ins.cycle_gaps(logs) == [4, 16]
+
+def test_days_nobody_logged_do_not_end_a_period():
+    # only the bleeding days exist as rows: the gap is silence, not dry days
+    logs = [{"date": (DAY0 + dt.timedelta(days=i)).isoformat(), "period": True} for i in (0, 1, 4, 5)]
+    assert ins.cycle_starts(logs) == ["2026-01-01"]
+
+def test_silence_has_a_limit():
+    logs = [{"date": (DAY0 + dt.timedelta(days=i)).isoformat(), "period": True} for i in (0, 1, 6, 7)]
+    assert ins.cycle_starts(logs) == ["2026-01-01", "2026-01-07"]
+
 def test_a_short_cycle_is_reported_not_filtered_away():
-    # bleeding again a week later is a 7-day cycle — a finding, not noise
+    # bleeding again a week later is a short cycle — a finding, not noise
     logs = days(30, period=[i in (0, 7, 20) for i in range(30)])
     assert ins.cycle_gaps(logs) == [7, 13]
 
-def test_the_tolerance_is_configurable_and_small():
-    assert ins.RULES["sameBleedGapDays"] == 2
-    loose = {**ins.RULES, "sameBleedGapDays": 6}
-    logs = days(30, period=[i in (0, 5, 20) for i in range(30)])
-    assert ins.cycle_gaps(logs, loose) == [20]
+def test_the_thresholds_are_what_the_comments_claim():
+    assert ins.RULES["freeDaysEndPeriod"] == 2 and ins.RULES["unloggedTolerance"] == 3
 
 def test_cycle_stats_need_two_gaps():
     one = ins.summarise(days(40, period=[i == 0 or i == 28 for i in range(40)]))

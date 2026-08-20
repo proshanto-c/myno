@@ -45,32 +45,48 @@ export function periodRuns(logs, today = todayISO()) {
 }
 
 /**
- * How many clear days can sit inside one period before it counts as two.
+ * When two stretches of bleeding are one period.
  *
- * This is a logging tolerance, not a claim about bodies: people miss a day, or
- * bleed too lightly to mark it, and 1 Aug + 4 Aug is one period rather than
- * two. Anything further apart is a separate bleed — including bleeding a week
- * later, because a cycle that short is a finding the criteria are meant to
- * raise, not something to quietly absorb.
+ * The convention is Belsey's (WHO, 1986), still the reference method for
+ * menstrual bleeding in trials: a bleeding episode is bleeding days bounded by
+ * at least two bleeding-free days. One free day in the middle does not end the
+ * episode; two do.
+ *
+ * That assumes a daily diary, where a bleeding-free day was actually recorded.
+ * An app has a third state — the day nobody logged — and it cannot tell "I did
+ * not bleed" from "I did not open the app". Splitting on those invents a short
+ * cycle out of silence, which is the more damaging mistake here, so a short run
+ * of unlogged days is allowed to sit inside a period. It is capped, because
+ * bleeding a fortnight later is plainly a new one.
  *
  * The clinical numbers (21/35/45 days, 90 days, 8 cycles a year) live in
- * criteria.py and come from the 2023 international guideline. This one is ours,
- * and it is about how people log, not about physiology.
+ * criteria.py and come from the 2023 international guideline. These two are
+ * about diary-keeping.
  */
-export const SAME_BLEED_GAP = 2;
+export const FREE_DAYS_END_PERIOD = 2;   // Belsey: two recorded free days separate episodes
+export const UNLOGGED_TOLERANCE = 3;     // ours: days with no entry are evidence of nothing
 
-/** Runs grouped into periods: two runs with no more than SAME_BLEED_GAP clear
- *  days between them are one period, and each period opens a cycle. */
-export function cycleRuns(logs, today = todayISO(), tolerance = SAME_BLEED_GAP) {
+/** Runs grouped into periods, each of which opens a cycle. */
+export function cycleRuns(logs, today = todayISO(), rules = {}) {
+  const free = rules.freeDaysEndPeriod ?? FREE_DAYS_END_PERIOD;
+  const unlogged = rules.unloggedTolerance ?? UNLOGGED_TOLERANCE;
+  const seen = new Set((logs || []).filter((l) => l && l.date).map((l) => l.date));
   const out = [];
   for (const run of periodRuns(logs, today)) {
     const last = out[out.length - 1];
-    const clear = last ? daysBetween(last.lastDay, run[0]) - 1 : Infinity;
-    if (last && clear <= tolerance) {
-      last.bleed += run.length;
-      last.gapDays += clear;
-      last.lastDay = run[run.length - 1];
-      continue;
+    if (last) {
+      const between = [];
+      for (let d = addDays(last.lastDay, 1); d < run[0]; d = addDays(d, 1)) between.push(d);
+      const recordedFree = between.filter((d) => seen.has(d)).length;
+      const silent = between.length - recordedFree;
+      // one recorded free day keeps the episode open; unrecorded days are not
+      // evidence that bleeding stopped, up to a few of them
+      if (recordedFree < free && silent <= unlogged) {
+        last.bleed += run.length;
+        last.gapDays += between.length;
+        last.lastDay = run[run.length - 1];
+        continue;
+      }
     }
     out.push({ start: run[0], lastDay: run[run.length - 1], bleed: run.length, gapDays: 0 });
   }

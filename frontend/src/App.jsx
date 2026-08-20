@@ -8,7 +8,7 @@ import {
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
-  cycleRuns, SAME_BLEED_GAP, DAY_MS } from "./cycles.js";
+  cycleRuns, DAY_MS } from "./cycles.js";
 
 /* ===========================================================================
    Tawazzun — a PMOS digital twin.  UI: "Blush Calm" (Manrope / Hanken Grotesk,
@@ -1379,7 +1379,7 @@ function CycleCalendar({ logs, onSet }) {
   // nothing, so the calendar explains itself.
   const cur = currentCycle(logs);
   const spottingNote = cur && cur.gapDays > 0
-    ? `Counted as the same period — up to ${SAME_BLEED_GAP} missed days are treated as one bleed. This one began ${pretty(cur.start)}.`
+    ? `Counted as the same period, which began ${pretty(cur.start)} — a gap only ends one after two days recorded without bleeding.`
     : null;
   const runLine = lastRun && (() => {
     const a = lastRun[0], b = lastRun[lastRun.length - 1], n = lastRun.length;

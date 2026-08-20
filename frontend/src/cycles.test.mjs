@@ -8,7 +8,7 @@
 import {
   periodRuns, cyclesFrom, currentCycle, pastLengths,
   phaseSpans, phaseAt, ringLength, daysBetween, typicalBleed, addDays,
-  cycleRuns, SAME_BLEED_GAP,
+  cycleRuns, FREE_DAYS_END_PERIOD, UNLOGGED_TOLERANCE,
 } from "./cycles.js";
 
 const TODAY = "2026-08-20";
@@ -212,45 +212,52 @@ test("marking today as a period day puts you back in menstrual", () => {
   eq(phaseAt(cur.days, ringLength(cur.days, 28), cur.bleed), "menstrual");
 });
 
-// ---- one period, however patchily it was logged ------------------------
-test("a missed day in the middle of a period keeps it one period", () => {
-  const l = [...run("2026-08-01", 2), ...run("2026-08-04", 2)];   // 3 Aug missed
+// ---- one period, by Belsey and by what was actually written down --------
+const free = (date) => ({ date, period: false });          // a recorded dry day
+
+test("one recorded free day keeps the period open (Belsey)", () => {
+  const l = [...run("2026-08-01", 2), free("2026-08-03"), ...run("2026-08-04", 2)];
   const cycles = cyclesFrom(l, TODAY);
   eq(cycles.length, 1);
-  eq(cycles[0].start, "2026-08-01");
   eq(cycles[0].bleed, 4);
-  eq(cycles[0].gapDays, 1);
 });
 
-test("three clear days is two bleeds, not one", () => {
-  const l = [...run("2026-08-01", 2), ...run("2026-08-06", 2)];   // 3 clear days
+test("two recorded free days end it (Belsey)", () => {
+  const l = [...run("2026-08-01", 2), free("2026-08-03"), free("2026-08-04"), ...run("2026-08-05", 2)];
   eq(cyclesFrom(l, TODAY).length, 2);
+  eq(pastLengths(l, TODAY), [4]);       // reported as the short cycle it is
+});
+
+test("days nobody logged are not evidence that bleeding stopped", () => {
+  const l = [...run("2026-08-01", 2), ...run("2026-08-06", 2)];   // three silent days
+  eq(cyclesFrom(l, TODAY).length, 1);
+  eq(cyclesFrom(l, TODAY)[0].gapDays, 3);
+});
+
+test("but silence has a limit", () => {
+  const l = [...run("2026-08-01", 2), ...run("2026-08-07", 2)];   // four silent days
+  eq(cyclesFrom(l, TODAY).length, 2);
+});
+
+test("a recorded dry day counts even when other days are silent", () => {
+  const one = [...run("2026-08-01", 2), free("2026-08-03"), ...run("2026-08-05", 2)];
+  eq(cyclesFrom(one, TODAY).length, 1);
+  const two = [...run("2026-08-01", 2), free("2026-08-03"), free("2026-08-05"), ...run("2026-08-06", 2)];
+  eq(cyclesFrom(two, TODAY).length, 2);
 });
 
 test("bleeding a week later is a short cycle, not something to absorb", () => {
-  // the old ten-day floor swallowed this; a 7-day cycle is exactly the kind of
-  // finding the criteria are meant to raise
-  const l = [...run("2026-08-01", 3), ...run("2026-08-08", 3)];
+  const l = [...run("2026-08-01", 3), ...run("2026-08-10", 3)];
   eq(cyclesFrom(l, TODAY).length, 2);
-  eq(pastLengths(l, TODAY), [7]);
+  eq(pastLengths(l, TODAY), [9]);
 });
 
-test("the tolerance is measured from the end of the bleed, not its start", () => {
-  // a 6-day period (1-6 Aug), two clear days, then more on the 9th: one period,
-  // even though the 9th is eight days after it began
-  const l = [...run("2026-08-01", 6), ...run("2026-08-09", 2)];
-  eq(cyclesFrom(l, TODAY).length, 1);
-  eq(cyclesFrom(l, TODAY)[0].bleed, 8);
-  // one day further out and it is its own bleed
-  eq(cyclesFrom([...run("2026-08-01", 6), ...run("2026-08-10", 2)], TODAY).length, 2);
-});
-
-test("the tolerance is a logging allowance, kept small", () => {
-  eq(SAME_BLEED_GAP, 2);
+test("the thresholds are what the comments claim", () => {
+  eq(FREE_DAYS_END_PERIOD, 2);
+  eq(UNLOGGED_TOLERANCE, 3);
 });
 
 test("cycle starts are the merged periods, not every run", () => {
-  // 1-4 Jun, one clear day, a spot on the 6th: one period. July is the next.
   const l = [...run("2026-06-01", 4), ...run("2026-06-06", 1), ...run("2026-07-05", 4)];
   eq(cycleRuns(l, TODAY).map((c) => c.start), ["2026-06-01", "2026-07-05"]);
   eq(cycleRuns(l, TODAY)[0].bleed, 5);

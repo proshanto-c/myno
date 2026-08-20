@@ -28,13 +28,13 @@ RULES = {
     "highSugar": 3,
     "severePain": 7,
 
-    # How many unlogged days can sit inside one period. People miss a day, or
-    # bleed too lightly to mark it, so 1 Aug + 4 Aug is one period. This is a
-    # logging tolerance, not a claim about bodies — and it is deliberately
-    # small, because bleeding again a week later is a short cycle, which is a
-    # finding criteria.py should raise rather than something to absorb. The
-    # clinical numbers (21/35/45 days) live there, from the 2023 guideline.
-    "sameBleedGapDays": 2,
+    # When two stretches of bleeding are one period. Belsey (WHO, 1986), the
+    # reference method for bleeding in trials, ends an episode after two
+    # bleeding-free days; one free day does not. That assumes a daily diary, so
+    # the second number is ours: a day nobody logged is not evidence that
+    # bleeding stopped, and splitting on silence invents short cycles.
+    "freeDaysEndPeriod": 2,
+    "unloggedTolerance": 3,
 
     # A straight line through fewer points than this is noise, and a drift
     # smaller than this per week is not worth telling anyone about.
@@ -139,16 +139,26 @@ def slope_per_week(ys, rules=None):
 
 # ---- cycles ----------------------------------------------------------------
 def cycle_starts(logs, rules=None):
-    """The first day of each period. Days that run together are one period, and
-    so are days separated by no more than the logging tolerance — a missed day
-    in the middle of a bleed should not split it into two."""
+    """The first day of each period.
+
+    Consecutive bleeding days are one period. So are days with a single recorded
+    bleeding-free day between them (Belsey), or with a few days nobody logged —
+    silence says nothing about whether bleeding stopped.
+    """
     R = rules or RULES
-    days = sorted({l["date"] for l in logs if l.get("period")})
+    bleeding = sorted({l["date"] for l in logs if l.get("period")})
+    logged = {l["date"] for l in logs if l.get("date")}
     starts, prev = [], None
-    for d in days:
+    for d in bleeding:
         day = dt.date.fromisoformat(d)
-        if prev is None or (day - prev).days - 1 > R["sameBleedGapDays"]:
+        if prev is None:
             starts.append(d)
+        else:
+            between = [prev + dt.timedelta(days=i) for i in range(1, (day - prev).days)]
+            recorded_free = sum(1 for b in between if b.isoformat() in logged)
+            silent = len(between) - recorded_free
+            if recorded_free >= R["freeDaysEndPeriod"] or silent > R["unloggedTolerance"]:
+                starts.append(d)
         prev = day
     return starts
 
