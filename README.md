@@ -1,6 +1,9 @@
-# Myno — Full-Stack PCOS Digital Twin
+# Myno — Full-Stack PMOS Digital Twin
 
-Myno is a voice-first PCOS tracking app with a personalized AI companion, GPU-accelerated speech services, and a clinician dashboard. Everything runs in Docker.
+A PMOS digital twin: voice-first tracking, a companion that asks personalized
+questions and **speaks** its replies, a feature **blacklist**, personalised
+associations, on-device statistics, literature-grounded suggestions, and a
+clinician dashboard. Everything runs in Docker.
 
 ```
                 ┌─────────────────────────────────────────────┐
@@ -9,7 +12,7 @@ Myno is a voice-first PCOS tracking app with a personalized AI companion, GPU-ac
                        │ /api          │ /asr (ws)    │ (audio)
                  ┌─────▼─────┐   ┌─────▼──────┐  ┌────▼─────┐
                  │  backend  │   │    asr     │  │   tts    │
-                 │ (FastAPI) │   │ NeMo strm  │  │ NeMo F.P.│
+                 │ (FastAPI) │   │ NeMo strm  │  │ NeMo TTS │
                  │  Claude   │   │  (GPU)     │  │  (GPU)   │
                  └─────┬─────┘   └────────────┘  └──────────┘
                        │ TTS_URL → tts,  Claude → api.anthropic.com
@@ -18,15 +21,28 @@ Myno is a voice-first PCOS tracking app with a personalized AI companion, GPU-ac
                  └───────────┘
 ```
 
-| Service | Description | Port | GPU |
+> **Full architecture & model diagram:** see [`docs/architecture.tex`](docs/architecture.tex)
+> (build with `pdflatex docs/architecture.tex`). It details the speech, LLM,
+> math-insights, and research-literature paths described below.
+
+| Service | What it is | Port | GPU |
 |---|---|---|---|
-| `frontend` | React app behind nginx; proxies `/api` → backend, `/asr` → asr | 80 | — |
-| `backend` | FastAPI: chat orchestration, DB, personalization, blacklist, TTS proxy | 8080 | — |
-| `asr` | NeMo cache-aware streaming ASR (`nemotron-speech-streaming-en-0.6b`) | 8000 | ✓ |
-| `tts` | NeMo FastPitch + HiFi-GAN text-to-speech | 8001 | ✓ |
+| `frontend` | React 18 SPA behind nginx; proxies `/api`→backend, `/asr`→asr | 80 | — |
+| `backend` | FastAPI: chat orchestration, DB, personalization, blacklist, stats, TTS proxy | 8080 | — |
+| `asr` | NeMo cache-aware streaming ASR (`nvidia/nemotron-speech-streaming-en-0.6b`) | 8000 | ✓ |
+| `tts` | NeMo TTS — VITS (`tts_en_lj_vits`), fallback FastPitch + HiFi-GAN | 8001 | ✓ |
 | `db` | Postgres 16 | 5432 | — |
 
----
+## Models at a glance
+
+| Role | Model / engine | Where | Notes |
+|---|---|---|---|
+| **LLM** | `claude-sonnet-4-6` (Anthropic) | `backend/main.py` → `api.anthropic.com/v1/messages` via `httpx` | All chat, extraction, insight narration, research suggestions, advocacy |
+| **ASR** | `nvidia/nemotron-speech-streaming-en-0.6b` — FastConformer-RNNT (transducer) | `asr/nemo_asr_server.py` | Cache-aware streaming over WebSocket, 16 kHz PCM16; `att_context_size` trades latency for WER |
+| **TTS** | `tts_en_lj_vits` (VITS, primary); fallback `tts_en_fastpitch` + `tts_en_lj_hifigan_ft_mixertts` | `tts/nemo_tts_server.py` | Per-sentence synthesis → WAV 22.05 kHz; soften post-processing |
+| **Statistics** | pure Python (`statistics`, `math`) — no model | `backend/main.py` `_insight_summary` | Pearson `r`, least-squares trends, cycle variability — computed before any LLM call |
+
+## Run it
 
 ## Deployment
 
@@ -250,7 +266,31 @@ Patients can block topics in Settings (mood, diet, hair/skin, weight, fertility,
 
 ## Database schema
 
-Tables are created automatically by SQLAlchemy on first backend startup.
+**Voice → structured log.** `/extract` (and `/chatbox/extract`) feed a whole
+spoken conversation to Claude, which infers that day's tracking markers (period,
+pain 0–10, mood, energy, sugar, hair/skin flags, custom categories) as JSON. The
+user reviews/adjusts before it's saved to `daily_logs`.
+
+**Math insights (computed, then narrated).** `/insights` first runs *pure-Python*
+statistics over the patient's own logs — Pearson `r` (point-biserial for 0/1
+flags, same-day / next-day-lagged / flag correlations, ranked by `|r|`),
+least-squares **trends** (slope per week), and **cycle variability** (mean ± SD,
+coefficient of variation, regularity class). Only that numeric summary is handed
+to Claude, which *narrates* 2–4 data-grounded, non-diagnostic insights. The math
+is never left to the model.
+
+**Research-literature suggestions.** A background loop (20 h TTL per patient)
+prompts Claude as a "PMOS research analyst (2022–2025 literature)" to suggest
+markers the app *doesn't* yet track, each tagged with a category, an **evidence
+level** (Strong / Emerging / Early), a tracking method, device needs, and a
+PubMed query that becomes a deep link. Self-report items are surfaced before
+device-dependent ones.
+
+**Advocacy / GP-visit prep.** `/advocacy` evaluates threshold/composite triggers
+over the computed metrics against a curated clinical-framing bank, then has Claude
+assemble personalized talking points and questions for an appointment.
+
+## Database schema (created automatically by SQLAlchemy)
 
 | Table | Contents |
 |---|---|
@@ -267,21 +307,31 @@ All tables foreign-key to `patients` with cascade delete. Data is persisted in t
 
 ```
 GET    /healthz
-POST   /patients                    Create patient
-GET    /patients/{id}               Get patient
-PATCH  /patients/{id}               Update patient
-GET    /patients/{id}/logs          List daily logs
-POST   /patients/{id}/logs          Upsert a day's log
-GET    /patients/{id}/blacklist     Get blocked features + catalogue
-PUT    /patients/{id}/blacklist     Set blocked features
-GET    /patients/{id}/descriptors   Get learned vocabulary
-POST   /patients/{id}/chat          {message} → {reply, learned, adapt}
-POST   /tts                         {text} → audio/wav (proxies TTS service)
+POST   /patients                 create
+GET    /patients/{id}            read
+PATCH  /patients/{id}            update
+GET    /patients/{id}/logs       list daily logs
+POST   /patients/{id}/logs       upsert a day
+GET    /patients/{id}/blacklist  blocked features + catalogue
+PUT    /patients/{id}/blacklist  set blocked features
+GET    /patients/{id}/descriptors  learned vocabulary
+POST   /patients/{id}/chat       {message} → {reply, learned, adapt}
+POST   /chatbox/patients/{id}/chat  daily check-in turn → {reply, learned, adapt}
+POST   /chatbox/extract          completed check-in → inferred daily markers
+POST   /extract                  conversation → inferred daily-log JSON
+POST   /patients/{id}/insights   → {stats (computed), analysis (Claude narration)}
+GET    /patients/{id}/suggestions  research-backed trackers (+ PubMed links)
+POST   /patients/{id}/advocacy   → GP-visit talking points
+POST   /tts                      {text} → audio/wav (proxies the TTS service)
 ```
 
----
+The **Chat** tab is a text-first daily check-in: Myno asks patient-specific
+follow-ups (the `/chatbox/...` endpoints pull the patient's descriptors,
+history, adaptation state and tracked cycle from the DB), then infers the day's
+tracking markers, which the patient reviews in the side panel and saves as
+today's log.
 
-## Environment variables
+## Demo without the GPU box
 
 | Variable | Service | Required | Default | Description |
 |---|---|---|---|---|
