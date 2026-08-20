@@ -1561,7 +1561,16 @@ function InsightsScreen({ ins, logs, settings, wide }) {
     .filter(([k]) => !(k === "mood" && isBlocked(settings, "mood")) && !(k === "sugar" && isBlocked(settings, "diet"))).map(([k, l]) => [k, l, false]);
   const seen = {}; logs.forEach((l) => (l.categories || []).forEach((c) => { if (c && c.scale && typeof c.scale.value === "number" && c.key) seen[c.key] = c.label || c.key; }));
   const used = new Set([...STD.map(([k]) => k), ...STD.map(([, l]) => l.toLowerCase())]);
-  const catList = []; for (const [k, l] of Object.entries(seen)) { const n = String(l).toLowerCase(); if (used.has(n)) continue; used.add(n); catList.push([k, l, true]); }
+  // "Pain & cramps" is the pain slider under another name. A self-named tracker
+  // that shares a word with a standard metric is the same thing said twice, so
+  // it doesn't earn a second chip — exact-label matching alone missed these.
+  const stdWords = new Set(STD.flatMap(([k, l]) => [k.toLowerCase(), ...l.toLowerCase().split(/[^a-z]+/)]).filter(Boolean));
+  const catList = [];
+  for (const [k, l] of Object.entries(seen)) {
+    const n = String(l).toLowerCase();
+    if (used.has(n) || n.split(/[^a-z]+/).filter(Boolean).some((w) => stdWords.has(w))) continue;
+    used.add(n); catList.push([k, l, true]);
+  }
   const METRICS = STD.concat(catList.slice(0, 5));
   const [metric, setMetric] = useState("pain");
   const [view, setView] = useState("insights"); // sub-view within Insights: "insights" | "track"
