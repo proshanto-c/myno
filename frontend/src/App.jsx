@@ -365,21 +365,151 @@ function computeInsights(logs) {
     painHi, painLo, bloatPain, noBloatPain, hairGrowthRate: mean(logs.map((l) => l.hairGrowth ? 1 : 0)), hairLossRate: mean(logs.map((l) => l.hairLoss ? 1 : 0)),
     avgPain: mean(logs.map((l) => l.pain)), avgMood: mean(logs.map((l) => l.mood)), periodsLogged: starts.length, dayN, highPainGap, loggedDays: logs.length };
 }
-const W = { irregularCycle: 1.7, longCycle: 0.9, mfgHigh: 1.6, selfHirsutism: 0.6, acne: 0.5, alopecia: 0.5, acanthosis: 0.8, highBMI: 0.7, familyHistory: 0.5, weightGain: 0.4, earlyMenarche: 0.3 };
-const sigmoid = (x) => 1 / (1 + Math.exp(-x));
-function buildFlags(p, ins) {
-  const bmi = p.heightCm && p.weightKg ? p.weightKg / Math.pow(p.heightCm / 100, 2) : null;
-  return { bmi, irregularCycle: ins.avgGap != null && (ins.avgGap > 35 || (ins.maxGap - ins.minGap) > 12), longCycle: ins.avgGap != null && ins.avgGap > 35, absentCycle: ins.avgGap != null && ins.avgGap > 60,
-    mfgHigh: ins.hairGrowthRate > 0.3, selfHirsutism: ins.hairGrowthRate > 0.12, acne: !!p.acne, alopecia: ins.hairLossRate > 0.1, acanthosis: !!p.skinDarkening,
-    highBMI: bmi != null && bmi >= 30, familyHistory: !!p.familyHistory, weightGain: !!p.weightGain, earlyMenarche: p.menarcheAge && Number(p.menarcheAge) < 11, mfg: Math.round(ins.hairGrowthRate * 22) };
+// ============================================================================
+//  DIAGNOSTIC CRITERIA — rules in, a recommendation out. Never a diagnosis.
+// ============================================================================
+// Of the criteria a clinician weighs, only two can be approached from what
+// somebody tracks themselves — and one of those only as a screening signal:
+//
+//   Irregular cycles    ASSESSABLE   logged period dates + age at menarche
+//   Clinical HA         SCREENING    self-scored hirsutism, hair loss, acne
+//   Biochemical HA      CLINIC ONLY  total & free testosterone, A4, DHEAS
+//   Ovarian morphology  CLINIC ONLY  ultrasound follicle count, or serum AMH
+//
+// A diagnosis needs two of three AND thyroid, prolactin, CAH and Cushing's
+// ruled out — none of which can happen here. So nothing below concludes
+// anything about a condition. It answers one question: is this worth a visit?
+
+const RULES = {
+  // Cycle-length limits by years since menarche. Year one is deliberately
+  // absent: erratic cycles are the expected pubertal transition, not a finding.
+  cycleBands: [
+    { fromYear: 1, toYear: 3, shortDays: 21, longDays: 45, label: "1–3 years after menarche" },
+    { fromYear: 3, toYear: Infinity, shortDays: 21, longDays: 35, label: "3+ years after menarche" },
+  ],
+  singleCycleDays: 90,   // any one cycle this long stands on its own
+  minCyclesPerYear: 8,   // fewer than this in a year reads as irregular (3y+)
+  amenorrheaAge: 15,     // no first period by this age
+  mfgHirsutism: 4,       // modified Ferriman–Gallwey, self-scored 0–36
+  hirsutismDaysPct: 25,  // no mFG score? fall back to % of days hair was flagged
+  hairLossDaysPct: 10,
+  minCyclesToJudge: 2,   // below this, say "not enough yet" instead of guessing
+};
+const ADULT_BAND = RULES.cycleBands[RULES.cycleBands.length - 1];
+const bandFor = (years, R) => years == null ? null
+  : R.cycleBands.find((b) => years >= b.fromYear && years < b.toYear) || null;
+
+// ---- criterion 1 — irregular cycles ----------------------------------------
+// state: "met" (irregular by the guideline) | "clear" | "unknown" (can't judge).
+// alerts are findings that warrant a visit on their own merit, whatever the
+// rest of the picture looks like.
+function assessCycles(x, R = RULES) {
+  const reasons = [], alerts = [];
+
+  if (!x.hasMenarche) {
+    if (x.age != null && x.age >= R.amenorrheaAge)
+      alerts.push(`No first period by ${x.age} — that is assessed in its own right.`);
+    return { state: "unknown", reasons: ["No periods logged yet."], alerts };
+  }
+  // A withdrawal bleed is scheduled by the method, not by ovulation: regular by
+  // construction, and silent about the thing this criterion actually measures.
+  if (x.onContraception)
+    return { state: "unknown", alerts, reasons: ["Cycles can't be read on hormonal contraception — the bleed is scheduled by the method, not by ovulation."] };
+  if (x.yearsPostMenarche != null && x.yearsPostMenarche < 1)
+    return { state: "unknown", alerts, reasons: ["Within the first year after menarche, irregular cycles are expected."] };
+  if (!x.cyclesObserved || x.cyclesObserved < R.minCyclesToJudge)
+    return { state: "unknown", alerts, reasons: [`Only ${x.cyclesObserved || 0} full cycle(s) logged — ${R.minCyclesToJudge} are needed.`] };
+
+  // One very long cycle counts whatever the average says.
+  if (x.maxCycle != null && x.maxCycle > R.singleCycleDays)
+    alerts.push(`A ${x.maxCycle}-day cycle — anything over ${R.singleCycleDays} days is worth raising by itself.`);
+
+  const band = bandFor(x.yearsPostMenarche, R) || ADULT_BAND;
+  const notes = x.yearsPostMenarche == null ? ["Age at first period not set — using adult limits."] : [];
+
+  // Only these three count towards the criterion; notes above are context.
+  if (x.minCycle != null && x.minCycle < band.shortDays)
+    reasons.push(`Shortest cycle ${x.minCycle} days — under ${band.shortDays} (${band.label}).`);
+  if (x.maxCycle != null && x.maxCycle > band.longDays)
+    reasons.push(`Longest cycle ${x.maxCycle} days — over ${band.longDays} (${band.label}).`);
+  if (band.fromYear >= 3 && x.cyclesPerYear != null && x.cyclesPerYear < R.minCyclesPerYear)
+    reasons.push(`${x.cyclesPerYear} cycles in the past year — fewer than ${R.minCyclesPerYear}.`);
+
+  const met = reasons.length > 0;
+  return { state: met ? "met" : "clear", band, alerts,
+    reasons: [...(met ? reasons : [`Cycles ${x.minCycle}–${x.maxCycle} days sit inside ${band.shortDays}–${band.longDays} (${band.label}).`]), ...notes] };
 }
-function riskScore(f) { let z = -2.4; if (f.irregularCycle) z += W.irregularCycle; if (f.longCycle) z += W.longCycle; if (f.mfgHigh) z += W.mfgHigh; else if (f.selfHirsutism) z += W.selfHirsutism; if (f.acne) z += W.acne; if (f.alopecia) z += W.alopecia; if (f.acanthosis) z += W.acanthosis; if (f.highBMI) z += W.highBMI; if (f.familyHistory) z += W.familyHistory; if (f.weightGain) z += W.weightGain; if (f.earlyMenarche) z += W.earlyMenarche; return sigmoid(z); }
-const LO = 0.30, HI = 0.62;
-function conformal(s) { if (s < LO) return { band: "low", abstain: false }; if (s > HI) return { band: "elevated", abstain: false }; return { band: "uncertain", abstain: true }; }
-function rotterdam(f) { return {
-  ovulatory: { met: f.irregularCycle || f.longCycle, note: f.absentCycle ? "Periods often absent" : f.longCycle ? "Long, irregular cycles" : "Cycles regular" },
-  androgen: { met: f.mfgHigh || f.selfHirsutism || f.acne || f.alopecia, note: f.mfgHigh ? "Excess hair noted often" : (f.selfHirsutism || f.acne || f.alopecia) ? "Some androgen signs" : "None evident" },
-  morphology: { met: null, note: "Ultrasound only — not assessable in-app" } }; }
+
+// ---- criterion 2 — clinical hyperandrogenism -------------------------------
+// Self-report, so this is a screening signal and never more than that: a
+// clinician scores hirsutism by examination and confirms with bloods.
+function assessAndrogen(x, R = RULES) {
+  const reasons = [];
+  const byScore = x.mfgScore != null;
+  const hirsute = byScore ? x.mfgScore >= R.mfgHirsutism : (x.hirsutismDaysPct || 0) >= R.hirsutismDaysPct;
+  if (hirsute) reasons.push(byScore
+    ? `Self-scored hirsutism ${x.mfgScore}/36 — at or over ${R.mfgHirsutism}.`
+    : `Coarse hair growth on ${Math.round(x.hirsutismDaysPct)}% of logged days.`);
+  if ((x.hairLossDaysPct || 0) >= R.hairLossDaysPct)
+    reasons.push(`Scalp hair thinning on ${Math.round(x.hairLossDaysPct)}% of logged days.`);
+  if (x.persistentAcne) reasons.push("Persistent acne.");
+  return { state: reasons.length ? "met" : "clear", alerts: [],
+    reasons: reasons.length ? reasons : ["No hair or skin signs standing out."] };
+}
+
+// ---- the indicator ---------------------------------------------------------
+// Blunt on purpose. Alerts outrank everything; then it comes down to how many
+// of the two assessable criteria are met — and which one, since cycles are
+// measured while hair and skin signs are self-reported.
+const ADVICE = {
+  soon:    { headline: "Worth booking an appointment soon", tone: "urgent" },
+  book:    { headline: "Worth booking an appointment", tone: "elevated" },
+  mention: { headline: "Worth mentioning at your next visit", tone: "mild" },
+  none:    { headline: "Nothing here says you need an appointment", tone: "calm" },
+  unknown: { headline: "Not enough tracked yet to say", tone: "muted" },
+};
+function recommend(cycles, androgen) {
+  const alerts = [...cycles.alerts, ...androgen.alerts];
+  const met = [cycles, androgen].filter((c) => c.state === "met");
+  const why = met.flatMap((c) => c.reasons);
+  if (alerts.length) return { key: "soon", ...ADVICE.soon, why: alerts, met: met.length };
+  if (met.length === 2) return { key: "book", ...ADVICE.book, why, met: 2 };
+  if (cycles.state === "met") return { key: "book", ...ADVICE.book, why, met: 1 };
+  if (androgen.state === "met") return { key: "mention", ...ADVICE.mention, why, met: 1 };
+  if (cycles.state === "unknown") return { key: "unknown", ...ADVICE.unknown, why: cycles.reasons, met: 0 };
+  return { key: "none", ...ADVICE.none, why: [...cycles.reasons, ...androgen.reasons], met: 0 };
+}
+
+function assess(x, R = RULES) {
+  const cycles = assessCycles(x, R), androgen = assessAndrogen(x, R);
+  return { cycles, androgen, recommendation: recommend(cycles, androgen), inputs: x };
+}
+
+// What the app measured, before the lab is allowed to play with it.
+function deriveInputs(p, ins, logs = []) {
+  const age = Number(p.age) || null, menarche = Number(p.menarcheAge) || null;
+  const bc = String(logs.length ? (logs[logs.length - 1].birthControl || "") : "").trim().toLowerCase();
+  return {
+    age, hasMenarche: !!menarche,
+    yearsPostMenarche: age && menarche ? age - menarche : null,
+    onContraception: !!bc && !["none", "no", "n/a", "-"].includes(bc),
+    cyclesObserved: ins.gaps ? ins.gaps.length : 0,
+    minCycle: ins.minGap, maxCycle: ins.maxGap, avgCycle: ins.avgGap,
+    // "cycles per year" only means anything with about a year of logs behind it
+    cyclesPerYear: ins.loggedDays >= 330 ? ins.periodsLogged : null,
+    mfgScore: p.mfgScore == null || p.mfgScore === "" ? null : Number(p.mfgScore),
+    hirsutismDaysPct: (ins.hairGrowthRate || 0) * 100,
+    hairLossDaysPct: (ins.hairLossRate || 0) * 100,
+    persistentAcne: !!p.acne,
+  };
+}
+
+// The triad drawing keeps its third circle locked: morphology is not ours.
+const triadAxes = (a) => ({
+  ovulatory: { met: a.cycles.state === "met", note: a.cycles.reasons[0] || "" },
+  androgen: { met: a.androgen.state === "met", note: a.androgen.reasons[0] || "" },
+  morphology: { met: null, note: "Ultrasound or AMH — a clinician only" },
+});
 
 // ---- UI atoms --------------------------------------------------------------
 const Card = ({ children, style, onClick }) => (
@@ -432,6 +562,145 @@ function Slider({ value, max, onChange }) {
   const pct = (value / max) * 100;
   return (<input type="range" className="slider" min={0} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))}
     style={{ background: `linear-gradient(90deg, ${C.plum} ${pct}%, ${C.high} ${pct}%)` }} />);
+}
+
+// ---- the doctor indicator --------------------------------------------------
+// One card, one question answered. The criteria breakdown sits underneath so
+// the verdict is never a black box — every line of it is traceable to a rule.
+const TONE = {
+  urgent:   { fg: C.roseOn, bg: C.rose, Icon: AlertTriangle },
+  elevated: { fg: C.plumDark, bg: C.lilac, Icon: Stethoscope },
+  mild:     { fg: C.plum, bg: C.low, Icon: Info },
+  calm:     { fg: C.plum, bg: C.low, Icon: Check },
+  muted:    { fg: C.outline, bg: C.container, Icon: Info },
+};
+const STATE_TEXT = { met: "Criterion met", clear: "Not met", unknown: "Can't assess" };
+
+function CriterionRow({ title, source, result }) {
+  const dot = result.state === "met" ? C.roseOn : result.state === "unknown" ? C.outline : C.plumC;
+  return (
+    <div style={{ padding: "12px 0", borderTop: `1px solid ${C.high}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flexShrink: 0 }} />
+        <span style={{ fontFamily: head, fontWeight: 600, fontSize: 14.5 }}>{title}</span>
+        <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: dot }}>{STATE_TEXT[result.state]}</span>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.outline, margin: "2px 0 0 16px" }}>{source}</div>
+      <ul style={{ margin: "6px 0 0", paddingLeft: 30, color: C.inkVar, fontSize: 13, lineHeight: 1.5 }}>
+        {result.reasons.map((r, i) => <li key={i}>{r}</li>)}
+      </ul>
+    </div>);
+}
+
+function DoctorIndicator({ assessment }) {
+  const { recommendation: rec, cycles, androgen } = assessment;
+  const tone = TONE[rec.tone]; const Icon = tone.Icon;
+  return (<Card style={{ marginBottom: 14 }}>
+    <Label>Should you see a doctor?</Label>
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: 14, borderRadius: 14, background: tone.bg, margin: "10px 0 4px" }}>
+      <Icon size={20} color={tone.fg} style={{ flexShrink: 0, marginTop: 2 }} />
+      <div>
+        <div style={{ fontFamily: head, fontWeight: 700, fontSize: 16, color: tone.fg }}>{rec.headline}</div>
+        <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 13.5, lineHeight: 1.5, color: tone.fg }}>
+          {rec.why.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      </div>
+    </div>
+    <CriterionRow title="Irregular cycles" source="From your logged period dates" result={cycles} />
+    <CriterionRow title="Hair & skin signs" source="Self-reported — a clinician confirms by examination" result={androgen} />
+    <div style={{ padding: "12px 0 0", borderTop: `1px solid ${C.high}`, fontSize: 12, lineHeight: 1.5, color: C.outline }}>
+      This is not a diagnosis and can't become one. Two further criteria — blood androgens, and
+      ovarian imaging or AMH — can only be assessed in a clinic, and thyroid, prolactin, CAH and
+      Cushing's have to be ruled out before anyone can name a condition.
+    </div>
+  </Card>);
+}
+
+// ---- the lab ---------------------------------------------------------------
+// Every number the rules read, exposed. Change one and the indicator above
+// recomputes — which is the point: it makes the rules arguable.
+const labNum = { width: "100%", padding: "8px 10px", borderRadius: 10, border: `1.5px solid ${C.outlineVar}`,
+  fontFamily: bodyf, fontSize: 13.5, outline: "none", background: C.surface, color: C.ink };
+
+function LabNumber({ label, value, onChange, suffix, edited }) {
+  return (<label style={{ display: "block" }}>
+    <div style={{ fontSize: 11, fontWeight: 600, color: edited ? C.plum : C.outline, marginBottom: 4 }}>
+      {label}{suffix ? ` (${suffix})` : ""}{edited ? " •" : ""}</div>
+    <input type="number" value={value ?? ""} onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+      style={{ ...labNum, borderColor: edited ? C.plum : C.outlineVar }} />
+  </label>);
+}
+function LabToggle({ label, value, onChange, edited }) {
+  return (<button onClick={() => onChange(!value)} style={{ ...labNum, cursor: "pointer", textAlign: "left",
+    borderColor: edited ? C.plum : C.outlineVar, display: "flex", alignItems: "center", gap: 8 }}>
+    <span style={{ width: 14, height: 14, borderRadius: 4, flexShrink: 0, display: "grid", placeItems: "center",
+      background: value ? C.plum : C.surface, border: `1.5px solid ${value ? C.plum : C.outlineVar}` }}>
+      {value && <Check size={10} color="#fff" />}</span>
+    <span style={{ fontSize: 12.5, color: C.inkVar }}>{label}</span>
+  </button>);
+}
+
+function CriteriaLab({ derived, lab, setLab, rules, setRules }) {
+  const [open, setOpen] = useState(false);
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", gap: 10, marginTop: 10 };
+  const val = (k) => (k in lab ? lab[k] : derived[k]);
+  const set = (k) => (v) => setLab({ ...lab, [k]: v });
+  const setRule = (k) => (v) => setRules({ ...rules, [k]: v });
+  const setBand = (i, k) => (v) => setRules({ ...rules,
+    cycleBands: rules.cycleBands.map((b, j) => (j === i ? { ...b, [k]: v } : b)) });
+
+  return (<Card style={{ marginBottom: 14 }}>
+    <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", padding: 0, width: "100%",
+      cursor: "pointer", display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+      <Microscope size={16} color={C.plum} />
+      <span style={{ fontFamily: head, fontWeight: 600, fontSize: 15 }}>Experiment with the factors</span>
+      <span style={{ marginLeft: "auto", fontSize: 12, color: C.outline }}>
+        {Object.keys(lab).length ? `${Object.keys(lab).length} overridden` : "prototype"}</span>
+      <ChevronRight size={18} color={C.outline} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
+    </button>
+    {open && (<div style={{ marginTop: 6 }}>
+      <p style={{ fontSize: 12.5, color: C.inkVar, lineHeight: 1.5, margin: "6px 0 0" }}>
+        These start from your own tracked data. Change anything and the indicator above recomputes —
+        nothing here is saved to your logs.
+      </p>
+
+      <div style={{ marginTop: 14 }}><Label color={C.inkVar}>Your data</Label></div>
+      <div style={grid}>
+        <LabNumber label="Age" value={val("age")} onChange={set("age")} edited={"age" in lab} />
+        <LabNumber label="Years since menarche" value={val("yearsPostMenarche")} onChange={set("yearsPostMenarche")} edited={"yearsPostMenarche" in lab} />
+        <LabNumber label="Shortest cycle" suffix="days" value={val("minCycle")} onChange={set("minCycle")} edited={"minCycle" in lab} />
+        <LabNumber label="Longest cycle" suffix="days" value={val("maxCycle")} onChange={set("maxCycle")} edited={"maxCycle" in lab} />
+        <LabNumber label="Average cycle" suffix="days" value={val("avgCycle")} onChange={set("avgCycle")} edited={"avgCycle" in lab} />
+        <LabNumber label="Cycles logged" value={val("cyclesObserved")} onChange={set("cyclesObserved")} edited={"cyclesObserved" in lab} />
+        <LabNumber label="Cycles in past year" value={val("cyclesPerYear")} onChange={set("cyclesPerYear")} edited={"cyclesPerYear" in lab} />
+        <LabNumber label="mFG hirsutism score" suffix="0–36" value={val("mfgScore")} onChange={set("mfgScore")} edited={"mfgScore" in lab} />
+        <LabNumber label="Hair growth days" suffix="%" value={Math.round(val("hirsutismDaysPct") || 0)} onChange={set("hirsutismDaysPct")} edited={"hirsutismDaysPct" in lab} />
+        <LabNumber label="Hair thinning days" suffix="%" value={Math.round(val("hairLossDaysPct") || 0)} onChange={set("hairLossDaysPct")} edited={"hairLossDaysPct" in lab} />
+        <LabToggle label="Has had first period" value={!!val("hasMenarche")} onChange={set("hasMenarche")} edited={"hasMenarche" in lab} />
+        <LabToggle label="On hormonal contraception" value={!!val("onContraception")} onChange={set("onContraception")} edited={"onContraception" in lab} />
+        <LabToggle label="Persistent acne" value={!!val("persistentAcne")} onChange={set("persistentAcne")} edited={"persistentAcne" in lab} />
+      </div>
+
+      <div style={{ marginTop: 16 }}><Label color={C.inkVar}>Rule thresholds</Label></div>
+      <div style={grid}>
+        {rules.cycleBands.map((b, i) => (<React.Fragment key={i}>
+          <LabNumber label={`${b.label} — short`} suffix="days" value={b.shortDays} onChange={setBand(i, "shortDays")} />
+          <LabNumber label={`${b.label} — long`} suffix="days" value={b.longDays} onChange={setBand(i, "longDays")} />
+        </React.Fragment>))}
+        <LabNumber label="Single-cycle alert" suffix="days" value={rules.singleCycleDays} onChange={setRule("singleCycleDays")} />
+        <LabNumber label="Min cycles per year" value={rules.minCyclesPerYear} onChange={setRule("minCyclesPerYear")} />
+        <LabNumber label="No menarche by age" value={rules.amenorrheaAge} onChange={setRule("amenorrheaAge")} />
+        <LabNumber label="mFG hirsutism cut-off" value={rules.mfgHirsutism} onChange={setRule("mfgHirsutism")} />
+        <LabNumber label="Hair growth days cut-off" suffix="%" value={rules.hirsutismDaysPct} onChange={setRule("hirsutismDaysPct")} />
+        <LabNumber label="Cycles needed to judge" value={rules.minCyclesToJudge} onChange={setRule("minCyclesToJudge")} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <Pill variant="outline" onClick={() => setLab({})}>Reset to my data</Pill>
+        <Pill variant="outline" onClick={() => setRules(RULES)}>Reset thresholds</Pill>
+      </div>
+    </div>)}
+  </Card>);
 }
 
 // ---- Rotterdam triad (Prepare/Clinician) -----------------------------------
@@ -490,11 +759,16 @@ export default function App() {
   useEffect(() => { if (ready) saveState({ profile, logs, settings }); }, [profile, logs, settings, ready]);
 
   const ins = useMemo(() => computeInsights(logs), [logs]);
-  const flags = useMemo(() => buildFlags(profile, ins), [profile, ins]);
-  const score = useMemo(() => riskScore(flags), [flags]);
-  const decision = useMemo(() => conformal(score), [score]);
-  const axes = useMemo(() => rotterdam(flags), [flags]);
-  const ctx = { profile, setProfile, logs, setLogs, settings, setSettings, ins, flags, score, decision, axes, setTab, wide };
+  // Everything the criteria see arrives through here: what we measured, with
+  // the lab's overrides laid on top so the indicator can be driven by hand.
+  const derived = useMemo(() => deriveInputs(profile, ins, logs), [profile, ins, logs]);
+  const [lab, setLab] = useState({});
+  const [rules, setRules] = useState(RULES);
+  const inputs = useMemo(() => ({ ...derived, ...lab }), [derived, lab]);
+  const assessment = useMemo(() => assess(inputs, rules), [inputs, rules]);
+  const axes = useMemo(() => triadAxes(assessment), [assessment]);
+  const ctx = { profile, setProfile, logs, setLogs, settings, setSettings, ins, assessment, axes,
+    derived, lab, setLab, rules, setRules, setTab, wide };
 
   const screen = () => (<>
     {tab === "home" && <HomeScreen {...ctx} />}
@@ -652,7 +926,7 @@ function CyclePhaseRing({ dayN, cycleLen }) {
   </svg>);
 }
 
-function HomeScreen({ profile, logs, setLogs, ins, setTab, wide, settings }) {
+function HomeScreen({ profile, logs, setLogs, ins, assessment, setTab, wide, settings }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = logs.find((l) => l.date === todayStr);
   const setPeriod = (v) => {
@@ -699,10 +973,16 @@ function HomeScreen({ profile, logs, setLogs, ins, setTab, wide, settings }) {
   const trackedToday = chips.length > 0 && (
     <div><Label color={C.inkVar}>Tracked today</Label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>{chips.map((c) => (<span key={c} style={{ fontFamily: bodyf, fontSize: 13, fontWeight: 500, padding: "8px 14px", borderRadius: 9999, background: C.surface, border: `1px solid ${C.outlineVar}`, color: C.inkVar }}>{c}</span>))}</div></div>);
+  // The verdict rides on the card that leads to it, so it is visible on landing.
+  const rec = assessment.recommendation, recTone = TONE[rec.tone];
   const prepareCard = (
     <Card onClick={() => setTab("advocacy")} style={{ display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
-      <span style={{ width: 42, height: 42, borderRadius: 12, background: C.rose, display: "grid", placeItems: "center", flexShrink: 0 }}><Stethoscope size={20} color={C.roseOn} /></span>
-      <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Prepare for your appointment</div><div style={{ fontSize: 13, color: C.inkVar }}>A clinician-ready summary from your tracking</div></div>
+      <span style={{ width: 42, height: 42, borderRadius: 12, background: recTone.bg, display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <recTone.Icon size={20} color={recTone.fg} /></span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{rec.headline}</div>
+        <div style={{ fontSize: 13, color: C.inkVar }}>{rec.met ? `${rec.met} of 2 trackable criteria met — see what's behind it` : "See what's behind it, and prepare for a visit"}</div>
+      </div>
       <ChevronRight size={20} color={C.outline} />
     </Card>);
 
@@ -1429,7 +1709,7 @@ function ChatScreen({ profile, settings }) {
 
 // ---- PREPARE ---------------------------------------------------------------
 // ---- ADVOCACY (Prepare + Clinician merged) ---------------------------------
-function AdvocacyScreen({ profile, ins, flags, score, decision, axes, settings, setTab }) {
+function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, rules, setRules, settings, setTab }) {
   const [rep, setRep] = useState(null); const [loadingR, setLoadingR] = useState(false);
   useEffect(() => { (async () => {
     const pid = settings.patientId; if (!pid) return; setLoadingR(true);
@@ -1437,15 +1717,14 @@ function AdvocacyScreen({ profile, ins, flags, score, decision, axes, settings, 
     setLoadingR(false);
   })(); }, [settings.patientId]);
 
-  const bandColor = decision.abstain ? "#8f631e" : decision.band === "elevated" ? C.roseOn : C.plum;
-  const bandBg = decision.abstain ? "#f7e6ce" : decision.band === "elevated" ? C.rose : C.lilac;
-  const standCard = (<Card style={{ marginBottom: 14 }}>
-    <Label>Where things stand</Label>
-    <div style={{ display: "flex", justifyContent: "center", margin: "8px 0" }}><Triad axes={axes} /></div>
-    <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: 14, borderRadius: 14, background: bandBg }}>
-      {decision.abstain ? <AlertTriangle size={18} color={bandColor} style={{ flexShrink: 0, marginTop: 2 }} /> : <Info size={18} color={bandColor} style={{ flexShrink: 0, marginTop: 2 }} />}
-      <span style={{ fontSize: 14, lineHeight: 1.45, color: decision.band === "elevated" ? C.roseOn : C.onLilac }}>{decision.abstain ? "Your signs are genuinely on the line — توازن won't guess. A clinician can run what it can't." : decision.band === "elevated" ? "Several signs line up with PMOS. Not a diagnosis — a strong reason to be assessed." : "Few PMOS signs stand out today. Keep tracking; bring this if symptoms persist."}</span></div>
-  </Card>);
+  const standCard = (<>
+    <DoctorIndicator assessment={assessment} />
+    <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules} setRules={setRules} />
+    <Card style={{ marginBottom: 14 }}>
+      <Label>The three criteria</Label>
+      <div style={{ display: "flex", justifyContent: "center", margin: "8px 0" }}><Triad axes={axes} /></div>
+    </Card>
+  </>);
 
   // FOR ME — the advocacy report (data-driven talking points)
   const meView = (<>
