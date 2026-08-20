@@ -48,6 +48,10 @@ const FONTS = `
   100%{ opacity:0; transform:translate(var(--dx), var(--dy)) scale(var(--s)) rotate(var(--r)) }
 }
 @keyframes bloom{ 0%{ opacity:0; transform:scale(.6) } 30%{ opacity:.5 } 100%{ opacity:0; transform:scale(1.5) } }
+@keyframes wash{ 0%{ background-position:0% 50% } 50%{ background-position:100% 50% } 100%{ background-position:0% 50% } }
+@keyframes fadeIn{ from{ opacity:0 } to{ opacity:1 } }
+.phase-wash{ position:absolute; inset:0; pointer-events:none; background-size:180% 180%;
+  animation:wash 26s ease-in-out infinite, fadeIn 1.4s ease both; }
 .spark{ position:absolute; pointer-events:none; will-change:transform,opacity;
   clip-path:polygon(50% 0%,61% 39%,100% 50%,61% 61%,50% 100%,39% 61%,0% 50%,39% 39%);
   animation:spark var(--dur) cubic-bezier(.2,.7,.3,1) both; }
@@ -58,6 +62,7 @@ const FONTS = `
 .fade-up{ animation:fadeUp .45s ease-out both; }
 @media (prefers-reduced-motion: reduce){
   .halo,.breathe,.fade-up,.spin,.spark,.bloom{ animation:none !important; opacity:0 !important }
+  .phase-wash{ animation:fadeIn 1ms both !important }
 }
 input[type=range].slider{ -webkit-appearance:none; appearance:none; width:100%; height:10px; border-radius:9999px; outline:none; }
 input[type=range].slider::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:30px; height:30px; border-radius:50%; background:#fff; border:4px solid ${C.plum}; box-shadow:0 2px 8px rgba(92,75,125,.28); cursor:pointer; margin-top:-1px; }
@@ -982,6 +987,11 @@ const PHASES = [
 // Menstrual settles downward in deep rose, follicular lifts in lilac,
 // ovulatory bursts outward in gold (the loudest, because it is the shortest),
 // luteal drifts slowly in plum.
+// The calendar sits in the phase you're in: a still tint that eases from one
+// phase to the next, with a slow wash drifting over it. Kept pale on purpose —
+// the day circles and the period bar have to stay readable on top.
+const PHASE_TINT = { menstrual: "#ffe3e5", follicular: "#f1ebf8", ovulatory: "#fdf1e2", luteal: "#ece7f6" };
+
 const SPARK = {
   menstrual:  { n: 16, color: C.roseOn,  glow: C.roseDeep, dur: [1500, 2100], drift: [0, 46],  spread: 34, size: [4, 9],  spin: 140 },
   follicular: { n: 20, color: C.lilacDim, glow: C.lilac,   dur: [1400, 2000], drift: [0, -52], spread: 30, size: [3, 8],  spin: 200 },
@@ -1135,17 +1145,6 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   const now = new Date(); const phase = ins.cycleDay == null ? "—" : ins.cycleDay <= 5 ? "Menstrual" : ins.cycleDay <= 13 ? "Follicular" : ins.cycleDay <= 16 ? "Ovulatory" : "Luteal";
   const chips = []; if (today) { if (today.pain >= 6) chips.push("High pain"); else if (today.pain > 0) chips.push("Mild pain"); if (today.hairGrowth || today.hairLoss) chips.push("Hair health"); if (today.bloating) chips.push("Bloating"); if (today.cravings) chips.push("Cravings"); if (today.mood <= 3) chips.push("Low mood"); }
 
-  const calendarBlock = (
-    <div>
-      <Label>{now.toLocaleString(undefined, { month: "long", year: "numeric" })}</Label>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
-        <H size={24}>Your Cycle</H>
-        <button onClick={() => setTab("insights")} style={{ background: "none", border: "none", color: C.plum, fontFamily: bodyf, fontWeight: 600, fontSize: 14, cursor: "pointer", display: "inline-flex", gap: 3, alignItems: "center" }}>View history <ChevronRight size={15} /></button>
-      </div>
-      <Card style={{ marginTop: 12, padding: 16, background: C.low, boxShadow: "none" }}>
-        <CycleCalendar logs={logs} onSet={setPeriodDays} /></Card>
-    </div>);
-  const drugCard = <DrugTherapy profile={profile} setProfile={setProfile} />;
   // THIS CYCLE — the ring says which phase, the bar says how far in and what
   // your own history expects. Together they answer "where am I?" without
   // needing the calendar.
@@ -1161,6 +1160,22 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   // the arc: the shortest and longest cycle they have actually had
   const past = cycles.filter((c) => !c.open).map((c) => c.days);
   const span = past.length >= 2 ? [Math.min(...past), Math.max(...past)] : [null, null];
+  const calendarBlock = (
+    <div>
+      <Label>{now.toLocaleString(undefined, { month: "long", year: "numeric" })}</Label>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+        <H size={24}>Your Cycle</H>
+        <button onClick={() => setTab("insights")} style={{ background: "none", border: "none", color: C.plum, fontFamily: bodyf, fontWeight: 600, fontSize: 14, cursor: "pointer", display: "inline-flex", gap: 3, alignItems: "center" }}>View history <ChevronRight size={15} /></button>
+      </div>
+      <Card style={{ marginTop: 12, padding: 16, boxShadow: "none", position: "relative", overflow: "hidden",
+        background: PHASE_TINT[phaseKey] || C.low, transition: "background-color 1.6s ease" }}>
+        {phaseKey && (() => { const ph = PHASES.find((x) => x.key === phaseKey); return ph ? (
+          <div key={phaseKey} className="phase-wash" style={{ background:
+            `radial-gradient(120% 90% at 15% 0%, ${ph.from}66, transparent 62%),
+             radial-gradient(120% 90% at 85% 100%, ${ph.to}4d, transparent 62%)` }} />) : null; })()}
+        <div style={{ position: "relative" }}><CycleCalendar logs={logs} onSet={setPeriodDays} /></div></Card>
+    </div>);
+  const drugCard = <DrugTherapy profile={profile} setProfile={setProfile} />;
   const phaseTiles = (
     <Card style={{ padding: 20, boxShadow: SH_SM, position: "relative", overflow: "hidden" }}>
       <SparkleLayer burst={burst} />
@@ -1172,45 +1187,35 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
           fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
           <span style={{ width: 9, height: 9, borderRadius: "50%", background: `linear-gradient(135deg, ${p.from}, ${p.to})` }} /> {p.name}</span>))}
       </div>
+      <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 10 }}>
+        Phases are an estimate — the app can't see ovulation.</div>
     </Card>);
 
-  // WHAT'S NEXT — one answer, big, and at most two quiet lines under it.
-  // Everything else the card used to carry (the phase's day span, the average
-  // repeated twice, a two-line caveat) was arithmetic the person had to do
-  // themselves. The ring says which phase; this says what happens next.
+  // NEXT PERIOD — a date and a number of days, in the words someone would use
+  // out loud. No cycle-day arithmetic: "day 21 of about 33" and "day 11 to day
+  // 47" both made the reader work out what they were counting from, and the
+  // second was plain wrong — those are cycle lengths, not days of a cycle.
   const nextUp = (() => {
-    if (!current) return { big: "Nothing logged yet", sub: "Mark a period on the calendar to start." };
+    if (!current) return { big: "Nothing logged yet", sub: "Tap a day on the calendar to mark your period." };
     if (current.days <= current.bleed) return { big: `Day ${current.days} of your period`, sub: "" };
-    if (!avg) return { big: "Still learning your rhythm", sub: "A couple more periods and this can say." };
-    const when = dayOf(addDays(current.start, avg)).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    if (!avg) return { big: "Still learning your rhythm", sub: "Log one more period and this can tell you when to expect the next." };
+    const when = dayOf(addDays(current.start, avg)).toLocaleDateString(undefined, { day: "numeric", month: "long" });
     const left = avg - current.days;
-    if (left > 0) return { big: `Around ${when}`, sub: `${left} day${left === 1 ? "" : "s"} away, going by your ${avg}-day average.` };
-    if (left === 0) return { big: "Due today", sub: `Going by your ${avg}-day average.` };
-    return { big: `${-left} day${left === -1 ? "" : "s"} late`, sub: `Your average is ${avg} days.`, late: true };
+    if (left > 0) return { big: `Around ${when}`, sub: left === 1 ? "Tomorrow." : `In ${left} days.` };
+    if (left === 0) return { big: "Expected today", sub: "" };
+    return { big: `${-left} day${left === -1 ? "" : "s"} late`, sub: `Expected around ${when}.`, late: true };
   })();
   const late = !!nextUp.late;
 
-  const cycleFacts = (() => {
-    const cyc = current ? ringLength(current.days, avg) : null;
-    const sp = current ? phaseSpans(cyc, usualBleed).find((x) => x.key === phaseKey) : null;
-    const phaseName = (PHASES.find((x) => x.key === phaseKey) || {}).name;
-    const lastPhase = sp && sp.b >= cyc;
-    const lines = [
-      sp && (lastPhase ? `${phaseName} until your next period` : `${phaseName} until day ${sp.b}`),
-      span[0] != null && `Yours have come from day ${span[0]} to day ${span[1]}`,
-    ].filter(Boolean);
-    return (<Card style={{ padding: 20, boxShadow: SH_SM }}>
-      <Label color={late ? C.roseOn : C.plum}>{late ? "Running late" : "What's next"}</Label>
-      <div style={{ fontFamily: head, fontWeight: 700, fontSize: 26, lineHeight: 1.2, margin: "6px 0 4px",
-        color: late ? C.roseOn : C.ink }}>{nextUp.big}</div>
-      {nextUp.sub && <div style={{ fontFamily: bodyf, fontSize: 13.5, color: C.inkVar, lineHeight: 1.5 }}>{nextUp.sub}</div>}
-      {lines.length > 0 && (<div style={{ marginTop: 14, borderTop: `1px solid ${C.high}`, paddingTop: 10,
-        display: "grid", gap: 5 }}>
-        {lines.map((l) => (<div key={l} style={{ fontFamily: bodyf, fontSize: 13, color: C.inkVar }}>{l}</div>))}
-      </div>)}
-      <div style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, marginTop: 10 }}>Phases are an estimate.</div>
-    </Card>);
-  })();
+  const cycleFacts = (<Card style={{ padding: 20, boxShadow: SH_SM }}>
+    <Label color={late ? C.roseOn : C.plum}>{late ? "Running late" : "Next period"}</Label>
+    <div style={{ fontFamily: head, fontWeight: 700, fontSize: 26, lineHeight: 1.2, margin: "6px 0 4px",
+      color: late ? C.roseOn : C.ink }}>{nextUp.big}</div>
+    {nextUp.sub && <div style={{ fontFamily: bodyf, fontSize: 14, color: C.inkVar }}>{nextUp.sub}</div>}
+    {span[0] != null && (<div style={{ marginTop: 14, borderTop: `1px solid ${C.high}`, paddingTop: 10,
+      fontFamily: bodyf, fontSize: 12.5, color: C.inkVar, lineHeight: 1.5 }}>
+      Your periods have come {span[0]} to {span[1]} days apart, so this is a rough guide.</div>)}
+  </Card>);
   const recordCTA = (
     <button onClick={() => setTab("record")} style={{ width: "100%", background: C.plum, color: "#fff", border: "none", borderRadius: 18, padding: "22px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: SH }}>
       <span style={{ fontFamily: head, fontWeight: 700, fontSize: 22 }}>Record your day</span>
