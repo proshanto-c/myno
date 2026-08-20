@@ -6,6 +6,7 @@ import {
   Brain, HeartPulse, Microscope, Droplet, Activity, ChevronLeft, Pill as Pill2
 } from "lucide-react";
 // One definition of what a cycle is, tested in cycles.test.mjs.
+import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
   cycleRuns, DAY_MS } from "./cycles.js";
@@ -462,23 +463,6 @@ function Chip({ children, active, onClick, icon: Ico }) {
 }
 // The mark: the single-line uterus logo, traced from brand-logo-source.svg into
 // one even-odd path so it stays crisp at any size and takes the colour it's given.
-const MARK = "M53.33,76.42 46.67,76.42 46.08,76.06 45.09,75.07 44.73,74.54 44.13,73.28 42.63,68.48 40.11,62.79 39.63,61.29 39.28,59.74 39.04,57.76 39.04,54.7 39.22,52.97 39.57,50.93 39.63,48.95 39.16,46.61 38.8,45.6 37.9,43.68 36.76,41.76 34.54,38.41 33.82,37.15 32.74,34.93 31.91,32.59 31.61,31.46 30.89,27.86 30.65,26.06 30.05,23.55 29.39,21.75 28.49,20.19 27.83,19.35 26.72,18.24 24.69,16.75 17.74,13.09 14.74,11.65 11.98,10.75 10.13,10.46 9.47,10.46 8.51,10.64 7.49,10.99 6.83,11.41 6.2,12.04 5.72,12.88 5.54,13.48 5.54,14.14 6.08,15.58 6.5,16.18 7.13,16.81 8.09,17.41 9.23,17.77 14.26,17.77 15.16,17.94 16.6,18.54 17.26,19.02 18.0,19.83 18.36,20.67 18.39,21.48 19.29,21.78 20.79,22.56 21.93,23.4 22.74,24.21 23.7,25.58 24.12,26.48 24.36,27.38 24.42,29.96 24.3,30.74 24.06,31.46 23.58,32.29 22.89,33.1 22.17,33.7 21.09,34.3 20.07,34.66 18.69,34.9 15.64,34.9 13.66,34.54 12.16,34.0 11.2,33.52 9.41,32.26 8.24,31.1 7.04,29.3 6.56,28.1 6.26,26.6 6.26,24.15 6.5,23.07 4.79,22.56 3.89,22.14 2.58,21.3 1.11,19.95 0.45,19.05 -0.03,18.15 -0.03,10.07 0.39,9.17 1.05,8.15 2.7,6.5 3.83,5.78 4.85,5.3 6.77,4.76 8.69,4.58 11.5,4.64 13.0,4.88 15.22,5.54 17.02,6.26 20.91,8.06 22.17,8.48 24.33,8.96 25.82,8.96 28.28,8.36 30.26,7.46 32.06,6.38 36.43,3.33 37.87,2.43 39.9,1.35 41.58,0.63 42.84,0.21 43.74,-0.03 56.56,-0.03 58.3,0.51 59.5,0.99 61.41,1.95 63.69,3.33 67.71,6.14 69.62,7.28 71.72,8.24 73.88,8.84 74.6,8.96 75.73,8.96 77.47,8.6 79.45,7.94 83.16,6.2 85.74,5.24 87.72,4.76 89.69,4.58 92.57,4.64 93.89,4.88 95.15,5.3 96.23,5.78 97.24,6.44 98.47,7.61 99.07,8.33 99.97,9.95 99.97,18.15 99.07,19.65 97.54,21.18 96.88,21.66 95.45,22.44 93.5,23.07 93.74,24.03 93.74,26.78 93.44,28.16 92.9,29.42 92.0,30.8 90.59,32.26 89.69,32.98 88.02,33.94 85.98,34.66 84.42,34.9 80.95,34.84 79.81,34.6 78.37,34.0 77.77,33.64 76.78,32.77 75.88,31.28 75.58,29.78 75.58,27.92 75.7,27.08 75.94,26.3 76.36,25.46 77.26,24.21 78.07,23.4 79.21,22.56 80.59,21.84 81.67,21.48 81.7,20.43 81.82,20.13 82.17,19.59 83.22,18.66 84.18,18.18 85.8,17.77 90.77,17.77 91.91,17.41 92.93,16.75 93.8,15.76 94.34,14.62 94.52,13.84 94.28,12.88 93.98,12.28 93.11,11.35 92.27,10.87 91.55,10.64 90.59,10.46 89.93,10.46 88.08,10.75 85.44,11.59 82.26,13.09 81.25,13.69 77.05,15.79 75.07,16.93 73.52,18.06 72.47,19.05 71.57,20.13 70.61,21.81 70.01,23.43 69.59,25.04 68.63,30.62 68.15,32.53 67.62,34.09 67.08,35.41 66.18,37.21 65.04,39.13 62.28,43.38 61.26,45.48 60.67,47.33 60.37,49.07 60.37,50.27 60.96,54.52 60.96,57.94 60.67,60.22 60.25,61.77 59.41,64.05 57.85,67.41 57.13,69.26 56.47,71.54 55.75,73.58 55.33,74.42 54.79,75.19 53.92,76.06 53.33,76.42ZM45.27,68.18 45.33,65.61 45.63,64.23 45.99,63.15 46.88,61.35 48.32,59.2 47.06,57.28 46.52,56.2 46.17,55.18 45.93,53.86 45.93,51.95 46.17,50.51 46.58,49.37 47.66,47.45 48.38,46.43 47.54,45.18 46.58,43.32 45.75,41.1 44.91,37.75 44.25,33.49 43.77,31.1 42.99,28.46 42.27,26.78 41.73,25.82 40.77,24.57 39.96,23.76 39.01,22.98 37.45,21.96 33.91,19.98 32.65,19.14 31.43,17.97 30.89,17.02 30.77,16.6 30.77,14.56 31.19,13.66 31.7,13.21 32.06,13.03 33.07,12.73 36.31,12.73 37.09,12.85 39.36,13.51 45.18,15.97 47.33,16.57 49.91,16.93 52.07,16.69 54.1,16.21 56.14,15.49 60.34,13.63 62.67,12.91 63.75,12.73 66.45,12.67 67.53,12.85 68.42,13.27 68.93,13.78 69.17,14.2 69.23,16.66 68.99,17.32 68.51,18.03 67.77,18.78 66.09,19.98 62.85,21.78 60.99,22.98 59.41,24.39 58.69,25.22 57.97,26.3 57.07,28.22 56.47,30.14 55.75,33.61 55.03,38.23 54.25,41.16 53.42,43.32 52.58,44.94 51.62,46.43 53.18,48.89 53.89,50.69 54.07,51.77 54.07,54.04 53.89,55.06 53.18,56.86 51.68,59.26 52.52,60.4 53.42,61.89 54.31,63.93 54.79,66.21 54.82,68.15 55.87,65.37 57.07,62.85 57.85,60.87 58.21,59.74 58.69,57.58 58.81,56.2 58.15,51.41 58.15,47.87 58.33,46.55 58.75,44.88 59.35,43.26 60.07,41.82 63.54,36.37 64.5,34.63 65.22,33.07 65.88,31.28 66.36,29.48 67.2,24.63 67.8,21.99 68.57,19.89 69.41,18.45 71.06,16.57 71.96,15.79 73.7,14.59 80.41,11.05 82.74,9.92 85.2,8.96 87.06,8.48 89.28,8.24 92.03,8.3 93.53,8.6 94.67,9.14 95.84,10.19 96.26,10.84 96.49,11.44 96.73,12.64 96.73,15.1 96.49,16.18 96.02,17.32 95.48,18.09 94.73,18.84 94.31,19.14 92.81,19.8 91.37,20.04 88.86,20.04 87.42,19.92 85.98,20.28 84.81,20.91 85.8,20.82 89.51,20.82 91.37,21.06 93.29,20.52 94.55,19.92 95.39,19.38 96.67,18.21 97.63,16.9 98.29,15.22 98.41,14.62 98.41,13.66 97.99,11.98 97.51,10.96 96.91,10.01 95.75,8.78 94.55,7.94 93.11,7.28 91.37,6.86 90.17,6.8 88.44,7.1 86.46,7.7 83.58,8.9 81.49,9.92 78.61,10.87 76.63,11.17 73.7,11.17 72.32,10.99 69.8,10.28 67.65,9.26 66.03,8.3 61.23,5.0 58.6,3.51 57.52,3.03 55.6,2.31 53.33,1.77 51.53,1.53 49.67,1.47 47.69,1.65 45.84,2.01 44.28,2.43 42.36,3.15 40.38,4.1 38.59,5.18 34.39,8.12 32.35,9.38 30.5,10.28 28.7,10.87 26.84,11.17 23.37,11.17 21.45,10.87 19.35,10.22 15.28,8.36 13.3,7.58 11.92,7.16 9.95,6.8 9.11,6.8 8.33,6.92 6.95,7.28 5.93,7.7 4.91,8.3 4.13,8.9 3.15,9.95 2.13,11.68 1.65,13.24 1.53,14.26 1.71,15.28 2.07,16.36 3.15,18.09 4.25,19.14 5.87,20.16 7.19,20.7 8.57,21.06 10.37,20.82 15.13,20.85 14.26,20.34 12.64,19.92 11.74,19.92 10.96,20.04 8.57,20.04 7.01,19.74 5.33,18.9 4.58,18.21 3.86,17.14 3.51,16.24 3.27,14.92 3.33,12.16 3.74,10.84 4.4,9.95 4.97,9.38 5.63,8.96 6.71,8.54 8.03,8.3 10.72,8.24 12.94,8.48 14.86,8.96 17.32,9.92 25.04,13.87 26.72,14.83 28.64,16.27 29.81,17.44 30.59,18.45 31.61,20.25 32.32,22.35 32.92,25.04 32.92,25.46 33.52,28.82 34.12,31.16 34.9,33.31 35.86,35.29 36.82,36.97 37.72,38.23 39.93,41.82 40.89,43.86 41.37,45.24 41.73,46.85 41.85,47.87 41.85,51.59 41.25,55.66 41.25,56.68 41.49,58.42 42.27,61.17 42.87,62.49 42.87,62.67 43.11,63.03 43.47,63.99 44.19,65.43 45.27,68.18ZM50.06,43.86 51.14,41.94 52.22,39.19 53.06,35.65 53.59,31.94 54.31,28.52 55.03,26.3 55.93,24.45 57.31,22.59 58.48,21.48 60.04,20.34 65.07,17.41 66.36,16.3 66.72,15.88 66.84,15.52 66.39,15.19 65.79,14.95 65.37,14.89 64.65,15.01 63.75,15.19 62.13,15.73 57.28,17.83 55.78,18.36 54.58,18.66 53.03,18.96 51.83,19.08 48.23,19.08 46.32,18.84 44.28,18.36 42.0,17.53 38.23,15.85 36.25,15.19 34.69,14.89 34.03,15.01 33.61,15.19 33.16,15.58 33.16,15.7 34.21,16.87 35.77,17.94 39.01,19.74 41.1,21.12 42.69,22.59 43.35,23.37 44.01,24.39 44.97,26.36 45.69,28.58 46.17,30.62 47.06,36.13 47.78,39.13 48.98,42.18 49.76,43.62 49.97,43.89 50.06,43.86ZM17.29,32.71 18.51,32.5 19.95,31.91 20.79,31.31 21.66,30.32 22.14,29.18 22.14,28.64 21.54,27.2 20.82,26.18 20.01,25.37 19.05,24.66 17.56,23.88 16.18,23.4 14.08,23.16 11.74,23.1 11.08,23.22 10.01,23.22 9.35,23.52 8.9,24.03 8.72,24.39 8.48,25.16 8.48,25.58 8.72,26.6 9.2,27.68 10.22,29.18 11.38,30.35 12.94,31.43 13.9,31.91 15.22,32.38 16.6,32.68 17.29,32.71ZM83.01,32.71 83.88,32.62 84.84,32.38 86.64,31.67 88.32,30.59 89.78,29.18 90.8,27.68 91.16,26.9 91.52,25.7 91.52,25.1 91.34,24.51 91.04,23.97 90.65,23.52 90.23,23.28 88.08,23.1 86.88,23.1 84.18,23.34 82.56,23.82 80.95,24.66 79.87,25.49 79.12,26.24 78.22,27.62 77.86,28.7 77.98,29.54 78.34,30.26 79.0,31.1 79.87,31.79 81.19,32.38 82.14,32.62 83.01,32.71ZM50.06,56.74 50.78,55.66 51.44,54.34 51.8,53.21 51.8,52.61 51.38,51.29 50.03,48.86 49.46,49.67 48.62,51.29 48.14,52.91 48.5,54.16 48.8,54.82 49.64,56.32 49.88,56.68 50.06,56.74ZM50.06,71.72 50.51,71.57 51.05,71.21 51.5,70.76 51.98,70.04 52.46,68.72 52.58,68.06 52.58,67.35 52.1,65.31 51.74,64.47 51.02,63.09 49.97,61.56 48.74,63.51 48.14,64.77 47.6,66.51 47.42,67.88 47.6,68.9 47.84,69.62 48.38,70.58 49.13,71.33 49.79,71.69 50.06,71.72ZM50.24,74.84 50.99,74.63 51.71,74.27 52.64,73.46 52.13,73.73 51.35,73.97 49.13,74.03 48.35,73.91 47.3,73.4 48.11,74.15 48.71,74.51 49.79,74.87 50.24,74.84Z";
-function Uterus({ size = 22, color = "#fff", style }) {
-  return (
-    <svg width={size} height={size * 0.7645} viewBox="0 0 100 76.45" aria-hidden="true" style={{ display: "block", ...style }}>
-      <path fill={color} fillRule="evenodd" d={MARK} />
-    </svg>);
-}
-function BrandMark({ size = 34 }) {
-  // The drawing's weight sits in the fundus and tubes, so a box-centred mark
-  // reads top-heavy in the disc — nudge it down onto its optical centre.
-  return (<span style={{ width: size, height: size, borderRadius: "50%", background: C.plum, display: "grid", placeItems: "center", flexShrink: 0 }}>
-    <Uterus size={size * 0.66} style={{ transform: "translateY(10%)" }} /></span>);
-}
-// The wordmark. inline-block isolates the RTL word from the surrounding LTR
-// sentence, so neighbouring punctuation isn't reordered by the bidi algorithm.
-const Brand = ({ style }) => (
-  <span dir="rtl" style={{ display: "inline-block", fontFamily: head, fontWeight: 700, ...style }}>توازن</span>);
 const Field = ({ label, children }) => (
   <label style={{ display: "block" }}><div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 600, letterSpacing: "0.04em", color: C.inkVar, marginBottom: 6, textTransform: "uppercase" }}>{label}</div>{children}</label>
 );
@@ -921,7 +905,7 @@ function TopNav({ tab, setTab, profile }) {
     <header style={{ position: "sticky", top: 0, zIndex: 20, background: "rgba(251,239,239,0.88)", backdropFilter: "blur(10px)", borderBottom: `1px solid ${C.high}` }}>
       <div style={{ maxWidth: 1140, margin: "0 auto", padding: "12px 40px", display: "flex", alignItems: "center", gap: 8 }}>
         <button onClick={() => setTab("home")} style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", marginRight: 18 }}>
-          <BrandMark size={32} /><span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 25, color: C.plum }}>توازن</span>
+          <Mark ring={C.plum} size={32} /><span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 25, color: C.plum }}>توازن</span>
         </button>
         <nav style={{ display: "flex", gap: 2 }}>
           {items.map(([id, label]) => { const on = tab === id; return (
@@ -939,7 +923,7 @@ function TopNav({ tab, setTab, profile }) {
 // ---- header + bottom nav ---------------------------------------------------
 function Header({ profile, onSettings }) {
   return (<div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px 10px" }}>
-    <BrandMark size={32} />
+    <Mark ring={C.plum} size={32} />
     <span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 25, color: C.plum }}>توازن</span>
     <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
       <button onClick={onSettings} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar, display: "grid", placeItems: "center" }}><Cog size={22} /></button>
@@ -967,10 +951,10 @@ function Onboarding({ profile, setProfile }) {
   const GOALS = [["conceive", "Trying to conceive", Target], ["whatswrong", "Figure out what's wrong", Brain], ["manage", "Manage my symptoms", HeartPulse], ["prepare", "Prepare for an appointment", Stethoscope]];
   const APPS = ["Apple Health", "Google Fit", "Oura", "Fitbit", "Clue / Flo"];
   return (<div style={{ padding: "60px 24px", minHeight: "100vh" }}>
-    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 30 }}><BrandMark /><span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 30, color: C.plum }}>توازن</span></div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 30 }}><Mark ring={C.plum} /><span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 30, color: C.plum }}>توازن</span></div>
     <Card style={{ borderRadius: 24, padding: 24, boxShadow: SH }}>
       {step === 0 && (<><Label>Welcome</Label><H size={26} style={{ margin: "10px 0 8px" }}>Let's build your digital twin</H>
-        <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 20 }}><Brand /> learns your patterns, helps you make sense of them, and gets you ready for the clinician. What brings you here?</p>
+        <p style={{ color: C.inkVar, lineHeight: 1.5, marginBottom: 20 }}><Word font={head} /> learns your patterns, helps you make sense of them, and gets you ready for the clinician. What brings you here?</p>
         <div style={{ display: "grid", gap: 10 }}>{GOALS.map(([id, l, Ico]) => { const on = profile.goals.includes(id); return (
           <button key={id} onClick={() => tog("goals", id)} style={{ textAlign: "left", padding: 16, borderRadius: 16, cursor: "pointer", display: "flex", alignItems: "center", gap: 12, background: on ? C.lilac : C.low, border: `1.5px solid ${on ? C.plum : "transparent"}` }}>
             <Ico size={22} color={C.plum} /><span style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{l}</span>{on && <Check size={18} color={C.plum} style={{ marginLeft: "auto" }} />}</button>); })}</div></>)}
@@ -998,7 +982,7 @@ function Onboarding({ profile, setProfile }) {
         <div style={{ marginTop: 16, padding: 14, background: C.lilac, borderRadius: 14, fontSize: 14, color: C.onLilac, lineHeight: 1.5 }}>We've pre-loaded three months of sample tracking so your twin has something to learn from right away.</div></>)}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 24 }}>
         <Pill variant="soft" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0} style={{ padding: "13px 18px" }}><ArrowLeft size={16} /> Back</Pill>
-        <Pill onClick={() => step < 3 ? setStep(step + 1) : set("onboarded", true)} disabled={step === 0 && profile.goals.length === 0}>{step < 3 ? "Continue" : <>Enter <Brand /></>} <ArrowRight size={16} /></Pill>
+        <Pill onClick={() => step < 3 ? setStep(step + 1) : set("onboarded", true)} disabled={step === 0 && profile.goals.length === 0}>{step < 3 ? "Continue" : <>Enter <Word font={head} /></>} <ArrowRight size={16} /></Pill>
       </div>
     </Card>
   </div>);
@@ -1674,7 +1658,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 12, letterSpacing: "0.06em", textTransform: "uppercase", minHeight: 18 }}>{busy ? <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Loader2 size={13} className="spin" /> {status}</span> : status}</div>
       <div style={{ minHeight: 24, marginTop: 10, fontSize: 15 }}>{partial ? <i style={{ opacity: 0.92 }}>{partial}…</i> : null}</div>
       {reply && (<div style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", background: "rgba(255,255,255,0.16)", borderRadius: 16, padding: "12px 14px", marginTop: 12 }}>
-        <BrandMark size={32} />
+        <Mark ring={C.plum} size={32} />
         <div style={{ flex: 1, fontSize: 15, lineHeight: 1.45 }}>{reply}</div>
         {speaker.speaking && <button onClick={speaker.stop} title="Stop speaking" style={{ background: "rgba(255,255,255,0.2)", border: "none", borderRadius: 9999, width: 30, height: 30, display: "grid", placeItems: "center", cursor: "pointer", color: "#fff", flexShrink: 0 }}><VolumeX size={15} /></button>}
       </div>)}
@@ -1700,7 +1684,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
         <button onClick={() => setModal(true)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, color: C.plum, background: "none", border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}><SquarePen size={14} /> Details</button>
       </div>
       {cats.length === 0 ? (
-        <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.5 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;As you talk, <Brand /> builds a tracker here — in your own words.</Card>
+        <Card style={{ color: C.inkVar, fontSize: 14, lineHeight: 1.5 }}><Sparkles size={16} color={C.roseOn} /> &nbsp;As you talk, <Word font={head} /> builds a tracker here — in your own words.</Card>
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
           {cats.map((c) => { const on = !!flash[c.key]; const sc = normalizedScale(c.scale); return (
@@ -1789,7 +1773,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
         <Pill variant={insOn ? "filled" : "outline"} onClick={toggleIns} style={{ padding: "10px 16px", fontSize: 14, flexShrink: 0 }}><BarChart3 size={15} /> Trends</Pill>
       </div>
     </div>
-    <p style={{ color: C.inkVar, marginBottom: 18 }}>Just talk — <Brand /> listens, talks back, and builds your personal tracker as you go.</p>
+    <p style={{ color: C.inkVar, marginBottom: 18 }}>Just talk — <Word font={head} /> listens, talks back, and builds your personal tracker as you go.</p>
     {wide ? (
       <div style={{ display: "grid", gridTemplateColumns: insOn ? "minmax(240px, 280px) minmax(0, 1fr) minmax(280px, 340px)" : "minmax(0, 1fr) minmax(300px, 380px)", gap: 20, alignItems: "start" }}>
         {insOn && insightsPanel}{speakBlock}{dayBlock}</div>
@@ -1870,14 +1854,14 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
 
   const summaryCard = (<Card>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: head, fontWeight: 600, fontSize: 17 }}><Sparkles size={18} color={C.roseOn} /> Analysis from <Brand /></span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: head, fontWeight: 600, fontSize: 17 }}><Sparkles size={18} color={C.roseOn} /> Analysis from <Word font={head} /></span>
       {loadingA && <Loader2 size={14} className="spin" color={C.outline} />}
     </div>
     {analysis?.summary ? <p style={{ fontSize: 14, lineHeight: 1.5, color: C.ink, margin: 0 }}>{analysis.summary}</p>
       : errA ? (
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, lineHeight: 1.45, color: C.roseOn }}>
           <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} /><span>{errA}</span></div>
-      ) : (!loadingA && <p style={{ fontSize: 13, color: C.inkVar, margin: 0 }}>Keep logging — <Brand /> analyses your trends here.</p>)}
+      ) : (!loadingA && <p style={{ fontSize: 13, color: C.inkVar, margin: 0 }}>Keep logging — <Word font={head} /> analyses your trends here.</p>)}
   </Card>);
 
   // Everything found in the data, filed under the section of the Record screen
@@ -2590,7 +2574,7 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, s
       <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.plum, width: 18, height: 18 }} /><span style={{ fontSize: 15 }}>Speak replies aloud</span></label>
     </Card>
     <Card style={{ marginBottom: 14 }}>
-      <Label color={C.inkVar}>Block topics — <Brand /> won't ask about or use these</Label>
+      <Label color={C.inkVar}>Block topics — <Word font={head} /> won't ask about or use these</Label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>{Object.entries(FEATURES).map(([k, f]) => { const on = (settings.blacklist || []).includes(k); return (
         <button key={k} onClick={() => set("blacklist", on ? settings.blacklist.filter((x) => x !== k) : [...(settings.blacklist || []), k])} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13, padding: "9px 14px", borderRadius: 9999, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7, background: on ? C.rose : C.surface, color: on ? C.roseOn : C.inkVar, border: `1.5px solid ${on ? C.rose : C.outlineVar}` }}>{on ? <Lock size={13} /> : <Check size={13} color={C.outlineVar} />} {f.label}</button>); })}</div>
       <p style={{ fontSize: 11, color: C.inkVar, marginTop: 10 }}>Blocked topics vanish from your daily tracker and are never raised in conversation — enforced in-app and on the server.</p>
@@ -2598,6 +2582,6 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, s
     <Card onClick={() => setTab("advocacy")} style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
       <span style={{ width: 42, height: 42, borderRadius: 12, background: C.lilac, display: "grid", placeItems: "center" }}><Stethoscope size={20} color={C.plumDark} /></span>
       <div style={{ flex: 1 }}><div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>Advocacy &amp; appointment prep</div><div style={{ fontSize: 13, color: C.inkVar }}>Your talking points and the clinician view</div></div><ChevronRight size={20} color={C.outline} /></Card>
-    <p style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, textAlign: "center", marginTop: 18 }}><Brand /> · DECISION SUPPORT, NOT A DIAGNOSIS · PROTOTYPE</p>
+    <p style={{ fontFamily: bodyf, fontSize: 11, color: C.outline, textAlign: "center", marginTop: 18 }}><Word font={head} /> · DECISION SUPPORT, NOT A DIAGNOSIS · PROTOTYPE</p>
   </div>);
 }

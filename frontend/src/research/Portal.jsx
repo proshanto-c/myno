@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { BookOpen, LogOut, RefreshCw, AlertTriangle, Library, ListChecks, FlaskConical } from "lucide-react";
-import { T, serif, sans, mono, figures } from "./theme";
+import { LogOut, RefreshCw, AlertTriangle, Library, ListChecks, FlaskConical } from "lucide-react";
+import { BrandMark, Brand } from "../brand.jsx";
+import { T, serif, sans, head, mono, figures } from "./theme";
 import { api, SignedOut } from "./api";
 
 /* ---- small atoms ---------------------------------------------------------- */
@@ -35,6 +36,29 @@ const Tag = ({ children, fg = T.inkMid, bg = T.raised }) => (
     padding: "3px 8px", borderRadius: 4, background: bg, color: fg, whiteSpace: "nowrap" }}>{children}</span>
 );
 
+/* ---- the lockup ------------------------------------------------------------
+   Same mark as the patient app, drawn in Dalīl's ink rather than the app's
+   plum, with the relationship said out loud. Someone arriving here from
+   Tawaazun should recognise where they are before reading a word. */
+function Lockup({ size = 34, compact = false }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <BrandMark size={size} ring={T.accent} fill="#fff" />
+      <div style={{ lineHeight: 1.15 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
+          <span dir="rtl" style={{ fontFamily: head, fontWeight: 700,
+            fontSize: size * 0.62, color: T.ink }}>دليل</span>
+          <span style={{ fontFamily: serif, fontSize: size * 0.48, color: T.inkMid }}>Dalīl</span>
+        </div>
+        {!compact && (
+          <div style={{ fontFamily: sans, fontSize: size * 0.3, color: T.inkSoft, marginTop: 3 }}>
+            by Tawaazun
+          </div>)}
+      </div>
+    </div>
+  );
+}
+
 /* ---- signing in ----------------------------------------------------------- */
 function SignIn({ onSignedIn }) {
   const [email, setEmail] = useState("");
@@ -58,13 +82,9 @@ function SignIn({ onSignedIn }) {
     <div style={{ minHeight: "100vh", background: T.bg, display: "grid", placeItems: "center", padding: 24 }}>
       <form onSubmit={submit} style={{ width: "100%", maxWidth: 380, background: T.surface,
         border: `1px solid ${T.line}`, borderRadius: 10, padding: 28 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 4 }}>
-          <BookOpen size={19} color={T.accent} />
-          <span dir="rtl" style={{ fontFamily: serif, fontSize: 25, color: T.ink }}>دليل</span>
-          <span style={{ fontFamily: serif, fontSize: 21, color: T.ink }}>Dalīl</span>
-        </div>
-        <p style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.5, color: T.inkMid, margin: "0 0 22px" }}>
-          The evidence behind Tawaazun. Reviews are signed, so this needs your own account.
+        <Lockup size={38} />
+        <p style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.5, color: T.inkMid, margin: "16px 0 22px" }}>
+          Reviews are signed, so this needs your own account.
         </p>
 
         <Field label="Email">
@@ -217,10 +237,7 @@ export default function Portal() {
       <header style={{ background: T.surface, borderBottom: `1px solid ${T.line}`,
         padding: "0 24px", position: "sticky", top: 0, zIndex: 5 }}>
         <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", alignItems: "center", gap: 22, height: 58 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <BookOpen size={17} color={T.accent} />
-            <span dir="rtl" style={{ fontFamily: serif, fontSize: 20, color: T.ink }}>دليل</span>
-          </span>
+          <Lockup size={28} compact />
           <nav style={{ display: "flex", gap: 2 }}>
             {VIEWS.map(([id, label, Icon]) => {
               const on = view === id;

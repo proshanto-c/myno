@@ -4,10 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>Dalīl — the evidence behind Tawaazun</title>
+    <title>Dalīl by Tawaazun</title>
+    <!-- The same faces the patient app uses: Manrope carries both wordmarks,
+         and without Noto Kufi Arabic the دليل renders in a fallback that does
+         not match توازن. Loaded here rather than from JS so the lockup is not
+         drawn twice. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=Noto+Kufi+Arabic:wght@400;700&display=swap" />
     <style>
       html, body, #root { height: 100%; }
-      body { margin: 0; background: #faf9f6; -webkit-font-smoothing: antialiased; }
+      body { margin: 0; background: #f6f4f8; -webkit-font-smoothing: antialiased; }
     </style>
   </head>
   <body>
