@@ -25,6 +25,13 @@ const C = {
   plum: "#5c4b7d", plumC: "#74619a", plumDark: "#3e3159",
   lilac: "#c5b3d3", lilacDim: "#b3a0c4", onLilac: "#2b2140",
   rose: "#ffe2e2", roseOn: "#9e4f5e", roseFixed: "#ffe9e9", roseDeep: "#dfa3a8",
+  // Bleeding is drawn on four different phase backgrounds now, so it is a
+  // deeper rose than the text token: white on it is 7.1:1, and it clears 5.2:1
+  // against the palest and the strongest of those backgrounds alike.
+  bleed: "#8c3f50",
+  // The unlogged days read by their outline, which all but vanished on a
+  // washed background at the old lilac.
+  dayRing: "#c0aac9",
   error: "#b3261e",
 };
 const GRAD = "radial-gradient(circle at top right, #f3e8f6 0%, #fbefef 45%, #ffe2e2 100%)";
@@ -976,7 +983,7 @@ function arcPath(cx, cy, rO, rI, a0, a1) {
 // while the others sit back, and the marker carries a slow halo. All of it
 // stops under prefers-reduced-motion.
 const PHASES = [
-  { key: "menstrual",  name: "Menstrual",  from: C.roseDeep, to: C.roseOn,  note: "bleeding" },
+  { key: "menstrual",  name: "Menstrual",  from: C.roseDeep, to: C.bleed,  note: "bleeding" },
   { key: "follicular", name: "Follicular", from: C.lilac,    to: C.lilacDim, note: "building up" },
   { key: "ovulatory",  name: "Ovulatory",  from: "#f2d7ab",  to: "#e0b077",  note: "mid-cycle" },
   { key: "luteal",     name: "Luteal",     from: C.lilacDim, to: C.plumC,   note: "winding down" },
@@ -1171,8 +1178,8 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
         background: PHASE_TINT[phaseKey] || C.low, transition: "background-color 1.6s ease" }}>
         {phaseKey && (() => { const ph = PHASES.find((x) => x.key === phaseKey); return ph ? (
           <div key={phaseKey} className="phase-wash" style={{ background:
-            `radial-gradient(120% 90% at 15% 0%, ${ph.from}66, transparent 62%),
-             radial-gradient(120% 90% at 85% 100%, ${ph.to}4d, transparent 62%)` }} />) : null; })()}
+            `radial-gradient(120% 90% at 15% 0%, ${ph.from}33, transparent 62%),
+             radial-gradient(120% 90% at 85% 100%, ${ph.to}26, transparent 62%)` }} />) : null; })()}
         <div style={{ position: "relative" }}><CycleCalendar logs={logs} onSet={setPeriodDays} /></div></Card>
     </div>);
   const drugCard = <DrugTherapy profile={profile} setProfile={setProfile} />;
@@ -1197,13 +1204,17 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
   // second was plain wrong — those are cycle lengths, not days of a cycle.
   const nextUp = (() => {
     if (!current) return { big: "Nothing logged yet", sub: "Tap a day on the calendar to mark your period." };
-    if (current.days <= current.bleed) return { big: `Day ${current.days} of your period`, sub: "" };
-    if (!avg) return { big: "Still learning your rhythm", sub: "Log one more period and this can tell you when to expect the next." };
+    // A card called "next period" has to answer that even mid-period, so the
+    // day you are on is context underneath, never the whole answer.
+    const bleeding = current.days <= current.bleed ? `You're on day ${current.days} of this one.` : "";
+    if (!avg) return { big: "Still learning your rhythm", now: bleeding,
+                       sub: "Log one more period and this can tell you when to expect the next." };
     const when = dayOf(addDays(current.start, avg)).toLocaleDateString(undefined, { day: "numeric", month: "long" });
     const left = avg - current.days;
-    if (left > 0) return { big: `Around ${when}`, sub: left === 1 ? "Tomorrow." : `In ${left} days.` };
-    if (left === 0) return { big: "Expected today", sub: "" };
-    return { big: `${-left} day${left === -1 ? "" : "s"} late`, sub: `Expected around ${when}.`, late: true };
+    if (left > 0) return { big: `Around ${when}`, now: bleeding, sub: left === 1 ? "Tomorrow." : `In ${left} days.` };
+    if (left === 0) return { big: "Expected today", now: bleeding, sub: "" };
+    return { big: `${-left} day${left === -1 ? "" : "s"} late`, now: bleeding,
+             sub: `Expected around ${when}.`, late: true };
   })();
   const late = !!nextUp.late;
 
@@ -1212,6 +1223,7 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
     <div style={{ fontFamily: head, fontWeight: 700, fontSize: 26, lineHeight: 1.2, margin: "6px 0 4px",
       color: late ? C.roseOn : C.ink }}>{nextUp.big}</div>
     {nextUp.sub && <div style={{ fontFamily: bodyf, fontSize: 14, color: C.inkVar }}>{nextUp.sub}</div>}
+    {nextUp.now && <div style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 13.5, color: C.bleed, marginTop: 6 }}>{nextUp.now}</div>}
     {span[0] != null && (<div style={{ marginTop: 14, borderTop: `1px solid ${C.high}`, paddingTop: 10,
       fontFamily: bodyf, fontSize: 12.5, color: C.inkVar, lineHeight: 1.5 }}>
       Your periods have come {span[0]} to {span[1]} days apart, so this is a rough guide.</div>)}
@@ -1383,7 +1395,7 @@ function CycleCalendar({ logs, onSet }) {
           // only the outer ends of a run are rounded; a joined end is square, or
           // the two rounded caps meet in a pinch and the bar looks scalloped
           borderRadius: `${linkPrev ? 0 : 17}px ${linkNext ? 0 : 17}px ${linkNext ? 0 : 17}px ${linkPrev ? 0 : 17}px`,
-          background: isDraft ? C.roseDeep : C.roseOn,
+          background: isDraft ? C.roseDeep : C.bleed,
           left: linkPrev ? -1 : "calc(50% - 17px)", right: linkNext ? -1 : "calc(50% - 17px)" }} />}
         {d && <span onClick={() => tap(d)} className={onSet && !isFuture ? "cal-day" : undefined}
           onPointerDown={startDrag(d)} onPointerEnter={() => !isFuture && setHover(d)}
@@ -1393,7 +1405,7 @@ function CycleCalendar({ logs, onSet }) {
             background: isPeriod ? "transparent" : isFuture ? "transparent" : C.surface,
             border: isToday ? `2px solid ${isPeriod ? "#fff" : C.plum}`
                             : isPeriod ? "2px solid transparent"
-                            : isFuture ? "1px dashed rgba(217,199,220,0.7)" : `1px solid ${C.outlineVar}`,
+                            : isFuture ? `1px dashed ${C.outlineVar}` : `1px solid ${C.dayRing}`,
             color: isPeriod ? "#fff" : isToday ? C.plum : isFuture ? C.outlineVar : C.ink }}>{d}</span>}
         {startsRun && <span title="cycle starts" style={{ position: "absolute", top: "calc(50% + 9px)", left: "50%",
           transform: "translateX(-50%)", width: 5, height: 5, borderRadius: 9999,
@@ -1401,7 +1413,7 @@ function CycleCalendar({ logs, onSet }) {
       </div>); })}</div>
     {runLine && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
       marginTop: 10, fontFamily: bodyf, fontSize: 12.5, color: C.roseOn }}>
-      <span style={{ width: 24, height: 11, borderRadius: 9999, background: C.roseOn, flexShrink: 0 }} />
+      <span style={{ width: 24, height: 11, borderRadius: 9999, background: C.bleed, flexShrink: 0 }} />
       {runLine}</div>}
     {onSet && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 11.5, color: C.outline, marginTop: 6 }}>
       {range ? (anchor ? `Started ${anchor} ${new Date(y, m, 1).toLocaleString(undefined, { month: "short" })} — now tap the last day`
@@ -2153,7 +2165,7 @@ function CycleRibbon({ cycles, lo = 21, hi = 35, show = 7 }) {
           <text x={padL - 6} y={y + rowH - 3} textAnchor="end" style={{ fontSize: 7.5, fill: C.inkVar }}>{label(r.start)}</text>
           <rect x={padL} y={y} width={Math.max(2, x(r.days) - padL)} height={rowH} rx={rowH / 2}
             fill={C.high} fillOpacity={r.open ? 0.5 : 1} />
-          <rect x={padL} y={y} width={Math.max(3, x(r.bleed) - padL)} height={rowH} rx={rowH / 2} fill={C.roseOn} />
+          <rect x={padL} y={y} width={Math.max(3, x(r.bleed) - padL)} height={rowH} rx={rowH / 2} fill={C.bleed} />
           <text x={x(r.days) + 4} y={y + rowH - 3} style={{ fontSize: 7.5, fontWeight: 700, fill: ok ? C.plum : C.roseOn }}>
             {r.days}{r.open ? "+" : ""}</text>
         </g>);
@@ -2164,7 +2176,7 @@ function CycleRibbon({ cycles, lo = 21, hi = 35, show = 7 }) {
     <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 8, flexWrap: "wrap",
       fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-        <span style={{ width: 12, height: 8, borderRadius: 4, background: C.roseOn }} /> bleeding</span>
+        <span style={{ width: 12, height: 8, borderRadius: 4, background: C.bleed }} /> bleeding</span>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
         <span style={{ width: 12, height: 8, borderRadius: 4, background: C.high }} /> rest of the cycle</span>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
@@ -2248,7 +2260,7 @@ function CycleSpiral({ logs, avg, maxTurns = 8 }) {
           textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 7.5, fill: C.outline }}>on time</text>
       </g>)}
       {segs.map((g) => (<line key={g.key} x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} strokeLinecap="round"
-        stroke={g.on ? C.roseOn : C.high} strokeWidth={g.on ? wBleed : wRest} />))}
+        stroke={g.on ? C.bleed : C.high} strokeWidth={g.on ? wBleed : wRest} />))}
       {starts.map((st) => { const [x, y] = at(st.i); return (
         <circle key={st.date} cx={x} cy={y} r={wBleed * 0.34} fill="#fff" fillOpacity={0.9} />); })}
       <circle cx={tx} cy={ty} r={4.5} fill="#fff" stroke={C.plum} strokeWidth={2.5} />
