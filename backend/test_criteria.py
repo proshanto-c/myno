@@ -143,6 +143,28 @@ def test_unknown_override_keys_are_ignored():
     assert "nonsense" not in cr.merge_rules({"nonsense": 1})
 
 
+# ---- contraception: only hormonal methods hide the cycle -------------------
+def _inputs(bc_type=None, bc=None):
+    class P: age = 28; menarche_age = 13; acne = False
+    logs = [{"period": True, "birthControl": bc, "birthControlType": bc_type}]
+    return cr.derive_inputs(P(), logs, {"loggedDays": 200, "cycleCount": 4,
+                                        "cycleMin": 26, "cycleMax": 31, "avgCycleDays": 28})
+
+def test_hormonal_contraception_blocks_the_cycle_criterion():
+    assert _inputs("hormonal")["onContraception"] is True
+    assert cr.assess(_inputs("hormonal"))["cycles"]["state"] == "unknown"
+
+def test_barrier_and_natural_methods_leave_cycles_readable():
+    for method in ("mechanical", "natural"):
+        x = _inputs(method)
+        assert x["onContraception"] is False, method
+        assert cr.assess(x)["cycles"]["state"] == "clear", method
+
+def test_legacy_free_text_methods_are_still_read():
+    assert _inputs(None, "the pill")["onContraception"] is True
+    assert _inputs(None, "condoms")["onContraception"] is False
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

@@ -953,12 +953,7 @@ def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
         f"- NEVER create a category for, ask about, or volunteer anything in this blocked list: {block_line}.\n"
         "- Also fill any standard tracking fields ONLY when clearly implied by what they said; otherwise use null/false. Never force a value.\n"
         "Return ONLY JSON, no prose, no code fences: "
-        '{"period":true|false|null,"flow":"none"|"spotting"|"light"|"medium"|"heavy"|null,"birthControl":str|null,'
-        '"pain":0-10|null,"mood":0-10|null,"energy":0-10|null,"sleep":0-10|null,"brainFog":0-10|null,"sexDrive":0-10|null,'
-        '"sugar":0-10|null,"foodDrive":0-10|null,"dietExercise":str|null,"painMap":str|null,"morningWeight":number|null,'
-        '"hairGrowth":bool,"hairLoss":bool,"acne":bool,"skinPatches":bool,"hyperpigmentation":bool,"bloating":bool,"cravings":bool,'
-        '"diagnoses":str|null,'
-        '"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. '
+        '{"period":true|false|null,"flow":"none|spotting|light|medium|heavy"|null,"birthControl":true|false|null,"birthControlType":"natural|mechanical|hormonal"|null,"pain":0-10|null,"mood":0-10|null,"energy":0-10|null,"sleep":0-10|null,"brainFog":0-10|null,"sexDrive":0-10|null,"sugar":0-10|null,"foodDrive":0-10|null,"cravings":bool,"cravingType":"salty|sugary"|null,"exercise":"inactive|fairly active|active|very active"|null,"diet":"higher carbohydrates|higher fats|higher proteins"|null,"morningWeight":number|null,"hairGrowth":bool,"hairLoss":bool,"acne":bool,"dryPatches":bool,"hyperpigmentation":bool,"bloating":bool,"categories":[{"key":str,"label":str,"value":str,"scale":{"value":int,"max":10}}],"say":str}. '
         "Use null/false for fields not mentioned; omit 'scale' where it doesn't fit."
     )
 

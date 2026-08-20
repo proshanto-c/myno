@@ -191,40 +191,90 @@ const normalizedCategory = (cat) => {
 // The saved daily log is JSON shaped by this schema. Speech fills what it can;
 // the rest is filled in the "End conversation" sheet. Users can also add their
 // own free-form categories on top (entry.categories).
+// Mood reads faster as a face than as a number, but it is still stored on the
+// same 0–10 scale the correlations run on.
+const MOODS = [["😞", 1, "low"], ["🙁", 3, "down"], ["😐", 5, "okay"], ["🙂", 7, "good"], ["😄", 9, "great"]];
+
 const LOG_SCHEMA = [
   { group: "Period tracker", fields: [
     { key: "period", label: "Started your period?", type: "bool" },
     { key: "flow", label: "Flow", type: "select", options: ["none", "spotting", "light", "medium", "heavy"] },
-    { key: "birthControl", label: "Birth control", type: "text", placeholder: "pill, IUD, none…" },
+    { key: "birthControl", label: "On birth control?", type: "bool" },
+    // Only hormonal methods make a bleed a withdrawal bleed, so the type is
+    // what decides whether the cycle criterion can be read at all.
+    { key: "birthControlType", label: "Type", type: "select", options: ["natural", "mechanical", "hormonal"],
+      showIf: (e) => e.birthControl === true },
   ] },
   { group: "Wellbeing", fields: [
-    { key: "mood", label: "Mood", type: "scale", max: SCALE_MAX, words: scaleLabels.mood },
+    { key: "mood", label: "Mood", type: "emoji", options: MOODS },
     { key: "energy", label: "Energy", type: "scale", max: SCALE_MAX, words: scaleLabels.energy },
     { key: "sleep", label: "Sleep", type: "scale", max: SCALE_MAX, words: scaleLabels.sleep },
     { key: "brainFog", label: "Brain fog", type: "scale", max: SCALE_MAX, words: scaleLabels.brainFog },
-    { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive },
   ] },
   { group: "Body", fields: [
     { key: "pain", label: "Pain", type: "scale", max: SCALE_MAX, words: scaleLabels.pain },
-    { key: "painMap", label: "Where it hurts", type: "text", placeholder: "lower back, pelvis…" },
+    { key: "painPoints", label: "Where it hurts", type: "bodymap" },
     { key: "morningWeight", label: "Morning weight (kg)", type: "number", placeholder: "kg" },
-    { key: "cravings", label: "Cravings", type: "bool" },
-    { key: "sugar", label: "Sugar / cravings", type: "scale", max: SCALE_MAX, words: scaleLabels.sugar },
+    { key: "sugar", label: "Sugar", type: "scale", max: SCALE_MAX, words: scaleLabels.sugar },
     { key: "foodDrive", label: "Food drive", type: "scale", max: SCALE_MAX, words: scaleLabels.foodDrive },
-    { key: "dietExercise", label: "Diet & exercise", type: "text", placeholder: "from Health app or notes" },
+  ] },
+  { group: "Lifestyle", fields: [
+    { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive },
+    { key: "cravings", label: "Cravings", type: "bool" },
+    { key: "cravingType", label: "Craving for", type: "select", options: ["salty", "sugary"],
+      showIf: (e) => e.cravings === true },
+    { key: "exercise", label: "Exercise", type: "select", options: ["inactive", "fairly active", "active", "very active"] },
+    { key: "diet", label: "Diet", type: "select", options: ["higher carbohydrates", "higher fats", "higher proteins"] },
   ] },
   { group: "Skin & hair", fields: [
     { key: "acne", label: "Acne (new breakouts)", type: "bool" },
     { key: "hairGrowth", label: "Hair growth", type: "bool" },
     { key: "hairLoss", label: "Hair loss", type: "bool" },
-    { key: "skinPatches", label: "Skin patches", type: "bool" },
+    { key: "dryPatches", label: "Dry patches", type: "bool" },
     { key: "hyperpigmentation", label: "Hyperpigmentation", type: "bool" },
   ] },
-  { group: "About you", fields: [
-    { key: "diagnoses", label: "Existing diagnoses", type: "text", placeholder: "PMOS, thyroid… (optional)" },
-  ] },
 ];
-const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, sugar: 5, flow: null, birthControl: "", sleep: 5, brainFog: 0, sexDrive: 5, painMap: "", morningWeight: null, foodDrive: 5, dietExercise: "", acne: false, skinPatches: false, hyperpigmentation: false, diagnoses: "" };
+const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, sugar: 5, flow: null, birthControl: null, birthControlType: null,
+  sleep: 5, brainFog: 0, sexDrive: 5, painPoints: [], morningWeight: null, foodDrive: 5, cravings: null, cravingType: null,
+  exercise: null, diet: null, acne: false, hairGrowth: false, hairLoss: false, dryPatches: false, hyperpigmentation: false };
+
+// ---- the body map ----------------------------------------------------------
+// Tap the drawing to drop a marker where it hurts; tap a marker to take it off.
+// Points are stored normalised (0–1) with the view they belong to, so they
+// survive any size the drawing is rendered at.
+const BODY_OUTLINE = "M50.0,29.0 C50.8,29.4 55.4,30.9 57.0,32.0 C58.6,33.0 62.5,36.2 64.0,38.0 C65.5,39.8 69.1,44.1 70.0,47.0 C70.9,49.9 71.7,58.6 72.0,63.0 C72.3,67.4 73.0,80.1 73.0,85.0 C73.0,89.9 72.3,101.3 72.0,105.0 C71.7,108.7 70.7,115.5 70.0,117.0 C69.3,118.5 66.7,120.0 66.0,118.0 C65.3,116.0 64.3,104.4 64.0,100.0 C63.6,95.6 63.4,84.7 63.0,80.0 C62.6,75.3 61.7,59.5 61.0,60.0 C60.3,60.5 56.8,78.9 57.0,84.0 C57.2,89.1 62.1,100.0 63.0,104.0 C63.9,108.0 65.1,112.9 65.0,118.0 C64.9,123.1 62.6,141.7 62.0,148.0 C61.4,154.3 60.5,166.8 60.0,172.0 C59.5,177.2 58.9,190.4 58.0,193.0 C57.1,195.6 52.6,199.0 52.0,194.0 C51.4,189.0 53.0,158.2 53.0,150.0 C53.0,141.8 52.4,128.0 52.0,124.0 C51.6,120.0 50.2,116.9 50.0,116.0 C49.8,115.1 50.2,115.1 50.0,116.0 C49.8,116.9 48.4,120.0 48.0,124.0 C47.6,128.0 47.0,141.8 47.0,150.0 C47.0,158.2 48.6,189.0 48.0,194.0 C47.4,199.0 42.9,195.6 42.0,193.0 C41.1,190.4 40.5,177.2 40.0,172.0 C39.5,166.8 38.6,154.3 38.0,148.0 C37.4,141.7 35.1,123.1 35.0,118.0 C34.9,112.9 36.1,108.0 37.0,104.0 C37.9,100.0 42.8,89.1 43.0,84.0 C43.2,78.9 39.7,60.5 39.0,60.0 C38.3,59.5 37.4,75.3 37.0,80.0 C36.6,84.7 36.4,95.6 36.0,100.0 C35.6,104.4 34.7,116.0 34.0,118.0 C33.3,120.0 30.7,118.5 30.0,117.0 C29.3,115.5 28.4,108.7 28.0,105.0 C27.6,101.3 27.0,89.9 27.0,85.0 C27.0,80.1 27.6,67.4 28.0,63.0 C28.4,58.6 29.1,49.9 30.0,47.0 C30.9,44.1 34.5,39.8 36.0,38.0 C37.5,36.2 41.4,33.0 43.0,32.0 C44.6,30.9 49.2,29.4 50.0,29.0 C50.8,28.6 49.2,28.6 50.0,29.0Z";
+function BodyMap({ value, onChange }) {
+  const [view, setView] = useState("front");
+  const points = Array.isArray(value) ? value : [];
+  const add = (ev) => {
+    const box = ev.currentTarget.getBoundingClientRect();
+    const x = (ev.clientX - box.left) / box.width, y = (ev.clientY - box.top) / box.height;
+    onChange([...points, { view, x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 }]);
+  };
+  const drop = (i) => (ev) => { ev.stopPropagation(); onChange(points.filter((_, j) => j !== i)); };
+  const here = points.map((p, i) => ({ ...p, i })).filter((p) => p.view === view);
+  return (<div>
+    <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+      {["front", "back"].map((v) => <Chip key={v} active={view === v} onClick={() => setView(v)}>{v}</Chip>)}
+      {points.length > 0 && <button onClick={() => onChange([])} style={{ marginLeft: "auto", background: "none", border: "none",
+        cursor: "pointer", fontFamily: bodyf, fontSize: 12.5, color: C.outline }}>clear {points.length}</button>}
+    </div>
+    <svg viewBox="0 0 100 205" onClick={add} style={{ width: "100%", maxWidth: 168, display: "block", margin: "0 auto",
+      cursor: "crosshair", touchAction: "manipulation" }}>
+      <g fill={C.rose} stroke={C.lilacDim} strokeWidth={1.3} strokeLinejoin="round">
+        <circle cx="50" cy="15" r="11" /><path d={BODY_OUTLINE} />
+      </g>
+      {view === "back" && <path d="M50 42 v60" fill="none" stroke={C.lilacDim} strokeWidth={1.5} strokeLinecap="round" strokeDasharray="3 4" />}
+      {here.map((p) => (
+        <circle key={p.i} cx={p.x * 100} cy={p.y * 205} r={6} fill={C.roseOn} fillOpacity={0.55}
+          stroke={C.roseOn} strokeWidth={1.5} style={{ cursor: "pointer" }} onClick={drop(p.i)} />
+      ))}
+    </svg>
+    <div style={{ textAlign: "center", fontSize: 11.5, color: C.outline, marginTop: 4 }}>
+      {points.length ? "tap a marker to remove it" : "tap where it hurts"}</div>
+  </div>);
+}
+
 async function extractFields({ settings, text, context = "", blocked = [], categories = [], personality = "direct" }) {
   const base = (settings.backendUrl || "/api").replace(/\/$/, "");
   try {
@@ -488,8 +538,7 @@ function LabToggle({ label, value, onChange, edited }) {
   </button>);
 }
 
-function CriteriaLab({ derived, lab, setLab, rules, labRules, setLabRules }) {
-  const [open, setOpen] = useState(false);
+function CriteriaLab({ derived, lab, setLab, rules, labRules, setLabRules, open, setOpen }) {
   const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", gap: 10, marginTop: 10 };
   const val = (k) => (k in lab ? lab[k] : derived[k]);
   const set = (k) => (v) => setLab({ ...lab, [k]: v });
@@ -502,15 +551,14 @@ function CriteriaLab({ derived, lab, setLab, rules, labRules, setLabRules }) {
   if (!rules) return null;
 
   return (<Card style={{ marginBottom: 14 }}>
-    <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", padding: 0, width: "100%",
-      cursor: "pointer", display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <Microscope size={16} color={C.plum} />
       <span style={{ fontFamily: head, fontWeight: 600, fontSize: 15 }}>Experiment with the factors</span>
       <span style={{ marginLeft: "auto", fontSize: 12, color: C.outline }}>
         {Object.keys(lab).length + Object.keys(labRules).length ? `${Object.keys(lab).length + Object.keys(labRules).length} overridden` : "prototype"}</span>
-      <ChevronRight size={18} color={C.outline} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .2s" }} />
-    </button>
-    {open && (<div style={{ marginTop: 6 }}>
+      <button onClick={() => setOpen(false)} title="Close" style={{ background: "none", border: "none", cursor: "pointer", color: C.outline, display: "grid" }}><X size={16} /></button>
+    </div>
+    {(<div style={{ marginTop: 6 }}>
       <p style={{ fontSize: 12.5, color: C.inkVar, lineHeight: 1.5, margin: "6px 0 0" }}>
         These start from your own tracked data. Change anything and the indicator above recomputes —
         nothing here is saved to your logs.
@@ -564,7 +612,7 @@ const TRIAD = (() => {
   const r = 52, side = 52, cx = 120, cy = 104, R = side / Math.sqrt(3), h = Math.cos(Math.PI / 6);
   const at = [[cx, cy - R], [cx - side / 2, cy + R / 2], [cx + side / 2, cy + R / 2]];
   const out = [[0, -1], [-h, 0.5], [h, 0.5]];
-  return { r, at, label: at.map(([x, y], i) => [x + out[i][0] * r * 0.66, y + out[i][1] * r * 0.66 + 3]) };
+  return { r, at, label: at.map(([x, y], i) => [x + out[i][0] * r * 0.44, y + out[i][1] * r * 0.44 + 3]) };
 })();
 
 function Triad({ axes }) {
@@ -581,7 +629,7 @@ function Triad({ axes }) {
     })}
     {parts.map(({ key, text }, i) => {
       const [x, y] = TRIAD.label[i];
-      return <text key={key} x={x} y={y} textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 9, fontWeight: 700,
+      return <text key={key} x={x} y={y} textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 8.5, fontWeight: 700, letterSpacing: "0.02em",
         fill: axes[key].met === null ? C.outline : C.ink }}>{text}</text>;
     })}
     <text x="120" y="196" textAnchor="middle" style={{ fontFamily: bodyf, fontSize: 8.5, fill: C.outline }}>
@@ -1016,6 +1064,26 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
     const v = e[f.key]; const on = !!spoken[f.key];
     const wrap = { padding: "10px 12px", borderRadius: 12, background: on ? C.lilac : "transparent", transition: "background-color .3s ease" };
     const labelEl = (<span style={{ fontFamily: bodyf, fontSize: 14, color: C.ink, display: "inline-flex", alignItems: "center", gap: 6 }}>{f.label}{on && <span style={{ fontFamily: bodyf, fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", color: C.plum, background: "#fff", borderRadius: 9999, padding: "2px 7px" }}>HEARD</span>}</span>);
+    // a field can depend on another answer (birth-control type, craving type)
+    if (f.showIf && !f.showIf(e)) return null;
+    if (f.type === "emoji") {
+      return (<div key={f.key} style={wrap}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>{labelEl}
+          <span style={{ fontFamily: head, fontWeight: 700, fontSize: 13, color: C.plum }}>
+            {(f.options.find(([, val]) => val === v) || [])[2] || ""}</span></div>
+        <div style={{ display: "flex", gap: 6, justifyContent: "space-between" }}>
+          {f.options.map(([face, val, word]) => (
+            <button key={val} onClick={() => set(f.key, val)} title={word} style={{ flex: 1, cursor: "pointer",
+              fontSize: 24, lineHeight: 1.1, padding: "6px 0", borderRadius: 12, background: v === val ? C.lilac : C.low,
+              border: `1.5px solid ${v === val ? C.plum : "transparent"}`, filter: v === val ? "none" : "grayscale(0.6)",
+              opacity: v === val ? 1 : 0.75, transition: "all .15s ease" }}>{face}</button>))}
+        </div></div>);
+    }
+    if (f.type === "bodymap") {
+      return (<div key={f.key} style={wrap}>
+        <div style={{ marginBottom: 8 }}>{labelEl}</div>
+        <BodyMap value={v} onChange={(pts) => set(f.key, pts)} /></div>);
+    }
     if (f.type === "scale") {
       const max = f.max || SCALE_MAX; const disp = scaleDisplay(v ?? 0, max, f.words);
       return (<div key={f.key} style={wrap}>
@@ -1051,12 +1119,15 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins 
         pain: scaleValue("pain"), mood: scaleValue("mood"), energy: scaleValue("energy"),
         sleep: scaleValue("sleep"), brainFog: scaleValue("brainFog"), sexDrive: scaleValue("sexDrive"),
         sugar: scaleValue("sugar"), foodDrive: scaleValue("foodDrive"),
-        dietExercise: f.dietExercise || base.dietExercise, painMap: f.painMap || base.painMap, morningWeight: f.morningWeight ?? base.morningWeight,
+        birthControlType: f.birthControlType || base.birthControlType, morningWeight: f.morningWeight ?? base.morningWeight,
         hairGrowth: f.hairGrowth || base.hairGrowth, hairLoss: f.hairLoss || base.hairLoss, acne: f.acne || base.acne,
-        skinPatches: f.skinPatches || base.skinPatches, hyperpigmentation: f.hyperpigmentation || base.hyperpigmentation,
-        bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings, diagnoses: f.diagnoses || base.diagnoses };
+        dryPatches: f.dryPatches || base.dryPatches, hyperpigmentation: f.hyperpigmentation || base.hyperpigmentation,
+        bloating: f.bloating || base.bloating, cravings: f.cravings || base.cravings,
+        cravingType: f.cravingType || base.cravingType, exercise: f.exercise || base.exercise, diet: f.diet || base.diet };
       // remember which schema fields actually came from speech (to highlight them)
-      const heard = ["period", "flow", "birthControl", "pain", "mood", "energy", "sleep", "brainFog", "sexDrive", "sugar", "foodDrive", "dietExercise", "painMap", "morningWeight", "hairGrowth", "hairLoss", "acne", "skinPatches", "hyperpigmentation", "bloating", "cravings", "diagnoses"].filter((k) => { const x = f[k]; return x !== null && x !== undefined && x !== false && x !== ""; });
+      const heard = ["period", "flow", "birthControl", "birthControlType", "pain", "mood", "energy", "sleep", "brainFog",
+        "sexDrive", "sugar", "foodDrive", "morningWeight", "hairGrowth", "hairLoss", "acne", "dryPatches",
+        "hyperpigmentation", "bloating", "cravings", "cravingType", "exercise", "diet"].filter((k) => f[k] != null && f[k] !== false);
       if (heard.length) setSpoken((p) => { const n = { ...p }; heard.forEach((k) => (n[k] = true)); return n; });
       if (Array.isArray(f.categories)) {
         const prevMap = Object.fromEntries((base.categories || []).map((c) => [c.key, JSON.stringify([c.value, c.scale?.value])]));
@@ -1633,24 +1704,36 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
     setLoadingR(false);
   })(); }, [settings.patientId]);
 
+  const [labOpen, setLabOpen] = useState(false);
   const standCard = (<>
     <Card style={{ marginBottom: 14 }}>
-      <Label>The three criteria</Label>
-      <div style={{ display: "flex", justifyContent: "center", margin: "8px 0 0" }}><Triad axes={axes} /></div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Label>The three criteria</Label>
+        <button onClick={() => setLabOpen((o) => !o)} title="Experiment with the factors"
+          style={{ marginLeft: "auto", background: labOpen ? C.lilac : "none", border: "none", borderRadius: 9,
+            width: 30, height: 30, display: "grid", placeItems: "center", cursor: "pointer", color: C.plum }}>
+          <Cog size={17} /></button>
+      </div>
+      <div style={{ display: "flex", justifyContent: "center", margin: "4px 0 0" }}><Triad axes={axes} /></div>
     </Card>
     {assessment
       ? <DoctorIndicator assessment={assessment} />
       : <Card style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center", color: C.inkVar, fontSize: 14 }}>
           <Loader2 size={15} className="spin" color={C.outline} /> Checking your tracked data against the criteria…</Card>}
-    {rules && <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules} labRules={labRules} setLabRules={setLabRules} />}
+    {labOpen && rules && <CriteriaLab derived={derived} lab={lab} setLab={setLab} rules={rules}
+      labRules={labRules} setLabRules={setLabRules} open={labOpen} setOpen={setLabOpen} />}
   </>);
 
   // FOR ME — the advocacy report (data-driven talking points)
   const meView = (<>
     {standCard}
     {(loadingR && !rep) && <Card style={{ display: "flex", alignItems: "center", gap: 10, color: C.inkVar, fontSize: 14, marginBottom: 14 }}><Loader2 size={16} className="spin" color={C.plum} /> Preparing your talking points from your data…</Card>}
+    {(rep?.trends_summary || rep?.flagged_patterns?.length > 0) && (<div style={{ marginBottom: 18 }}>
+      <H size={19} style={{ margin: "18px 0 10px" }}>What your tracking shows</H>
     {rep?.trends_summary && <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Your trends</Label><p style={{ fontSize: 14.5, lineHeight: 1.55, margin: "8px 0 0" }}>{rep.trends_summary}</p></Card>}
     {rep?.flagged_patterns?.length > 0 && <Card style={{ marginBottom: 14 }}><Label color={C.inkVar}>Patterns worth flagging</Label><ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "grid", gap: 7 }}>{rep.flagged_patterns.map((f, i) => <li key={i} style={{ fontSize: 14.5 }}>{f}</li>)}</ul></Card>}
+    </div>)}
+    {(rep?.talking_points || []).length > 0 && <H size={19} style={{ margin: "18px 0 10px" }}>To raise with the doctor</H>}
     {(rep?.talking_points || []).map((t, i) => (<Card key={i} style={{ marginBottom: 14 }}>
       <div style={{ fontFamily: head, fontWeight: 600, fontSize: 15.5, lineHeight: 1.45 }}>{t.clinical_framing}</div>
       {t.keywords_phrases?.length > 0 && (<div style={{ marginTop: 12 }}><Label color={C.plum}>Say it like this</Label><ul style={{ margin: "8px 0 0", paddingLeft: 18, display: "grid", gap: 6 }}>{t.keywords_phrases.map((k, j) => <li key={j} style={{ fontSize: 14, lineHeight: 1.45 }}>{k}</li>)}</ul></div>)}

@@ -193,7 +193,14 @@ def derive_inputs(patient, logs, summary):
     flat input set the rules read."""
     age = getattr(patient, "age", None)
     menarche = getattr(patient, "menarche_age", None)
-    bc = str((logs[-1].get("birthControl") or "") if logs else "").strip().lower()
+    # Only hormonal methods turn a period into a withdrawal bleed. Condoms and
+    # cycle tracking leave ovulation — and so the criterion — perfectly readable.
+    last = logs[-1] if logs else {}
+    method = str(last.get("birthControlType") or "").strip().lower()
+    if not method and last.get("birthControl"):
+        # older logs stored a free-text method; read it the same way
+        method = "hormonal" if any(w in str(last["birthControl"]).lower()
+                                   for w in ("pill", "hormon", "implant", "injection", "patch", "ring", "mirena", "iud")) else "other"
     days = summary.get("loggedDays") or 0
     observed = summary.get("cycleCount") or 0
 
@@ -208,7 +215,7 @@ def derive_inputs(patient, logs, summary):
         # happened at is a profile field people often leave blank.
         "hasMenarche": bool(menarche) or any(l.get("period") for l in logs),
         "yearsPostMenarche": (age - menarche) if (age and menarche) else None,
-        "onContraception": bool(bc) and bc not in ("none", "no", "n/a", "-"),
+        "onContraception": method == "hormonal",
         "cyclesObserved": observed,
         "minCycle": summary.get("cycleMin"),
         "maxCycle": summary.get("cycleMax"),
