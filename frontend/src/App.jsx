@@ -1199,6 +1199,12 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
       <Label>This cycle</Label>
       <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
         <CycleRing day={current?.days} bleed={usualBleed} avg={avg} /></div>
+      {/* Where day 1 was. Without it, marking a period that started weeks ago
+          shows a number with nothing to anchor it: you tap 1 August and the
+          ring says day 20, because today is the 20th. */}
+      {current && <div style={{ textAlign: "center", fontFamily: bodyf, fontSize: 12.5, color: C.inkVar, marginTop: 8 }}>
+        Day 1 was <b style={{ color: C.bleed }}>{dayOf(current.start).toLocaleDateString(undefined, { day: "numeric", month: "long" })}</b>
+        {current.days > 1 ? `, ${current.days - 1} day${current.days === 2 ? "" : "s"} ago` : ", today"}</div>}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", marginTop: 12 }}>
         {PHASES.map((p) => (<span key={p.key} style={{ display: "inline-flex", alignItems: "center", gap: 5,
           fontFamily: bodyf, fontSize: 11.5, color: C.inkVar }}>
