@@ -170,13 +170,7 @@ const STALE_HOURS = 24 * 7;
 
 function ago(when) {
   if (!when) return { text: "never", hours: Infinity };
-  // A bare "YYYY/MM/DD" is a date this browser should read as local midnight;
-  // Date.parse treats a bare ISO date as UTC, which puts it in the future for
-  // anyone west of Greenwich and prints "in 5 hours".
-  const iso = /^\d{4}[/-]\d{2}[/-]\d{2}$/.test(when)
-    ? `${when.replace(/\//g, "-")}T00:00:00`
-    : when;
-  const then = new Date(iso).getTime();
+  const then = instant(when);
   if (!Number.isFinite(then)) return { text: when, hours: Infinity };
   const hours = Math.max(0, (Date.now() - then) / 3600000);
   if (hours < 1) return { text: "just now", hours };
@@ -189,6 +183,32 @@ const freshTone = (hours) =>
   hours < FRESH_HOURS ? { fg: T.good, bg: T.goodSoft }
     : hours < STALE_HOURS ? { fg: T.warn, bg: T.warnSoft }
       : { fg: T.bad, bg: T.badSoft };
+
+/**
+ * A server timestamp, read as the UTC it actually is.
+ *
+ * `datetime.utcnow().isoformat()` carries no zone, and JavaScript reads a
+ * zoneless date-time as *local*. On a browser an hour east of UTC that makes a
+ * job which started ten seconds ago look like one starting in an hour, and a
+ * corpus synced this morning look like it was synced tonight. A bare date is
+ * the opposite case — `Date.parse` treats "2026/08/21" as UTC midnight — so it
+ * is spelled out as local instead.
+ */
+function instant(t) {
+  if (!t) return NaN;
+  if (/^\d{4}[/-]\d{2}[/-]\d{2}$/.test(t)) return Date.parse(`${t.replace(/\//g, "-")}T00:00:00`);
+  return Date.parse(/[Zz]|[+-]\d{2}:\d{2}$/.test(t) ? t : `${t}Z`);
+}
+
+/** How long a job has been going, or how long it took. */
+function elapsed(from, to) {
+  const utc = instant;
+  const start = utc(from);
+  if (!Number.isFinite(start)) return "";
+  const end = to ? Date.parse(utc(to)) : Date.now();
+  const s = Math.max(0, Math.round((end - start) / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
 
 /** "3h ago", coloured by how long ago that was. */
 function Ago({ when, prefix = "" }) {
@@ -855,6 +875,12 @@ function Harvest({ queries, runs, job, onRun, busy, onRefresh }) {
           borderLeft: `3px solid ${job.state === "failed" ? T.bad : job.state === "running" ? T.warn : T.good}` }}>
           <div style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 700, color: T.ink }}>
             {job.name}{job.detail ? ` · ${job.detail}` : ""} — {job.state}
+            {/* How long it has been going. Appraising twenty papers is minutes
+                of work, and a panel that says only "running" cannot be told
+                apart from one that has hung. */}
+            <span style={{ fontWeight: 500, color: T.inkSoft, ...figures }}>
+              {" · "}{elapsed(job.started_at, job.finished_at)}
+            </span>
           </div>
           {job.error && <div style={{ fontFamily: mono, fontSize: 12, color: T.bad, marginTop: 6 }}>{job.error}</div>}
           {job.result && (
@@ -1000,10 +1026,15 @@ export default function Portal() {
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [corpus, seeds, ran, made, waiting, loops] = await Promise.all([
+      const [corpus, seeds, ran, made, waiting, loops, running] = await Promise.all([
         api.corpus(filter), api.queries(), api.runs(), api.reports(),
-        api.queue({ limit: 200 }), api.candidates(),
+        api.queue({ limit: 200 }), api.candidates(), api.jobs(),
       ]);
+      // Ask who is working on every load, not only after starting something.
+      // Polling used to begin when this tab started a job, so a reload — or a
+      // job started from another tab — left the panel blank while the work
+      // carried on, which reads as "it never finished".
+      setJob(running.current || running.past?.[0] || null);
       setData({ sources: corpus.sources || [], summary: corpus.summary || null });
       setQueries(seeds.queries || []);
       setRuns(ran.runs || []);

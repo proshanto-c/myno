@@ -3,7 +3,7 @@ import {
   Home, SquarePen, BarChart3, Settings as Cog, Plus,
   ChevronRight, Mic, MicOff, Volume2, VolumeX, Sparkles, Check, Lock, ArrowLeft, ArrowRight,
   Printer, Stethoscope, AlertTriangle, Info, Heart, Moon, Loader2, X, Target,
-  Brain, HeartPulse, Microscope, Droplet, Activity, ChevronLeft, Pill as Pill2
+  Brain, HeartPulse, Microscope, Droplet, Activity, ChevronLeft, Pill as Pill2, Star
 } from "lucide-react";
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
@@ -2600,11 +2600,27 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   // research-backed "what else to track" suggestions
   const EV = { Strong: [C.lilac, C.onLilac], Emerging: [C.rose, C.roseOn], Early: [C.container, C.inkVar] };
   const badge = (txt, bg, fg) => <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 10, letterSpacing: "0.03em", padding: "3px 8px", borderRadius: 9999, background: bg, color: fg, whiteSpace: "nowrap" }}>{txt}</span>;
-  const suggestionsCard = (<Card>
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-      <Microscope size={18} color={C.plum} /><span style={{ fontFamily: head, fontWeight: 600, fontSize: 17 }}>What else to track</span>
-      {sugg === null && <Loader2 size={14} className="spin" color={C.outline} style={{ marginLeft: "auto" }} />}
+  // Dalīl's own voice, inside the patient app. Everything else on this screen is
+  // about this person's own days; this card is the only thing that is not, so it
+  // is dressed as what it is — the research side's deep ink, the shared mark,
+  // and the wordmark in Arabic. A reader should be able to tell at a glance that
+  // nothing here is the app's opinion.
+  const suggestionsCard = (<Card style={{ padding: 0, overflow: "hidden" }}>
+    <div style={{ background: C.plumDark, padding: "13px 18px", display: "flex", alignItems: "center", gap: 10 }}>
+      <Star size={15} color="#fff" fill="#fff" style={{ flexShrink: 0 }} />
+      <Mark size={26} ring="#ffffff" fill={C.plumDark} />
+      {/* inline-block keeps the RTL word out of the bidi reordering that would
+          otherwise drag the rule and the label around it. */}
+      <span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 21, color: "#fff", display: "inline-block", lineHeight: 1 }}>دليل</span>
+      <span style={{ width: 1, height: 17, background: "#ffffff40", flexShrink: 0 }} />
+      <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 11.5, letterSpacing: "0.15em", textTransform: "uppercase", color: "#ded5ee" }}>Literature</span>
+      <span style={{ fontFamily: bodyf, fontSize: 12.5, color: "#bdb0d6" }}>· worth tracking</span>
+      {sugg === null && <Loader2 size={14} className="spin" color="#ded5ee" style={{ marginLeft: "auto" }} />}
     </div>
+    <div style={{ padding: 20 }}>
+    {/* No second heading. The band above is the heading — "What else to track"
+        described the list but said nothing about where it came from, and where
+        it came from is the only reason to believe any of it. */}
     <p style={{ fontSize: 13, color: C.inkVar, lineHeight: 1.5, margin: "0 0 12px" }}>From PMOS papers a researcher has read and signed off — never anything you already record here.</p>
     {sugg === null ? (
       <p style={{ fontSize: 13, color: C.outline }}>Looking…</p>
@@ -2631,6 +2647,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
           </a>}
         </div>); })}</div>
     )}
+    </div>
   </Card>);
 
   const chipsRow = (<div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6, marginBottom: 14 }}>{METRICS.map(([k, lbl]) => (

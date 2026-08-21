@@ -91,7 +91,9 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
                                  reviewer: "admin@tawaazun.io" }
       : u.includes("/candidates") ? { correlations: [{ exposure: "dietFibre", outcome: "acne", claims: 3 }],
                                       fields: [{ key: "hotFlushes", claims: 2, labels: ["Hot flushes"] }] }
-      : u.includes("/jobs") ? { current: null, past: [] }
+      : u.includes("/jobs") ? { current: null, past: [{ name: "appraise", detail: "20 source(s)",
+          state: "done", started_at: "2026-08-20T23:58:00", finished_at: "2026-08-21T00:03:20",
+          result: { appraised: 20 }, error: "" }] }
       : {};
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
   };
