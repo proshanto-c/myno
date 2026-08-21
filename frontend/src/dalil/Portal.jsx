@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { LogOut, RefreshCw, AlertTriangle, Library, ListChecks, FlaskConical, Download } from "lucide-react";
+import { LogOut, RefreshCw, AlertTriangle, Library, ListChecks, FlaskConical, Download, Info } from "lucide-react";
 import { BrandMark, Brand } from "../brand.jsx";
 import { T, serif, sans, head, mono, figures, verdictTone } from "./theme";
 import { api, SignedOut } from "./api";
@@ -574,7 +574,8 @@ function Queue({ data, onAct, onSkip, index, busy, problems, candidates }) {
                   ))}
               <p style={{ fontFamily: sans, fontSize: 12, color: T.inkSoft, lineHeight: 1.5,
                 margin: "10px 0 0" }}>
-                Adopting one is a commit to record.py, never something this module does on its own.
+                Adopting one means adding it to the app's daily record, which is a decision a
+                person makes — never something this module does on its own.
               </p>
             </Section>
           </div>
@@ -794,11 +795,65 @@ function ReportView({ data, onBack, onAppraise, busy }) {
   );
 }
 
-function ReportList({ rows, onOpen }) {
+const VERDICTS = ["", "meets", "considerations", "does_not_meet"];
+const SORTS = [["recent", "Newest"], ["score", "Highest score"], ["weakest", "Weakest first"]];
+
+function ReportList({ rows, total, verdicts, onOpen, filter, setFilter, loading }) {
+  const set = (patch) => setFilter({ ...filter, ...patch });
   return (
     <section>
-      <H2 count={`${rows.length}`}>Reports</H2>
-      {rows.length === 0 ? (
+      <H2 count={total > rows.length ? `${rows.length} of ${total}` : `${total ?? rows.length}`}>
+        Reports
+      </H2>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}>
+        {VERDICTS.map((v) => {
+          const on = filter.verdict === v;
+          const tone = v ? verdictTone(v) : { label: "All" };
+          const count = v ? (verdicts || {})[v] : undefined;
+          return (
+            <button key={v || "all"} onClick={() => set({ verdict: v })}
+              style={{ fontFamily: sans, fontSize: 12.5, fontWeight: on ? 700 : 500, cursor: "pointer",
+                padding: "6px 11px", borderRadius: 6, background: on ? T.accentSoft : T.surface,
+                color: on ? T.accent : T.inkMid, border: `1px solid ${on ? T.accent : T.line}` }}>
+              {tone.label}{count !== undefined ? ` ${count}` : ""}
+            </button>
+          );
+        })}
+        <button onClick={() => set({ flagged: !filter.flagged })}
+          style={{ fontFamily: sans, fontSize: 12.5, fontWeight: filter.flagged ? 700 : 500,
+            cursor: "pointer", padding: "6px 11px", borderRadius: 6,
+            background: filter.flagged ? T.badSoft : T.surface,
+            color: filter.flagged ? T.bad : T.inkMid,
+            border: `1px solid ${filter.flagged ? T.bad : T.line}` }}>
+          Flagged only
+        </button>
+
+        {/* Title, journal, PMID or a half-remembered phrase from the narrative —
+            all four are what a researcher actually types. */}
+        <input value={filter.q} placeholder="Search title, journal, PMID…"
+          onChange={(e) => set({ q: e.target.value })}
+          style={{ ...input, width: 250, padding: "7px 11px", fontSize: 13 }} />
+
+        <select value={filter.sort} onChange={(e) => set({ sort: e.target.value })}
+          style={{ ...input, width: "auto", padding: "7px 11px", fontSize: 13, cursor: "pointer" }}>
+          {SORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
+
+        {(filter.q || filter.verdict || filter.flagged) && (
+          <button onClick={() => set({ q: "", verdict: "", flagged: false })}
+            style={{ background: "none", border: "none", cursor: "pointer", color: T.accent,
+              fontFamily: sans, fontSize: 13 }}>Clear</button>
+        )}
+      </div>
+
+      {rows.length === 0 && (filter.q || filter.verdict || filter.flagged) ? (
+        <div style={{ ...card, border: `1px dashed ${T.lineStrong}`, padding: 26, textAlign: "center" }}>
+          <p style={{ fontFamily: sans, fontSize: 14, color: T.inkMid, margin: 0 }}>
+            No report matches that. {total === 0 ? "" : `${total} in total.`}
+          </p>
+        </div>
+      ) : rows.length === 0 ? (
         <div style={{ ...card, border: `1px dashed ${T.lineStrong}`, padding: 26, textAlign: "center" }}>
           <FlaskConical size={20} color={T.inkSoft} />
           <p style={{ fontFamily: sans, fontSize: 14, color: T.inkMid, lineHeight: 1.55,
@@ -814,6 +869,7 @@ function ReportList({ rows, onOpen }) {
               <th style={{ ...th, paddingTop: 10 }}>Paper</th>
               <th style={{ ...th, paddingTop: 10, textAlign: "right" }}>Score</th>
               <th style={{ ...th, paddingTop: 10 }}>Verdict</th>
+              <th style={{ ...th, paddingTop: 10, textAlign: "right" }}>Claims</th>
               <th style={{ ...th, paddingTop: 10 }}>Flags</th>
             </tr></thead>
             <tbody>
@@ -829,6 +885,10 @@ function ReportList({ rows, onOpen }) {
                     </td>
                     <td style={{ ...td, textAlign: "right", ...figures, fontWeight: 700 }}>{r.score}</td>
                     <td style={td}><Tag fg={tone.fg} bg={tone.bg}>{tone.label}</Tag></td>
+                    {/* A report that produced nothing is not a failure, but it
+                        is the difference between work done and work to review. */}
+                    <td style={{ ...td, textAlign: "right", ...figures,
+                      color: r.claims ? T.ink : T.inkSoft }}>{r.claims ?? 0}</td>
                     <td style={td}>
                       {(r.flags || []).slice(0, 3).map((f) => (
                         <Tag key={f} fg={T.bad} bg={T.badSoft}>{f.split(":")[0].replace(/_/g, " ")}</Tag>
@@ -841,6 +901,98 @@ function ReportList({ rows, onOpen }) {
           </table>
         </div>
       )}
+    </section>
+  );
+}
+
+/* ---- what this is ----------------------------------------------------------
+   A page for the person who has just been handed the portal. The pipeline is
+   drawn with the live numbers in it rather than as a picture of an idea: a
+   diagram that says "Sources" teaches the shape once, and one that says "1,189
+   sources" is worth opening again. */
+const STAGES = [
+  { key: "ncbi", label: "PubMed & PMC", what: "NCBI's own APIs — E-utilities, the OA service, BioC." },
+  { key: "sources", label: "Sources", what: "A paper, chapter or guideline, deduped across every seed that found it." },
+  { key: "reports", label: "Reports", what: "One appraisal under one rubric version, across ten modules." },
+  { key: "claims", label: "Claims", what: "One finding, bound to a field the app records, carrying the sentence it came from." },
+  { key: "published", label: "Published", what: "The only table the patient app reads. A row is here only after a reviewer has accepted it." },
+];
+
+const ENTITIES = [
+  ["Seed", "A search strategy, stored as an object so a corpus is reproducible. Each one names the parts of the daily record it exists to inform, and carries the year floor the whole library is held to."],
+  ["Run", "One execution of a seed. The cursor is committed after every batch, so a restart resumes where it stopped rather than starting again."],
+  ["Source", "A paper, chapter or guideline. Identifiers are read only from the record's own list, never from the works it cites."],
+  ["Citation", "A work a source cites. A reference work's bibliography has already been screened by a domain expert, which makes it a better seed than any keyword search."],
+  ["Report", "The appraisal. Unique on (source, prompt version, rubric version), so changing the rubric adds a report rather than overwriting one a human has read."],
+  ["Claim", "A relationship between two things a person could log. Its quote is searched for in the stored text; one that cannot be found is never stored at all."],
+  ["Review", "Append-only. The current state lives on the row; who changed what, when, and what it said before lives here."],
+  ["Published", "The trust boundary, as a table rather than a promise — which is why it can be tested: a claim carrying a nonce is created, not published, and the nonce is looked for in everything the app serves."],
+];
+
+const RULES = [
+  ["Nothing is published by a machine", "Screening may be model-assisted. There is no path from extracted to published that does not pass through a person, and the state machine refuses it."],
+  ["Every quote is verified in code", "Not asked for in a prompt. A module whose sentence cannot be found in the stored text scores zero; a claim whose sentence cannot be found is discarded before a reviewer sees it."],
+  ["A grade is earned, not asserted", "Strong means a meta-analysis or two randomised trials, and it belongs to the pair rather than to one study — publishing a second trial moves the badge for everything under it."],
+  ["Full text only where the licence allows", "Stored for the PMC Open Access subset alone. Patients are shown the reviewer's own words and a link, never the source's text."],
+  ["A retraction un-publishes itself", "Every sync re-reads retraction status, and a withdrawal revokes the claims from that paper without waiting to be asked."],
+];
+
+function About({ summary, reports, claims, published }) {
+  const counts = { ncbi: null, sources: summary?.total, reports, claims, published };
+  return (
+    <section>
+      <H2>How Dalīl works</H2>
+      {/* The pipeline. Arrows between stages rather than boxes in an SVG, so it
+          reflows on a narrow screen instead of scrolling sideways. */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "stretch", gap: 8, marginBottom: 24 }}>
+        {STAGES.map((stage, i) => (
+          <React.Fragment key={stage.key}>
+            {i > 0 && (
+              <div style={{ display: "grid", placeItems: "center", color: T.lineStrong,
+                fontSize: 22, minWidth: 18 }}>→</div>
+            )}
+            <div style={{ ...card, padding: "13px 15px", flex: "1 1 170px", minWidth: 170,
+              borderTop: `3px solid ${i === STAGES.length - 1 ? T.good : T.accent}` }}>
+              <div style={{ fontFamily: sans, fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
+                textTransform: "uppercase", color: T.inkSoft }}>{stage.label}</div>
+              <div style={{ fontFamily: sans, fontSize: 24, fontWeight: 700, color: T.ink,
+                lineHeight: 1.25, ...figures }}>
+                {counts[stage.key] === null || counts[stage.key] === undefined
+                  ? <span style={{ fontSize: 15, color: T.inkSoft }}>upstream</span>
+                  : counts[stage.key].toLocaleString()}
+              </div>
+              <p style={{ fontFamily: sans, fontSize: 12, lineHeight: 1.5, color: T.inkMid,
+                margin: "6px 0 0" }}>{stage.what}</p>
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+
+      <H2>What each thing is</H2>
+      <div style={{ ...card, padding: "4px 18px", marginBottom: 24 }}>
+        {ENTITIES.map(([name, what], i) => (
+          <div key={name} style={{ display: "flex", gap: 18, padding: "13px 0", flexWrap: "wrap",
+            borderTop: i ? `1px solid ${T.line}` : "none" }}>
+            <div style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 700, color: T.accent,
+              width: 96, flexShrink: 0 }}>{name}</div>
+            <p style={{ fontFamily: sans, fontSize: 13.5, lineHeight: 1.55, color: T.ink,
+              margin: 0, flex: "1 1 320px" }}>{what}</p>
+          </div>
+        ))}
+      </div>
+
+      <H2>Rules that are code, not convention</H2>
+      <div style={{ display: "grid", gap: 10,
+        gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
+        {RULES.map(([name, what]) => (
+          <div key={name} style={{ ...card, padding: 15, borderLeft: `3px solid ${T.good}` }}>
+            <div style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 700, color: T.ink,
+              marginBottom: 5 }}>{name}</div>
+            <p style={{ fontFamily: sans, fontSize: 12.5, lineHeight: 1.55, color: T.inkMid,
+              margin: 0 }}>{what}</p>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -990,6 +1142,7 @@ const VIEWS = [
   ["harvest", "Harvest", Download],
   ["reports", "Reports", FlaskConical],
   ["queue", "Queue", ListChecks],
+  ["about", "How it works", Info],
 ];
 
 export default function Portal() {
@@ -1000,6 +1153,8 @@ export default function Portal() {
   const [runs, setRuns] = useState([]);
   const [job, setJob] = useState(null);
   const [reportRows, setReportRows] = useState([]);
+  const [reportMeta, setReportMeta] = useState({ total: 0, verdicts: {} });
+  const [reportFilter, setReportFilter] = useState({ q: "", verdict: "", flagged: false, sort: "recent" });
   const [report, setReport] = useState(null);       // one source's full report
   const [queue, setQueue] = useState({ claims: [] });
   const [candidates, setCandidates] = useState(null);
@@ -1027,7 +1182,7 @@ export default function Portal() {
     setLoading(true); setError("");
     try {
       const [corpus, seeds, ran, made, waiting, loops, running] = await Promise.all([
-        api.corpus(filter), api.queries(), api.runs(), api.reports(),
+        api.corpus(filter), api.queries(), api.runs(), api.reports(reportFilter),
         api.queue({ limit: 200 }), api.candidates(), api.jobs(),
       ]);
       // Ask who is working on every load, not only after starting something.
@@ -1039,6 +1194,7 @@ export default function Portal() {
       setQueries(seeds.queries || []);
       setRuns(ran.runs || []);
       setReportRows(made.reports || []);
+      setReportMeta({ total: made.total ?? (made.reports || []).length, verdicts: made.verdicts || {} });
       setQueue({ claims: waiting.claims || [], open: waiting.open,
                  published: waiting.published, signedIn: waiting.signedIn,
                  reviewer: waiting.reviewer });
@@ -1048,7 +1204,7 @@ export default function Portal() {
     } finally {
       setLoading(false);
     }
-  }, [filter, mishap]);
+  }, [filter, reportFilter, mishap]);
   useEffect(() => { if (me) load(); }, [me, load]);
 
   // While a job runs, poll it — and reload once it stops, because what it did
@@ -1174,6 +1330,10 @@ export default function Portal() {
           <Harvest queries={queries} runs={runs} job={job} onRun={run}
             busy={job?.state === "running"} onRefresh={load} />
         )}
+        {view === "about" && (
+          <About summary={data.summary} reports={reportMeta.total}
+            claims={queue.open} published={queue.published} />
+        )}
         {view === "queue" && (
           <Queue data={queue} candidates={candidates} index={Math.min(at, Math.max(0, (queue.claims || []).length - 1))}
             problems={problems} busy={loading} onAct={decide}
@@ -1183,7 +1343,9 @@ export default function Portal() {
         {view === "reports" && (report
           ? <ReportView data={report} onBack={() => setReport(null)}
               onAppraise={(id) => run("appraise", id)} busy={job?.state === "running"} />
-          : <ReportList rows={reportRows} onOpen={openReport} />
+          : <ReportList rows={reportRows} total={reportMeta.total} verdicts={reportMeta.verdicts}
+              onOpen={openReport} filter={reportFilter} setFilter={setReportFilter}
+              loading={loading} />
         )}
       </main>
       <SourcePanel source={open} onClose={() => setOpen(null)} onReport={openReport} />

@@ -46,7 +46,7 @@ export const api = {
   runs: () => request("/runs"),
   vocabulary: () => request("/vocabulary"),
 
-  reports: () => request("/reports"),
+  reports: (params) => request(`/reports${query(params)}`),
   report: (sourceId) => request(`/report/${sourceId}`),
 
   queue: (params) => request(`/queue${query(params)}`),

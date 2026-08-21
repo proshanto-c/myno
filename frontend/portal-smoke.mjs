@@ -85,7 +85,8 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
       : u.includes("/corpus") ? { sources: SOURCES, summary: SUMMARY }
       : u.includes("/queries") ? { queries: QUERIES, seeded: 12 }
       : u.includes("/runs") ? { runs: RUNS }
-      : u.includes("/reports") ? { reports: REPORTS }
+      : u.includes("/reports") ? { reports: REPORTS, total: 1,
+                                    verdicts: { meets: 6, considerations: 32, does_not_meet: 8 } }
       : u.includes("/report/") ? { source: SOURCES[1], report: REPORTS[0], claims: CLAIMS, citedBy: 4 }
       : u.includes("/queue") ? { claims: QUEUE, open: 1, published: 0, signedIn: false,
                                  reviewer: "admin@tawaazun.io" }
@@ -137,6 +138,18 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
                         "p publish", "dietFibre", "Hot flushes"]) {
       if (!html.includes(want)) { console.log(`[${name}] the queue omits ${JSON.stringify(want)}`); return 3; }
     }
+  } else if (name === "about") {
+    // the page that explains the module to somebody who has just been handed it
+    for (const want of ["How Dalīl works", "Sources", "Published", "What each thing is",
+                        "Rules that are code", "trust boundary", "E-utilities"]) {
+      if (!html.includes(want)) { console.log(`[${name}] the info page omits ${JSON.stringify(want)}`); return 3; }
+    }
+  } else if (name === "filters") {
+    // the list, before anything is opened
+    for (const want of ["Search title, journal, PMID", "Flagged only", "Highest score",
+                        "Considerations 32", "Claims"]) {
+      if (!html.includes(want)) { console.log(`[${name}] the filter row omits ${JSON.stringify(want)}`); return 3; }
+    }
   } else if (hash === "#reports") {
     for (const want of ["Verdict", "Considerations", "Study design", "prevalence was 11.9%",
                         "not found in the text", "Shorter sleep goes with more brain fog",
@@ -180,5 +193,7 @@ if (code === 0) code = await pass("signed-in", { authRequired: true, signedIn: t
 if (code === 0) code = await pass("report", { authRequired: false, signedIn: true,
                                               hash: "#reports", check: openFirstReport });
 if (code === 0) code = await pass("queue", { authRequired: false, signedIn: true, hash: "#queue" });
+if (code === 0) code = await pass("about", { authRequired: false, signedIn: true, hash: "#about" });
+if (code === 0) code = await pass("filters", { authRequired: false, signedIn: true, hash: "#reports" });
 console.log(code === 0 ? "OK" : `FAILED (${code})`);
 process.exit(code);

@@ -15,7 +15,7 @@ import os
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import String, cast, func, or_
 
 import httpx
 
@@ -453,19 +453,45 @@ def _claim_row(s, c: Claim) -> dict:
             "fields": [{"key": f.field_key, "role": f.role, "proposed": f.proposed} for f in bound]}
 
 
+SORTS = {"recent": Report.created_at.desc(),
+         "score": Report.score.desc(),
+         "weakest": Report.score.asc()}
+
+
 @research.get("/reports")
-def report_list(limit: int = 50):
+def report_list(limit: int = 50, q: str = "", verdict: str = "", flagged: bool = False,
+                sort: str = "recent"):
+    """Filtered on the server, because the list is capped: filtering the page
+    after it arrives would search fifty of four hundred reports and call the
+    answer none."""
     s = Session()
     try:
-        rows = s.query(Report).order_by(Report.created_at.desc()).limit(min(limit, 200)).all()
-        by_id = {r.id: r for r in s.query(Source).filter(
-            Source.id.in_([r.source_id for r in rows] or [0])).all()}
-        return {"reports": [{**_report_row(r),
-                             "title": getattr(by_id.get(r.source_id), "title", ""),
-                             "pmid": getattr(by_id.get(r.source_id), "pmid", ""),
-                             "journal": getattr(by_id.get(r.source_id), "journal", ""),
-                             "year": getattr(by_id.get(r.source_id), "year", None)}
-                            for r in rows]}
+        rows = s.query(Report, Source).join(Source, Source.id == Report.source_id)
+        if verdict:
+            rows = rows.filter(Report.verdict == verdict)
+        if flagged:
+            # `flags` is a JSON column; comparing its text is exact and does not
+            # care which JSON functions this Postgres has.
+            rows = rows.filter(cast(Report.flags, String).notin_(("[]", "null")))
+        if q.strip():
+            like = f"%{q.strip()}%"
+            # Title, journal and PMID are the three a researcher types; the
+            # narrative is there so a half-remembered finding is findable.
+            rows = rows.filter(or_(Source.title.ilike(like), Source.journal.ilike(like),
+                                   Source.pmid.ilike(like), Report.narrative.ilike(like)))
+
+        total = rows.count()
+        found = rows.order_by(SORTS.get(sort, SORTS["recent"])).limit(min(limit, 200)).all()
+        counted = dict(s.query(Claim.report_id, func.count(Claim.id))
+                       .filter(Claim.report_id.in_([r.id for r, _ in found] or [0]))
+                       .group_by(Claim.report_id).all())
+        return {"reports": [{**_report_row(r), "title": src.title, "pmid": src.pmid,
+                             "journal": src.journal or src.book_title, "year": src.year,
+                             "claims": counted.get(r.id, 0)}
+                            for r, src in found],
+                "total": total,
+                "verdicts": dict(s.query(Report.verdict, func.count(Report.id))
+                                 .group_by(Report.verdict).all())}
     finally:
         s.close()
 
