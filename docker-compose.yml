@@ -87,11 +87,26 @@ services:
       db:
         condition: service_healthy
 
-  # The voice the app speaks in: VoiceStudio, cloning one reference recording
+  # The voice the guide speaks in: VoiceStudio, cloning one reference recording
   # and serving it on an OpenAI-compatible /v1/audio/speech. Loopback only —
   # it ships no authentication of its own, and the browser never talks to it
   # directly: every line goes through the backend's /api/tts.
+  #
+  # OFF BY DEFAULT, because the guide says the same twenty-seven sentences
+  # every run and they are rendered to frontend/public/voice/ as ordinary
+  # files. Holding a model in 4GB of VRAM to replay a fixed script is a GPU
+  # doing a web server's job — and it made a GPU a requirement for running the
+  # app at all.
+  #
+  #   docker compose --profile voice up -d voice     # to change the narration
+  #   ./scripts/render-voice.sh                      # ... and record it
+  #   docker compose stop voice                      # done with it
+  #
+  # It is still what answers /api/tts for anything not in the manifest: a
+  # spoken reply to something a person actually said. With it down, those fall
+  # back to the browser's own voice.
   voice:
+    profiles: ["voice"]
     image: ghcr.io/debpalash/omnivoice-studio:latest
     container_name: voicestudio
     ports:

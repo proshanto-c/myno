@@ -7,6 +7,16 @@ import {
 } from "lucide-react";
 // One definition of what a cycle is, tested in cycles.test.mjs.
 import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
+// EVERY LINE THE GUIDE SAYS, ALREADY SAID. She is one recording of one person,
+// cloned, and the demo says the same twenty-seven sentences every run — so
+// they were rendered once (scripts/render-voice.sh) and are served as ordinary
+// files. Synthesising them on demand cost a GPU, a 15GB image and a model
+// resident in VRAM, to replay a fixed script. Anything not in here is still
+// synthesised: the manifest is an optimisation, never a limit on what can be
+// said.
+import CLIPS from "./clips.json";
+
+const recorded = (who, text) => CLIPS[`${who}|${(text || "").trim()}`] || null;
 // The sign-up signs itself up for a demo — beats, timings and the rule that a
 // person's form is left alone, all tested in demoreel.test.mjs.
 import { WANIYAH, signUp, showcase, runReel, isEmpty, firstPhase, afterPhase,
@@ -297,12 +307,17 @@ function useSpeaker(settings) {
     if (base) { try {
       // "app": this is Tawaazun answering, not the guide narrating. Her voice
       // replying to her own question turned the conversation into a monologue.
-      const res = await fetch(`${base.replace(/\/$/, "")}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice: "app" }) });
-      const blob = await res.blob();
+      //
+      // The lines it says during the demo are known in advance and already
+      // recorded; a reply to something a person actually said is not, and is
+      // synthesised as it always was.
+      const done = recorded("app", text);
+      const src = done ? `/voice/${done.file}` : null;
+      const blob = src ? null : await (await fetch(`${base.replace(/\/$/, "")}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice: "app" }) })).blob();
       const a = audioRef.current || new Audio();
       audioRef.current = a; unlockAudio(a);
       a.onended = () => playNext(); a.onerror = () => playNext();
-      a.src = URL.createObjectURL(blob);
+      a.src = src || URL.createObjectURL(blob);
       try {
         await a.play();
         setMuted(""); pending.current = null;
@@ -1291,6 +1306,14 @@ function useNarrator(settings) {
   const fetchClip = useCallback(async (text) => {
     const had = clips.current.get(text);
     if (had) return had;
+    // Said before, and kept. No request, no synthesis, no wait — and the
+    // length comes with it rather than being measured off the file.
+    const done = recorded("guide", text);
+    if (done) {
+      const clip = { url: `/voice/${done.file}`, ms: done.ms };
+      clips.current.set(text, clip);
+      return clip;
+    }
     try {
       const base = (settings.backendUrl || "/api").replace(/\/$/, "");
       const r = await fetch(`${base}/tts`, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1325,9 +1348,16 @@ function useNarrator(settings) {
   }
   const play = useCallback((clip) => {
     const start = () => new Promise((done) => {
-      const a = el.current || new Audio();
+      const a = el.current || (typeof Audio === "undefined" ? null : new Audio());
+      // Nowhere to play it — a test, or a renderer with no audio at all. Hold
+      // the beat the clip would have taken so the tour keeps its timing, and
+      // carry on rather than throwing in the middle of the narration.
+      if (!a) { setTimeout(done, clip.ms || 1200); return; }
       playing.current = a;
-      a.onended = done; a.onerror = done;
+      a.onended = done;
+      // A clip that will not load must not race the tour past the thing it was
+      // describing: hold the beat it would have taken, then carry on.
+      a.onerror = () => setTimeout(done, clip.ms || 1200);
       a.src = clip.url;
       // Autoplay is a permission, not a given: a page nobody has touched may be
       // refused. Say so rather than playing a silent tour.

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Say every line of the guided demo once, so the recording never waits for one.
 #
+# SUPERSEDED by render-voice.sh, which keeps the audio instead of warming a
+# cache with it: the lines are static files now and the app plays them without
+# asking anybody to synthesise anything. This is still here for a line that is
+# not in the manifest — a narration change not yet rendered, say.
+#
 #   ./scripts/warm-voice.sh
 #
 # Synthesis costs a couple of seconds a sentence, and the demo says the same
