@@ -47,6 +47,12 @@ VOICE_MODEL = os.environ.get("VOICE_MODEL", "omnivoice")
 # starts to sound hurried rather than lively. A guided demo is 70% narration by
 # the clock, so this is the one dial that shortens it without losing a word.
 VOICE_SPEED = float(os.environ.get("VOICE_SPEED", "1.0"))
+# TWO VOICES, NEVER ONE.
+# The guide is a person showing you round; the app answering you on the Record
+# screen is not her, and hearing her own voice reply to her made the whole
+# conversation read as a monologue. `voice` on the request picks between them.
+VOICE_APP_ID = os.environ.get("VOICE_APP_ID", "")
+VOICE_APP_SPEED = float(os.environ.get("VOICE_APP_SPEED", "1.0"))
 # Synthesis costs seconds a sentence, and the guided demo says the same lines
 # every time it runs, so a line is only ever paid for once. The key is the
 # voice, the engine and the exact text — change any of them and it is a
@@ -929,8 +935,8 @@ def _avg_cycle(s, pid):
     return insights.average_cycle_days(_patient_logs(s, pid))
 
 # ----- TTS proxy (single origin for the browser)
-def _voice_cache_path(text: str) -> pathlib.Path:
-    key = hashlib.sha1(f"{VOICE_URL}|{VOICE_MODEL}|{VOICE_ID}|{VOICE_SPEED}|{text}".encode()).hexdigest()
+def _voice_cache_path(text: str, vid: str, speed: float) -> pathlib.Path:
+    key = hashlib.sha1(f"{VOICE_URL}|{VOICE_MODEL}|{vid}|{speed}|{text}".encode()).hexdigest()
     return VOICE_CACHE / f"{key}.wav"
 
 @app.post("/tts")
@@ -938,9 +944,12 @@ async def tts(body: dict):
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "Nothing to say")
-    # The cloned voice first, when there is one.
-    if VOICE_URL and VOICE_ID:
-        cached = _voice_cache_path(text)
+    # "app" is the app answering; anything else is the guide's own voice.
+    app_voice = str(body.get("voice") or "").lower() == "app"
+    vid = (VOICE_APP_ID if app_voice else VOICE_ID) or VOICE_ID
+    speed = VOICE_APP_SPEED if app_voice else VOICE_SPEED
+    if VOICE_URL and vid:
+        cached = _voice_cache_path(text, vid, speed)
         try:
             if cached.is_file() and cached.stat().st_size:
                 return Response(content=cached.read_bytes(), media_type="audio/wav")
@@ -948,8 +957,8 @@ async def tts(body: dict):
             pass                      # an unreadable cache is not a reason to go quiet
         try:
             r = await http().post(f"{VOICE_URL}/v1/audio/speech",
-                                  json={"model": VOICE_MODEL, "input": text, "voice": VOICE_ID,
-                                        "response_format": "wav", "speed": VOICE_SPEED},
+                                  json={"model": VOICE_MODEL, "input": text, "voice": vid,
+                                        "response_format": "wav", "speed": speed},
                                   timeout=httpx.Timeout(180.0, connect=10.0))
             if r.status_code < 400:
                 try:

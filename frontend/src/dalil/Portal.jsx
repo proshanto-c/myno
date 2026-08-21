@@ -160,11 +160,57 @@ function Summary({ s }) {
 const STATES = ["", "new", "needs_text", "included", "excluded", "appraised"];
 const stateLabel = (s) => (s === "" ? "All" : s.replace("_", " "));
 
+/* ---- how long ago -----------------------------------------------------------
+   A corpus is only as good as the last time PubMed was asked, so the age of
+   that answer belongs on the page rather than in a log. Green inside a day,
+   amber inside a week, red past that or never — the same three bands wherever
+   freshness is shown, so the colour means one thing across the portal. */
+const FRESH_HOURS = 24;
+const STALE_HOURS = 24 * 7;
+
+function ago(when) {
+  if (!when) return { text: "never", hours: Infinity };
+  // A bare "YYYY/MM/DD" is a date this browser should read as local midnight;
+  // Date.parse treats a bare ISO date as UTC, which puts it in the future for
+  // anyone west of Greenwich and prints "in 5 hours".
+  const iso = /^\d{4}[/-]\d{2}[/-]\d{2}$/.test(when)
+    ? `${when.replace(/\//g, "-")}T00:00:00`
+    : when;
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return { text: when, hours: Infinity };
+  const hours = Math.max(0, (Date.now() - then) / 3600000);
+  if (hours < 1) return { text: "just now", hours };
+  if (hours < 24) return { text: `${Math.round(hours)}h ago`, hours };
+  const days = Math.round(hours / 24);
+  return { text: `${days}d ago`, hours };
+}
+
+const freshTone = (hours) =>
+  hours < FRESH_HOURS ? { fg: T.good, bg: T.goodSoft }
+    : hours < STALE_HOURS ? { fg: T.warn, bg: T.warnSoft }
+      : { fg: T.bad, bg: T.badSoft };
+
+/** "3h ago", coloured by how long ago that was. */
+function Ago({ when, prefix = "" }) {
+  const { text, hours } = ago(when);
+  const tone = freshTone(hours);
+  return <Tag fg={tone.fg} bg={tone.bg}>{prefix}{text}</Tag>;
+}
+
 function Corpus({ data, loading, onRefresh, filter, setFilter, onOpen }) {
   const sources = data.sources || [];
   return (
     <section>
-      <H2 count={`${sources.length} shown`}>Corpus</H2>
+      <header style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14 }}>
+        <h2 style={{ fontFamily: serif, fontSize: 24, fontWeight: 400, color: T.ink, margin: 0 }}>Corpus</h2>
+        <span style={{ fontFamily: sans, fontSize: 13, color: T.inkSoft, ...figures }}>
+          {sources.length} shown
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontFamily: sans, fontSize: 12.5, color: T.inkSoft }}>synced</span>
+          <Ago when={data.summary?.lastSync} />
+        </span>
+      </header>
       <Summary s={data.summary} />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}>
@@ -728,16 +774,10 @@ function ReportView({ data, onBack, onAppraise, busy }) {
   );
 }
 
-function ReportList({ rows, onOpen, onAppraise, busy }) {
+function ReportList({ rows, onOpen }) {
   return (
     <section>
       <H2 count={`${rows.length}`}>Reports</H2>
-      <div style={{ marginBottom: 14 }}>
-        <Button busy={busy} onClick={() => onAppraise(null)}>Appraise the next five</Button>
-        <span style={{ fontFamily: sans, fontSize: 12.5, color: T.inkSoft, marginLeft: 10 }}>
-          Harvesting is automatic; appraising costs money, so it is asked for.
-        </span>
-      </div>
       {rows.length === 0 ? (
         <div style={{ ...card, border: `1px dashed ${T.lineStrong}`, padding: 26, textAlign: "center" }}>
           <FlaskConical size={20} color={T.inkSoft} />
@@ -791,6 +831,7 @@ function Harvest({ queries, runs, job, onRun, busy, onRefresh }) {
     ["anchor", "Anchor + references", "NBK459251 and the 55 papers it cites — the highest-yield seed there is."],
     ["seed", "Run a seed", "The next seed due, capped at 200 so a first look is never a bulk job."],
     ["enrich", "Check licences", "Licence and retraction for each source; full text for the open-access subset only."],
+    ["appraise", "Appraise twenty", "The only job here that costs money, which is why it is asked for rather than run on a timer."],
     ["sweep", "Retraction sweep", "Re-read retraction status, and un-publish anything a withdrawal costs."],
   ];
   return (
@@ -842,8 +883,10 @@ function Harvest({ queries, runs, job, onRun, busy, onRefresh }) {
                     {(q.informs || []).map((f) => <Tag key={f}>{f}</Tag>)}
                   </div>
                 </td>
-                <td style={{ ...td, ...figures, color: q.highWater ? T.ink : T.inkSoft }}>
-                  {q.highWater || "never run"}
+                <td style={{ ...td, ...figures, whiteSpace: "nowrap" }}>
+                  {q.highWater
+                    ? <><span style={{ marginRight: 7 }}>{q.highWater}</span><Ago when={q.highWater} /></>
+                    : <Tag fg={T.bad} bg={T.badSoft}>never run</Tag>}
                 </td>
                 <td style={{ ...td, ...figures, color: T.inkMid }}>
                   {q.lastRun ? `${q.lastRun.added} new of ${q.lastRun.fetched}` : "—"}
@@ -913,11 +956,14 @@ const Placeholder = ({ icon: Icon, title, children }) => (
 );
 
 /* ---- the shell ------------------------------------------------------------ */
+// In the order the work happens: gather, look at what came back, appraise it,
+// then decide. Queue sits last because nothing can be queued until a report
+// has produced a claim.
 const VIEWS = [
   ["corpus", "Corpus", Library],
   ["harvest", "Harvest", Download],
-  ["queue", "Queue", ListChecks],
   ["reports", "Reports", FlaskConical],
+  ["queue", "Queue", ListChecks],
 ];
 
 export default function Portal() {
@@ -996,7 +1042,7 @@ export default function Portal() {
                      seed: () => api.seed({ queryId: queryId ?? null, max: 200 }),
                      enrich: () => api.enrich(60),
                      sweep: () => api.sweep(200),
-                     appraise: () => api.appraise({ sourceId: queryId ?? null, limit: 5 }) }[which];
+                     appraise: () => api.appraise({ sourceId: queryId ?? null, limit: 20 }) }[which];
       const out = await call();
       if (out.started === false) setError(`Already running: ${out.busy?.name}. One job at a time.`);
       setJob(out.job || out.busy || null);
@@ -1106,8 +1152,7 @@ export default function Portal() {
         {view === "reports" && (report
           ? <ReportView data={report} onBack={() => setReport(null)}
               onAppraise={(id) => run("appraise", id)} busy={job?.state === "running"} />
-          : <ReportList rows={reportRows} onOpen={openReport}
-              onAppraise={() => run("appraise")} busy={job?.state === "running"} />
+          : <ReportList rows={reportRows} onOpen={openReport} />
         )}
       </main>
       <SourcePanel source={open} onClose={() => setOpen(null)} onReport={openReport} />

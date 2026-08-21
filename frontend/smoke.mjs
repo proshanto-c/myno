@@ -42,6 +42,11 @@
  */
 import { JSDOM } from "jsdom";
 
+// Noise that is not the page's fault: node's own module warning, and jsdom
+// announcing a browser API it has never implemented ("Not implemented:
+// Window's scrollTo()"). Everything else on console.error is a real error.
+const IGNORE = ["[MODULE_TYPELESS_PACKAGE_JSON]", "Not implemented:"];
+
 const bundle = process.argv[2] || "/t/app-bundle.mjs";
 const day = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 
@@ -61,6 +66,10 @@ const ASSESSMENT = {
   recommendation: { key: "book", headline: "Worth booking an appointment", tone: "elevated", why: [], met: 1 },
   axes: { cycles: { met: true }, androgen: { met: false }, morphology: { met: null } }, inputs: {},
 };
+
+// Who the sign-up reel types in, and what it types. The reel is the source of
+// truth (WANIYAH in demoreel.js); this is the copy the assertions read.
+const WHO = { name: "Waniyah", age: "18", menarcheAge: "16", heightCm: "160", weightKg: "60" };
 
 // what the model hears in "Bad cramps today, and I barely slept"
 const EXTRACT = { pain: 7, sleep: 2, mood: null, energy: null, period: null,
@@ -99,7 +108,7 @@ async function pass(name, { stored, fetch: fetchImpl, waitMs = 1500, after }) {
     const line = a.map(String).join(" ");
     // node's own module-resolution warnings arrive on this channel too; only
     // React's belong in the failure list
-    if (!line.includes("[MODULE_TYPELESS_PACKAGE_JSON]")) errs.push(line.slice(0, 400));
+    if (!IGNORE.some((p) => line.includes(p))) errs.push(line.slice(0, 400));
   };
 
   try {
@@ -159,8 +168,9 @@ if (code === 0) {
       if (!raw) return "nothing was saved: the reel never typed a thing";
       const p = JSON.parse(raw).profile || {};
       if (!p.onboarded) return `the reel stalled at: ${JSON.stringify(p)}`;
-      if (p.name !== "Waniyah") return `signed up as ${JSON.stringify(p.name)}, not Waniyah`;
-      for (const [k, want] of [["age", "28"], ["menarcheAge", "13"], ["heightCm", "166"], ["weightKg", "74"]])
+      if (p.name !== WHO.name) return `signed up as ${JSON.stringify(p.name)}, not ${WHO.name}`;
+      // Whoever the reel signs up — keep this in step with WANIYAH in demoreel.js.
+      for (const [k, want] of Object.entries(WHO))
         if (String(p[k]) !== want) return `${k} came out ${JSON.stringify(p[k])}, not ${want}`;
       if (!p.goals?.includes("whatswrong")) return `no goal was picked: ${JSON.stringify(p.goals)}`;
       if (!p.familyHistory || !p.acne) return "the symptom chips were missed";

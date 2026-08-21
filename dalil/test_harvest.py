@@ -516,6 +516,61 @@ def test_the_oa_service_can_be_the_one_that_reports_a_retraction():
 
 
 @test
+def test_a_translated_title_is_not_a_mis_attribution():
+    """Six papers in the live corpus carry an English title in square brackets
+    against Chinese, Spanish or Russian full text. Comparing words rejected all
+    six as mis-attributions, and every one of them was correct."""
+    s = Scoped()
+    row, _ = harvest.upsert(s, ncbi.parse_records(wrap([article(
+        "90009060", pmcid="PMC9009060", year=2025,
+        title="[A Study on the Association Between Insulin Resistance and PCOS]")]))[0])
+    row.journal = "Sichuan Da Xue Xue Bao Yi Xue Ban"
+    s.commit()
+
+    fake = FakeNcbi([])
+    fake.oa_records["PMC9009060"] = {
+        "pmcid": "PMC9009060", "licence": "CC BY", "retracted": False,
+        "citation": "Sichuan Da Xue Xue Bao Yi Xue Ban. 2025 Mar; 56(2):1"}
+    original = "不同胰岛素抵抗评估指标与多囊卵巢综合征患者体外受精结局的相关性研究"
+    fake.fulltext["PMC9009060"] = (original, [{"offset": 0, "len": len(original),
+                                               "section": "TITLE", "type": "front"}])
+
+    assert harvest.enrich(s, fake, row) == "fulltext"
+    assert row.fulltext == original
+    assert "id_mismatch" not in (row.flags or [])
+    s.rollback()
+
+
+@test
+def test_a_citation_line_that_names_another_paper_is_still_a_mismatch():
+    s = Scoped()
+    row, _ = harvest.upsert(s, ncbi.parse_records(wrap([article(
+        "90009070", pmcid="PMC9009070", year=2025,
+        title="[A study of insulin resistance in PCOS]")]))[0])
+    s.commit()
+    fake = FakeNcbi([])
+    fake.oa_records["PMC9009070"] = {"pmcid": "PMC9009070", "licence": "CC BY",
+                                     "retracted": False,
+                                     "citation": "Some Other Journal. 1999; 1:1"}
+    other = "In vitro fertilisation outcomes in a Taiwanese cohort"
+    fake.fulltext["PMC9009070"] = (other, [{"offset": 0, "len": len(other),
+                                            "section": "TITLE", "type": "front"}])
+    assert harvest.enrich(s, fake, row) == "id-mismatch"
+    assert row.fulltext is None
+    s.rollback()
+
+
+@test
+def test_the_citation_line_is_read_for_journal_and_year_together():
+    ok = harvest.citation_matches
+    assert ok("Medicine (Baltimore). 2018 Sep 28; 97(39):e12608", "Medicine (Baltimore)", 2018)
+    assert not ok("Medicine (Baltimore). 2018 Sep 28; 97(39):e12608", "Medicine (Baltimore)", 2024)
+    assert not ok("Nutrients. 2026 Jan; 18(1):1", "Medicine (Baltimore)", 2026)
+    assert not ok("", "Nutrients", 2026)
+    assert ok("Nutrients. 2026 Jan; 18(1):1", "", 2026), "no journal to check is not a failure"
+
+
+@test
 def test_titles_are_compared_loosely_enough_to_survive_punctuation():
     same = harvest.titles_match(
         "Sleep quality in polycystic ovary syndrome: a cohort study",
@@ -543,6 +598,10 @@ def test_a_retraction_excludes_the_source_and_unpublishes_its_claims():
     s.add(Published(claim_id=claim.id, correlation_id="sleep_brainfog",
                     display_text="Shorter sleep tracks with more brain fog",
                     published_by=reviewer.id))
+    # The sweep re-checks the least recently fetched first, and a real corpus has
+    # more rows than one pass covers, so this one has to be at the front of that
+    # queue rather than merely present.
+    row.last_fetched = dt.datetime(2000, 1, 1)
     s.commit()
 
     fake = FakeNcbi([("90010000", article("90010000", retracted=True))])
@@ -637,7 +696,7 @@ def test_a_bibliography_cannot_put_back_what_a_prune_removed():
     fake = FakeNcbi([("90012099", anchor),
                      ("90012100", article("90012100", year=2015)),
                      ("90012101", article("90012101", year=2025)),
-                     ("90012102", article("90012102", year=2013,
+                     ("90012102", article("90012102", year=2023,
                                           pub_types=("Journal Article", "Practice Guideline")))])
     harvest.harvest_ids(s, fake, ["90012099"])
     row = s.query(Source).filter(Source.pmid == "90012099").one()
@@ -647,7 +706,7 @@ def test_a_bibliography_cannot_put_back_what_a_prune_removed():
     assert s.query(Source).filter(Source.pmid == "90012100").count() == 0, "a 2015 study came back"
     assert s.query(Source).filter(Source.pmid == "90012101").count() == 1
     assert s.query(Source).filter(Source.pmid == "90012102").count() == 1, \
-        "an old guideline is a reference document, and the prune keeps those"
+        "the current guideline is a reference document, and the prune keeps those"
     s.rollback()
 
 
@@ -657,7 +716,8 @@ def test_the_window_is_the_same_test_on_the_way_in_as_on_the_way_out():
     assert inside(year=2025) is True
     assert inside(year=harvest.MIN_YEAR) is True
     assert inside(year=harvest.MIN_YEAR - 1) is False
-    assert inside(year=2013, pub_types=("Journal Article", "Practice Guideline")) is True
+    assert inside(year=2023, pub_types=("Journal Article", "Practice Guideline")) is True
+    assert inside(year=2013, pub_types=("Journal Article", "Practice Guideline")) is False
     undated = ncbi.Record(kind="article", year=None)
     assert harvest.in_window(undated) is True, "an absent year is a gap, not an age"
 
@@ -732,13 +792,18 @@ def test_an_old_guideline_survives_a_prune_that_removes_old_studies():
 
 
 @test
-def test_asking_for_no_exceptions_removes_the_guidelines_too():
+def test_a_superseded_guideline_is_not_kept_beside_the_current_one():
+    """The 2009 AE-PCOS criteria and the 2013 Endocrine Society statement are
+    the standards the 2023 guideline replaced. Keeping a superseded standard
+    beside the current one is worse than not having it."""
     s = Scoped()
-    harvest.upsert(s, ncbi.parse_records(wrap([article(
-        "90012040", year=2013, pub_types=("Journal Article", "Practice Guideline"))]))[0])
+    for pmid, year in (("90012040", 2013), ("90012041", 2023)):
+        harvest.upsert(s, ncbi.parse_records(wrap([article(
+            pmid, year=year, pub_types=("Journal Article", "Practice Guideline"))]))[0])
     s.commit()
-    harvest.prune_older_than(s, min_year=2024, confirm=True, keep_kinds=())
+    harvest.prune_older_than(s, confirm=True)
     assert s.query(Source).filter(Source.pmid == "90012040").count() == 0
+    assert s.query(Source).filter(Source.pmid == "90012041").count() == 1
     s.rollback()
 
 

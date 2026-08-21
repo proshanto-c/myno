@@ -43,6 +43,9 @@ services:
       VOICE_ID: ${VOICE_ID:-}
       VOICE_MODEL: ${VOICE_MODEL:-omnivoice}
       VOICE_SPEED: ${VOICE_SPEED:-1.15}
+      # The app's own replies, in a voice that is plainly not hers.
+      VOICE_APP_ID: ${VOICE_APP_ID:-demo0001}
+      VOICE_APP_SPEED: ${VOICE_APP_SPEED:-1.05}
       # Every line the app has said before, kept between restarts: the guided
       # demo repeats itself word for word, and synthesis costs seconds a line.
       VOICE_CACHE_DIR: /var/cache/myno-voice

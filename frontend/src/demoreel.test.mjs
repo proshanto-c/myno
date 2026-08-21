@@ -72,7 +72,11 @@ test("she signs up as herself, and her numbers are ones the criteria can judge",
   eq(WANIYAH.age >= 16 && WANIYAH.age <= 45, true, `age ${WANIYAH.age}: `);
   // menarche has to be before her age, or yearsPostMenarche goes negative
   eq(WANIYAH.menarcheAge < WANIYAH.age, true, "menarche after her age: ");
-  eq(WANIYAH.age - WANIYAH.menarcheAge >= 3, true, "inside the 1-3y band, which is not assessable: ");
+  // Two years past menarche puts her in the guideline's 1–3 year band, where
+  // cycles are judged against 21–45 days rather than 21–35. That is deliberate,
+  // and it is what the app should say about an eighteen-year-old.
+  const years = WANIYAH.age - WANIYAH.menarcheAge;
+  eq(years >= 1 && years <= 12, true, `${years} years post-menarche: `);
   eq(WANIYAH.goals.length > 0, true, "no goal, so the first step cannot advance: ");
 });
 
@@ -162,8 +166,10 @@ test("there is a pause between fields and a quicker beat within one", () => {
   clock.run();
   const withinName = at[1][1] - at[0][1];
   const betweenFields = at[2][1] - at[1][1];
-  eq(withinName, TYPE_MS);
-  eq(betweenFields >= FIELD_GAP_MS + PRESS_MS, true, `moved on too fast (${betweenFields}ms): `);
+  // The sign-up types to its own quicker clock, so this is about the shape
+  // rather than the numbers: characters run together, boxes do not.
+  eq(withinName > 0 && withinName <= TYPE_MS, true, `${withinName}ms between two characters: `);
+  eq(betweenFields >= withinName * 4 + PRESS_MS, true, `moved on too fast (${betweenFields}ms): `);
 });
 
 // ---- the showcase ----------------------------------------------------------
@@ -179,7 +185,7 @@ test("the showcase visits the four screens that make the case", () => {
 test("the showcase drives and explains in the same pass", () => {
   const list = showcase();
   eq(kinds(list, "spot").length >= 5, true, "it never lights anything up: ");
-  eq(kinds(list, "press").length >= 10, true, "it never actually uses the app: ");
+  eq(kinds(list, "press").length + kinds(list, "dictate").length >= 10, true, "it never actually uses the app: ");
   // whatever it lights up it is also hovering — the shared invariant above
   // checks the pointer is on the target of every spot
   const lastSpot = list.map((b) => b.do).lastIndexOf("spot");
@@ -219,10 +225,13 @@ test("the showcase says its line to the microphone, not into the box", () => {
   eq(typed.length > 10, true, "nothing was said to the Record screen: ");
   eq(typed.length < 60, true, "the line is too long to sit through: ");
   eq(typed[typed.length - 1].value.endsWith("slept"), true, `line came out ${typed[typed.length - 1].value}: `);
-  // written to the hidden line, then spoken — never typed into the visible box
-  const clicks = targets(list, "press");
-  eq(clicks.indexOf("rec:dictate") > -1, true, "the line is never spoken: ");
-  eq(clicks.includes("rec:type"), false, "it typed into the box instead of talking: ");
+  // Written to the hidden line, then said out loud into the microphone — the
+  // dictate beat speaks and presses at once, so the words arrive as she says
+  // them. Never typed into the visible box.
+  const spoken = kinds(list, "dictate");
+  eq(spoken.length, 1, "the line is never spoken: ");
+  eq(spoken[0].text, typed[typed.length - 1].value, "she says something other than what is typed: ");
+  eq(targets(list, "press").includes("rec:type"), false, "it typed into the box instead of talking: ");
 });
 
 test("the showcase ends the conversation and shows the form behind it", () => {

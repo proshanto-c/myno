@@ -14,6 +14,11 @@
  */
 import { JSDOM } from "jsdom";
 
+// Noise that is not the page's fault: node's own module warning, and jsdom
+// announcing a browser API it has never implemented ("Not implemented:
+// Window's scrollTo()"). Everything else on console.error is a real error.
+const IGNORE = ["[MODULE_TYPELESS_PACKAGE_JSON]", "Not implemented:"];
+
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',
   { url: "https://localhost/", pretendToBeVisual: true });
 for (const k of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "SVGElement",
@@ -24,7 +29,7 @@ const errs = [];
 const realError = console.error;
 console.error = (...a) => {
   const line = a.map(String).join(" ");
-  if (!line.includes("[MODULE_TYPELESS_PACKAGE_JSON]")) errs.push(line.slice(0, 300));
+  if (!IGNORE.some((p) => line.includes(p))) errs.push(line.slice(0, 300));
 };
 
 try {

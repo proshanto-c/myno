@@ -91,12 +91,21 @@ def by_correlation(engine) -> dict:
     return out
 
 
+# Strongest first, for collapsing duplicates.
+GRADE_ORDER = {"Strong": 3, "Emerging": 2, "Early": 1, "": 0}
+
+
 def trackers(engine) -> list:
     """"What else to track", as published claims rather than as a prompt.
 
     The "not already tracked" rule is computed here instead of being asked of a
     model: anything bound only to fields `record.py` already has is, by
     definition, already tracked.
+
+    One entry per thing to track, not per claim. Two published findings about
+    time-restricted eating are two studies about one tracker, and showing
+    "Eating window" twice tells a reader nothing except that the list is
+    machine-made.
     """
     out = []
     for row in rows(engine):
@@ -124,9 +133,26 @@ def trackers(engine) -> list:
             "pmid": citation.get("pmid"), "title": citation.get("title"),
             "journal": citation.get("journal"), "year": citation.get("year"),
             "signed": row["signed"],
+            "studies": 1,
         })
-    out.sort(key=lambda t: (t["requires_device"], not t["device_owned"]))
-    return out
+
+    collapsed: dict = {}
+    for item in out:
+        key = item["tracker"].strip().lower()
+        seen = collapsed.get(key)
+        if seen is None:
+            collapsed[key] = item
+            continue
+        seen["studies"] += 1
+        # The card carries one citation, so it should be the strongest one.
+        if GRADE_ORDER.get(item["evidence"], 0) > GRADE_ORDER.get(seen["evidence"], 0):
+            keep = seen["studies"]
+            collapsed[key] = {**item, "studies": keep}
+
+    final = list(collapsed.values())
+    final.sort(key=lambda t: (t["requires_device"], not t["device_owned"],
+                              -GRADE_ORDER.get(t["evidence"], 0)))
+    return final
 
 
 def reset() -> None:

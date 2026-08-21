@@ -203,7 +203,9 @@ function useSpeaker(settings) {
     const q = queueRef.current; if (!q.length) { playingRef.current = false; setSpeaking(false); const d = doneRef.current; doneRef.current = null; if (d) d(); return; }
     playingRef.current = true; setSpeaking(true); const text = q.shift(); const base = settings.backendUrl || "/api";
     if (base) { try {
-      const res = await fetch(`${base.replace(/\/$/, "")}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      // "app": this is Tawaazun answering, not the guide narrating. Her voice
+      // replying to her own question turned the conversation into a monologue.
+      const res = await fetch(`${base.replace(/\/$/, "")}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice: "app" }) });
       const blob = await res.blob(); const a = new Audio(URL.createObjectURL(blob)); audioRef.current = a;
       a.onended = () => playNext(); a.onerror = () => playNext(); await a.play(); return;
     } catch (e) {} }
@@ -445,6 +447,43 @@ function remembered(storeKey) {
 }
 const INSIGHTS = remembered("myno:insights:v2");
 const ADVOCACY = remembered("myno:advocacy:v1");
+const TRENDS = remembered("myno:trends:v1");
+
+/**
+ * What the live-trends panel asks about.
+ *
+ * Built in one place so the copy fetched at boot is keyed identically to the
+ * one the Record screen asks for a minute later — the backend caches a model
+ * call by its exact payload, and a field in a different order is a cache miss
+ * and another wait.
+ */
+function trendsAsk({ ins, logs, entry, settings }) {
+  const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
+  const e = entry || {};
+  return {
+    settings,
+    note: e.note || "",
+    categories: e.categories || [],
+    blocked: blockedLabels(settings),
+    personality: settings.personality,
+    summary: {
+      avgPain: r1(ins?.avgPain), avgMood: r1(ins?.avgMood), avgCycleDays: ins?.avgGap,
+      painAfterHighSugar: r1(ins?.painHi), painAfterLowSugar: r1(ins?.painLo),
+      painWithBloating: r1(ins?.bloatPain), painWithoutBloating: r1(ins?.noBloatPain),
+      loggedDays: ins?.loggedDays,
+      recentPain: logs.slice(-14).map((l) => l.pain), recentMood: logs.slice(-14).map((l) => l.mood),
+      recentEnergy: logs.slice(-14).map((l) => l.energy), recentSugar: logs.slice(-14).map((l) => l.sugar),
+      today: { pain: e.pain, mood: e.mood, energy: e.energy, sugar: e.sugar,
+               bloating: e.bloating, categories: e.categories },
+    },
+  };
+}
+
+async function fetchTrends(ask) {
+  const a = await extractAdvise(ask);
+  if (a && (a.say || a.headline)) TRENDS.keep(ask.settings.patientId, a);
+  return a;
+}
 
 async function askFor(path, memo, settings) {
   const pid = settings.patientId;
@@ -457,7 +496,7 @@ async function askFor(path, memo, settings) {
 }
 const fetchInsights = (settings) => askFor("insights", INSIGHTS, settings);
 const fetchAdvocacy = (settings) => askFor("advocacy", ADVOCACY, settings);
-/** Ask for both at boot, so neither tab is caught thinking when it is opened. */
+/** Ask for them at boot, so no tab is caught thinking when it is opened. */
 const prefetchSlowTabs = (settings) => {
   fetchInsights(settings).catch(() => {});
   fetchAdvocacy(settings).catch(() => {});
@@ -899,6 +938,21 @@ export default function App() {
     })();
     return () => { stale = true; };
   }, [settings.patientId, settings.backendUrl, logs, synced]);
+
+  // The Record screen's live trends are a model call too, and it is the panel
+  // somebody watches while they talk. Asked once here, on the day's blank
+  // entry, it is the same ask the screen makes when it opens — so it opens
+  // with something in it. Once, per patient: after that the answer is kept.
+  const warmedTrends = useRef(false);
+  useEffect(() => {
+    const pid = settings.patientId;
+    if (!ready || !pid || warmedTrends.current || !ins.loggedDays || TRENDS.read(pid)) return;
+    warmedTrends.current = true;
+    const today = new Date().toISOString().slice(0, 10);
+    const entry = logs.find((l) => l.date === today) || { ...SCHEMA_DEFAULTS, pain: 0, sugar: 5, mood: 5,
+      energy: 5, bloating: false, note: "", categories: [] };
+    fetchTrends(trendsAsk({ ins, logs, entry, settings })).catch(() => {});
+  }, [ready, settings.patientId, ins.loggedDays, logs.length]);
   // The verdict is the backend's to give. `lab` holds hypothetical inputs and
   // thresholds; when it is non-empty we ask /assess instead of the patient's
   // own assessment, so the panel can bend the rules without touching the logs.
@@ -946,6 +1000,10 @@ export default function App() {
   const axes = assessment?.axes;
   const ctx = { profile, setProfile, logs, setLogs, settings, setSettings, ins, assessment, axes,
     derived, lab, setLab, rules, labRules, setLabRules, setTab, wide, schema };
+
+  // Changing screens starts you at the top of the new one. Without this the
+  // window keeps the scroll it had, and a tab opens halfway down itself.
+  useEffect(() => { window.scrollTo?.({ top: 0, behavior: "auto" }); }, [tab, profile.onboarded]);
 
   const screen = () => (<>
     {tab === "home" && <HomeScreen {...ctx} />}
@@ -1203,6 +1261,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
     if (!phase) return;
     const reduced = typeof window.matchMedia === "function"
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo?.({ top: 0, behavior: "auto" });   // start at the top of whatever is on screen
     // it walks on from below the fold, the way a hand arrives
     let at = { x: window.innerWidth / 2 - 40, y: window.innerHeight + 60 };
     let clicks = 0;
@@ -1279,6 +1338,16 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
         el.click();
       },
       key: (t, value) => { const el = find(t); if (el) typeInto(el, value); },
+      // Said and pressed in the same instant: the words stream into the
+      // transcript while she is heard saying them, which is what talking to a
+      // microphone looks like. Held for the length of the clip.
+      dictate: (t, text) => {
+        setCaption(text);
+        const ms = live.current.speak?.(text) || sayMs(text);
+        const el = find(t);
+        if (el) { setRing({ ...at, n: ++clicks }); track(null); el.click(); }
+        return ms + LINE_GAP_MS;
+      },
       enter: (t) => { const el = find(t); if (el) pressKey(el, "Enter"); },
       // Said out loud, captioned either way, and held for as long as the clip
       // actually runs — plus a breath, so two lines never butt up against each
@@ -1959,7 +2028,10 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const [flash, setFlash] = useState({}); const timers = useRef({});
   const [insOn, setInsOn] = useState(true); const insRef = useRef(insOn);
   useEffect(() => { insRef.current = insOn; }, [insOn]);
-  const [advice, setAdvice] = useState(null); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
+  // Whatever it said last time goes up straight away — the panel spent the
+  // first seconds of every visit saying "keep talking" over an empty box while
+  // the model thought about the same history it thought about yesterday.
+  const [advice, setAdvice] = useState(() => TRENDS.read(settings.patientId)); const [advising, setAdvising] = useState(false); const [metric, setMetric] = useState("pain"); const [metricBlink, setMetricBlink] = useState(false);
   const [ended, setEnded] = useState(false); const [modal, setModal] = useState(false); const [spoken, setSpoken] = useState({});  // schema fields Tawaazun heard from speech
 
   // Live insights run in the BACKGROUND (mic stays enabled) — they can take a
@@ -1967,20 +2039,9 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   const runAdvise = async () => {
     setAdvising(true);
     try {
-      const cur = eRef.current;
-      const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
-      const summary = {
-        avgPain: r1(ins?.avgPain), avgMood: r1(ins?.avgMood), avgCycleDays: ins?.avgGap,
-        painAfterHighSugar: r1(ins?.painHi), painAfterLowSugar: r1(ins?.painLo),
-        painWithBloating: r1(ins?.bloatPain), painWithoutBloating: r1(ins?.noBloatPain),
-        loggedDays: ins?.loggedDays,
-        recentPain: logs.slice(-14).map((l) => l.pain), recentMood: logs.slice(-14).map((l) => l.mood),
-        recentEnergy: logs.slice(-14).map((l) => l.energy), recentSugar: logs.slice(-14).map((l) => l.sugar),
-        today: { pain: cur.pain, mood: cur.mood, energy: cur.energy, sugar: cur.sugar, bloating: cur.bloating, categories: cur.categories },
-      };
-      const a = await extractAdvise({ settings, note: cur.note || "", categories: cur.categories || [], summary, blocked: blockedLabels(settings), personality: settings.personality });
+      const a = await fetchTrends(trendsAsk({ ins, logs, entry: eRef.current, settings }));
       if (a && (a.say || a.headline)) setAdvice(a);
-    } catch (e) { /* insights are best-effort; the panel just stays as-is */ }
+    } catch (e) { /* the trends are best-effort; the panel just stays as it is */ }
     setAdvising(false);
   };
   useEffect(() => { runAdvise(); }, []);  // trends are on by default — populate once on open
@@ -2102,9 +2163,11 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
     const tick = () => {
       i += 1;
       setPartial(words.slice(0, i).join(" "));
+      // Roughly the pace the voice saying it runs at, so the words arrive with
+      // her rather than racing ahead of the clip.
       timers.current._dictate = i < words.length
-        ? setTimeout(tick, 130)
-        : setTimeout(() => { setDictating(false); ingest(line); }, 550);
+        ? setTimeout(tick, 360)
+        : setTimeout(() => { setDictating(false); ingest(line); }, 500);
     };
     timers.current._dictate = setTimeout(tick, 250);
   };
@@ -2554,10 +2617,10 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
         <div key={i} style={{ paddingTop: i ? 14 : 0, borderTop: i ? `1px solid ${C.high}` : "none" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontFamily: head, fontWeight: 700, fontSize: 15 }}>{s.tracker}</span>
-            <span style={{ display: "flex", gap: 6 }}>{badge(s.category, C.low, C.inkVar)}{badge(s.evidence, bg, fg)}</span>
+            <span style={{ display: "flex", gap: 6 }}>{s.category ? badge(s.category, C.low, C.inkVar) : null}{badge(s.evidence, bg, fg)}{s.studies > 1 ? badge(`${s.studies} studies`, C.low, C.inkVar) : null}</span>
           </div>
           <p style={{ fontSize: 13.5, lineHeight: 1.5, color: C.inkVar, margin: "6px 0 6px" }}>{s.explanation}</p>
-          <div style={{ fontSize: 12, color: C.outline, lineHeight: 1.5 }}>How: {s.tracking_method}</div>
+          {s.tracking_method && <div style={{ fontSize: 12, color: C.outline, lineHeight: 1.5 }}>How: {s.tracking_method}</div>}
           {s.requires_device && <div style={{ fontSize: 12, color: s.device_owned ? C.plum : C.outline, marginTop: 2 }}>{s.device_owned ? `✓ works with your ${s.device_needed}` : `needs ${s.device_needed}`}</div>}
           {/* The paper itself, at its own address. This used to be a PubMed
               search built from a query a model invented, which retrieved

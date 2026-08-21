@@ -388,6 +388,33 @@ def test_what_else_to_track_no_longer_asks_a_model_anything():
 
 
 @test
+def test_two_studies_about_one_tracker_are_one_row_on_the_card():
+    """Found live: two published findings from the same meta-analysis both
+    proposed "Eating window", and the card listed it twice."""
+    import evidence
+    same = {"correlationId": None, "fieldKeys": ["eatingWindow", "morningWeight"],
+            "citation": {"pmid": "1", "url": "https://example.invalid/1"}, "signed": True}
+    evidence._cache["rows"] = [
+        {**same, "displayText": "a", "grade": "Early",
+         "tracker": {"label": "Eating window"}},
+        {**same, "displayText": "b", "grade": "Strong",
+         "tracker": {"label": "eating window"}},          # same thing, different case
+        {**same, "displayText": "c", "grade": "Emerging",
+         "tracker": {"label": "Sleep timing"}},
+    ]
+    evidence._cache["at"] = __import__("time").monotonic()
+    try:
+        out = evidence.trackers(main.engine)
+        by_name = {t["tracker"].lower(): t for t in out}
+        assert len(out) == 2, [t["tracker"] for t in out]
+        assert by_name["eating window"]["studies"] == 2
+        assert by_name["eating window"]["evidence"] == "Strong", "kept the weaker grade"
+        assert out[0]["evidence"] == "Strong", "the strongest should lead"
+    finally:
+        evidence.reset()
+
+
+@test
 def test_the_model_written_suggestion_machinery_is_gone():
     source = open(__file__.replace("test_api.py", "main.py")).read()
     for ghost in ("SUGG_SYSTEM", "STANDARD_TRACKERS", "_pubmed_link",

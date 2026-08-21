@@ -17,6 +17,11 @@
  */
 import { JSDOM } from "jsdom";
 
+// Noise that is not the page's fault: node's own module warning, and jsdom
+// announcing a browser API it has never implemented ("Not implemented:
+// Window's scrollTo()"). Everything else on console.error is a real error.
+const IGNORE = ["[MODULE_TYPELESS_PACKAGE_JSON]", "Not implemented:"];
+
 const bundle = process.argv[2];
 const SOURCES = [
   { id: 1, pmid: "29083730", nbk: "NBK459251", kind: "chapter",
@@ -27,7 +32,7 @@ const SOURCES = [
     journal: "Hum Reprod", year: 2016, isOa: true, licence: "CC BY", retracted: false,
     screenState: "new", hasFulltext: true, flags: ["id_mismatch"], pubTypes: [], authors: [] },
 ];
-const SUMMARY = { total: 56, byState: { new: 53, excluded: 2, needs_text: 1 }, openAccess: 20,
+const SUMMARY = { total: 56, lastSync: new Date(Date.now() - 3 * 3600e3).toISOString(), byState: { new: 53, excluded: 2, needs_text: 1 }, openAccess: 20,
   fulltext: 20, retracted: 0, unchecked: 0, citations: 2299, unpromoted: 2135 };
 const QUERIES = [{ id: 3, name: "sleep", term: "…", informs: ["sleep", "brainFog"], enabled: true,
   highWater: "2026/08/20", lastRun: { added: 12, fetched: 40 } }];
@@ -96,7 +101,7 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
   // node's own module warnings arrive on this channel; only React's do here
   console.error = (...a) => {
     const line = a.map(String).join(" ");
-    if (!line.includes("[MODULE_TYPELESS_PACKAGE_JSON]")) errs.push(line.slice(0, 300));
+    if (!IGNORE.some((p) => line.includes(p))) errs.push(line.slice(0, 300));
   };
 
   try {
@@ -146,6 +151,8 @@ async function pass(name, { authRequired, signedIn, hash = "", check }) {
     }
     // a source carrying a flag has to say so in the row, not only in the panel
     if (!html.includes("id mismatch")) { console.log(`[${name}] flags are not shown`); return 3; }
+    // how old the corpus is, in the colour that says whether that is a problem
+    if (!html.includes("3h ago")) { console.log(`[${name}] no last-synced indicator`); return 3; }
   }
   // the lockup has to name both products, in Arabic, with the mark between them
   if (!html.includes("دليل")) { console.log(`[${name}] no دليل wordmark`); return 3; }

@@ -24,7 +24,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 
 import ncbi
 from models import (Citation, Claim, ClaimField, Published, Query, Report,
@@ -47,6 +47,18 @@ NOT_ANIMAL_ONLY = 'NOT (animals[MeSH Terms] NOT humans[MeSH Terms])'
 # read through two revisions of the definition. Moving this moves every seed,
 # and `ensure_seeds` retunes the stored queries to match.
 MIN_YEAR = 2024
+
+# Reference documents get one year of grace, and no more. A guideline is not a
+# study, and `criteria.py` quotes the 2023 international guideline for every
+# threshold the app applies — but the 2009 AE-PCOS criteria and the 2013
+# Endocrine Society statement are the standards that one replaced, and keeping a
+# superseded standard beside the current one is worse than not having it.
+REFERENCE_KINDS = ("guideline", "chapter")
+REFERENCE_MIN_YEAR = 2023
+
+
+def floor_for(kind: str) -> int:
+    return REFERENCE_MIN_YEAR if kind in REFERENCE_KINDS else MIN_YEAR
 
 
 def _seed(name, clause, informs, min_year=None):
@@ -200,18 +212,19 @@ def _store_citations(s, row: Source, rec: ncbi.Record) -> None:
                        cited_doi=ref["doi"] or None, raw=ref["raw"]))
 
 
-def in_window(rec: ncbi.Record, min_year: int = None) -> bool:
+def in_window(rec: ncbi.Record) -> bool:
     """Is this record inside the corpus window?
 
-    Applied on the way in as well as by `prune_older_than`, and with the same
-    two carve-outs, because they have to agree: a search is bounded by its term,
-    but citation chaining is not, and a bibliography full of 2015 papers would
+    Applied on the way in as well as by `prune_older_than`, and reading the same
+    floors, because the two have to agree: a search is bounded by its term, but
+    citation chaining is not, and a bibliography full of 2015 papers would
     otherwise put back everything a prune had just taken out.
+
+    An undated record is in. An absent year is a gap in PubMed's metadata, not
+    evidence of age, and deleting on missing metadata is the mistake that threw
+    out the 2018 guideline once already.
     """
-    min_year = min_year or MIN_YEAR
-    if rec.kind in KEEP_KINDS or rec.year is None:
-        return True
-    return rec.year >= min_year
+    return rec.year is None or rec.year >= floor_for(rec.kind)
 
 
 def auto_screen(rec: ncbi.Record):
@@ -428,17 +441,50 @@ def _words(text: str):
 
 
 def titles_match(a: str, b: str, threshold: float = 0.6) -> bool:
-    """Is the document we just fetched the one we asked for?
-
-    Checked at the moment of use rather than at the moment of storage, because
-    the harm from a wrong cross-reference is attaching one paper's text to
-    another paper's row — and that happens here, not in the id list.
-    """
+    """Do these two titles describe the same paper?"""
     first, second = set(_words(a)), set(_words(b))
     if not first or not second:
         return False
     overlap = len(first & second) / min(len(first), len(second))
     return overlap >= threshold
+
+
+# PubMed's convention for a paper published in another language: the English
+# translation goes in square brackets, and PMC serves the original.
+TRANSLATED_TITLE = re.compile(r"^\s*\[")
+
+
+def citation_matches(citation: str, journal: str, year) -> bool:
+    """Does the OA service's own citation line describe the paper we asked for?
+
+    "Medicine (Baltimore). 2018 Sep 28; 97(39):e12608" — journal and year, in a
+    form that does not care what language the title is in.
+    """
+    if not citation or not year or str(year) not in citation:
+        return False
+    lowered = citation.lower()
+    words = [w for w in _words(journal) if len(w) > 3]
+    return not words or any(w in lowered for w in words)
+
+
+def same_paper(source: Source, oa_record: dict, heading: str) -> bool:
+    """Is the full text we just fetched this paper's?
+
+    Checked at the moment of use rather than at the moment of storage, because
+    the harm from a wrong cross-reference is attaching one paper's text to
+    another paper's row — and that happens here, not in the id list.
+
+    Two ways to confirm it, and either will do. The citation line comes first
+    because the title comparison is meaningless for a translated record: six
+    papers in the live corpus carry an English title in brackets against Chinese,
+    Spanish and Russian full text, and comparing words rejected all six as
+    mis-attributions when every one of them was correct.
+    """
+    if citation_matches((oa_record or {}).get("citation", ""), source.journal, source.year):
+        return True
+    if TRANSLATED_TITLE.match(source.title or ""):
+        return False                # a translation and no citation line: nothing to compare
+    return titles_match(heading, source.title)
 
 
 def _flag(row: Source, name: str) -> None:
@@ -493,7 +539,7 @@ def _enrich(client: ncbi.Client, source: Source, want_fulltext: bool) -> str:
         return "no-fulltext"
     heading = next((text[p["offset"]:p["offset"] + p["len"]]
                     for p in passages if p["section"] == "TITLE"), "")
-    if heading and not titles_match(heading, source.title):
+    if heading and not same_paper(source, record, heading):
         _flag(source, "id_mismatch")
         source.screen_reason = f"PMC text titled {heading[:80]!r}"
         return "id-mismatch"
@@ -534,16 +580,8 @@ def sweep(s, client: ncbi.Client, limit: int = 500, batch: int = ncbi.BATCH) -> 
     return {"checked": len(ids), "retracted": found, "revoked": revoked}
 
 
-# A guideline is not a study, and this product is built on one: `criteria.py`
-# quotes the 2023 international guideline for every threshold it applies. A
-# window that removed it would leave the evidence module unable to show the
-# document the patient app cites. Chapters are kept for the same reason — the
-# corpus is anchored on one.
-KEEP_KINDS = ("guideline", "chapter")
-
-
 def prune_older_than(s, min_year: int = None, confirm: bool = False,
-                     keep_kinds=KEEP_KINDS) -> dict:
+                     reference_min_year: int = None) -> dict:
     """Drop studies published before the corpus window, and everything hanging
     off them.
 
@@ -557,18 +595,22 @@ def prune_older_than(s, min_year: int = None, confirm: bool = False,
     2018 guideline once already.
     """
     min_year = min_year or MIN_YEAR
-    rows = (s.query(Source)
-            .filter(Source.year.isnot(None), Source.year < min_year,
-                    Source.kind.notin_(keep_kinds) if keep_kinds else True).all())
+    reference_min_year = reference_min_year or REFERENCE_MIN_YEAR
+    too_old = or_(
+        and_(Source.kind.in_(REFERENCE_KINDS), Source.year < reference_min_year),
+        and_(Source.kind.notin_(REFERENCE_KINDS), Source.year < min_year))
+
+    rows = s.query(Source).filter(Source.year.isnot(None), too_old).all()
     ids = [r.id for r in rows]
     undated = s.query(Source).filter(Source.year.is_(None)).count()
     claim_ids = [c.id for c in s.query(Claim.id).filter(Claim.source_id.in_(ids or [0])).all()]
 
     spared = (s.query(Source)
               .filter(Source.year.isnot(None), Source.year < min_year,
-                      Source.kind.in_(keep_kinds)).count() if keep_kinds else 0)
+                      Source.kind.in_(REFERENCE_KINDS),
+                      Source.year >= reference_min_year).count())
     plan = {"sources": len(ids), "claims": len(claim_ids), "undatedKept": undated,
-            "keptAsReference": spared, "keepKinds": list(keep_kinds or ()),
+            "keptAsReference": spared, "referenceMinYear": reference_min_year,
             "published": s.query(Published).filter(
                 Published.claim_id.in_(claim_ids or [0])).count(),
             "minYear": min_year, "confirmed": bool(confirm)}

@@ -151,9 +151,15 @@ def corpus(limit: int = 200, state: str = "", q: str = ""):
                       .filter(Source.merged_into.is_(None))
                       .group_by(Source.screen_state).all())
         live = s.query(Source).filter(Source.merged_into.is_(None))
+        # When PubMed was last asked, rather than when a row last changed: a
+        # corpus that has not been synced for a week is stale even if nothing
+        # in it has moved.
+        synced = (s.query(func.max(Run.finished_at))
+                  .filter(Run.state == "done").scalar())
         return {"sources": [_source_row(r) for r in rows],
                 "summary": {
                     "total": live.count(),
+                    "lastSync": synced.isoformat() if synced else None,
                     "byState": counts,
                     "openAccess": live.filter(Source.is_oa.is_(True)).count(),
                     "fulltext": live.filter(Source.fulltext.isnot(None)).count(),

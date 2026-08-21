@@ -32,7 +32,7 @@
  * ends on an app with something to say rather than a shrug.
  */
 export const WANIYAH = {
-  name: "Waniyah", age: 18, menarcheAge: 13, heightCm: 160, weightKg: 60,
+  name: "Waniyah", age: 18, menarcheAge: 16, heightCm: 160, weightKg: 60,
   goals: ["whatswrong"],           // she is here to find out what is wrong
   chips: ["familyHistory", "acne"],
   diagnosis: "unsure",             // ... so "Not sure" is the honest answer
@@ -121,6 +121,7 @@ export function keystrokes(person, fields = FIELDS) {
  *   enter  — the return key, for a box that submits on it
  *   say    — speak a line, and hold until it has been said
  *   spot   — light the target up and explain it, held the same way
+ *   dictate — say a line into a control at the same moment it is pressed
  *   until  — hold until the app itself says it is ready
  *   dim    — put the lights back
  *   wait   — let the screen be read
@@ -128,31 +129,41 @@ export function keystrokes(person, fields = FIELDS) {
  * Targets are `data-demo` names, resolved when the beat plays rather than when
  * it is written: most of them belong to screens that do not exist yet.
  */
-function reel() {
+function reel(pace = {}) {
+  // The tour and the sign-up want different rhythms. A tour is watched; a form
+  // being filled in is glanced at, and every pause in it reads as a stall.
+  const { beat = BEAT_MS, step = STEP_MS, gap = FIELD_GAP_MS, key = null } = pace;
   const beats = [];
   const api = {
     beats,
+    pace,
     wait: (ms) => (beats.push({ do: "wait", ms }), api),
     /** Always held to the end of the line. Narration that ran underneath the
      *  next few beats sounded quicker, and was cut off mid-word every time the
      *  beats ran short — which they mostly did. */
     say: (text) => (beats.push({ do: "say", text }), api),
     to: (target) => (beats.push({ do: "reveal", target }, { do: "move", target }), api),
-    tap: (target) => (api.to(target), beats.push({ do: "press", target }, { do: "wait", ms: BEAT_MS }), api),
+    tap: (target) => (api.to(target), beats.push({ do: "press", target }, { do: "wait", ms: beat }), api),
     /** a whole screen arrives after this one, so give it time to */
     open: (target) => (api.tap(target), beats.push({ do: "wait", ms: SCREEN_MS }), api),
+    /** the beat between two steps of the same form */
+    step: () => (beats.push({ do: "wait", ms: step }), api),
     write: (target, value) => {
       api.to(target);
       beats.push({ do: "press", target });        // a box has to be clicked before it is typed into
       const full = String(value);
-      for (let i = 1; i <= full.length; i++) beats.push({ do: "key", target, value: full.slice(0, i) });
-      beats.push({ do: "wait", ms: FIELD_GAP_MS });
+      for (let i = 1; i <= full.length; i++)
+        beats.push({ do: "key", target, value: full.slice(0, i), ...(key ? { ms: key } : {}) });
+      beats.push({ do: "wait", ms: gap });
       return api;
     },
     /** one value straight in — a slider's position, not a typed word */
     set: (target, value) => (api.to(target), beats.push({ do: "key", target, value: String(value) },
                                                        { do: "wait", ms: BEAT_MS }), api),
-    enter: (target) => (beats.push({ do: "enter", target }, { do: "wait", ms: BEAT_MS }), api),
+    enter: (target) => (beats.push({ do: "enter", target }, { do: "wait", ms: beat }), api),
+    /** Say a line and press in the same instant — for talking to a microphone,
+     *  where the words have to arrive while the voice is saying them. */
+    dictate: (target, text) => (api.to(target), beats.push({ do: "dictate", target, text }), api),
     spot: (target, text) => (api.to(target), beats.push({ do: "spot", target, text }), api),
     /** Wait on the app, not on the clock: `until("talking")` holds until it has
      *  started answering, `until("quiet")` until it has finished. `max` is the
@@ -171,17 +182,19 @@ function reel() {
  * what the pointer is doing while she says it.
  */
 export function signUp(person = WANIYAH) {
-  const s = reel();
-  s.wait(OPEN_MS);
-  s.say("Hi, I'm Waniyah, and welcome to Tawaazun. Let me sign myself up; it takes a minute.");
+  // Brisk: this is a form being filled in, and the hand doing it knows the
+  // answers. Nothing here is waiting to be admired.
+  const s = reel({ beat: 190, step: 300, gap: 90, key: 22 });
+  s.wait(250);
+  s.say("Hi, I'm Waniyah, and welcome to Tawaazun. Let me sign myself up.");
   for (const g of person.goals) s.tap(`goal:${g}`);
   s.say("It asks what brings you here. For me, it's about finally figuring out what's going on with my body.");
-  s.tap("next").wait(STEP_MS);
+  s.tap("next").step();
 
   s.say("Then the basic information.");
   for (const f of FIELDS) s.write(`field:${f}`, person[f]);
   for (const c of person.chips) s.tap(`chip:${c}`);
-  s.tap("next").wait(STEP_MS);
+  s.tap("next").step();
 
   s.tap(`dx:${person.diagnosis}`);
   s.to("cond:hirsutism");
@@ -203,11 +216,13 @@ export function signUp(person = WANIYAH) {
  */
 export function showcase() {
   const s = reel();
-  s.wait(SCREEN_MS);
+  // Straight in. The sign-up has just closed behind her, so the first thing
+  // that happens is the app arriving, not a pause and a sentence about it.
+  s.wait(150);
+  s.open("nav:home");
   s.say("Now, let me show you what Tawaazun actually does when you use it.");
 
   // HOME — the calendar, the ring, and what she is taking
-  s.open("nav:home");
   s.spot("cal:grid", "I just tap the day my cycle started, and that's it. The whole process is incredibly simple.");
   s.tap("cal:today");
   s.spot("home:ring", "It catches up immediately.");
@@ -220,9 +235,10 @@ export function showcase() {
   // RECORD — she talks, it answers, the trends move
   s.open("go:record");
   s.spot("rec:mic", "This next bit is my absolute favorite. You don't have to fill out endless, tedious forms — you just talk to it!");
-  s.write("rec:line", "Bad cramps today, and I barely slept");   // the guide's own microphone
-  s.tap("rec:dictate");
-  s.wait(2000);                                                  // the words arriving in the transcript
+  // Heard, not just typed: the clip plays as the words stream into the
+  // transcript, so she is talking to the microphone rather than miming at it.
+  s.write("rec:line", "Bad cramps today, and I barely slept");
+  s.dictate("rec:dictate", "Bad cramps today, and I barely slept");
   // Then it thinks, and answers in its own voice. She waits for both — talking
   // over the app's reply is the one overlap a demo can't explain away.
   s.until("talking", 12000);
@@ -254,7 +270,7 @@ export function showcase() {
   // Straight there from Insights: on the wide layout Advocacy is a tab of its
   // own, so the detour through Home was a wasted screen.
   s.open("go:advocacy");
-  s.spot("adv:triad", "This is the part that truly advocates for you. There are three criteria used for this diagnosis, and Tawaazun helps me track two of them myself.");
+  s.spot("adv:triad", "This is the part that truly advocates for you. There are three criteria used for PMOS, and Tawaazun helps me track two of them myself.");
   s.spot("adv:indicator", "It shows exactly where my data stands against those clinical benchmarks.");
   s.spot("adv:points", "It tells me what symptoms to raise, how to phrase them, and what tests to ask for.");
   s.spot("adv:print", "I just print the summary out and take it directly to my appointment.");
@@ -317,10 +333,11 @@ export function runReel(list, io, { timer = setTimeout, clear = clearTimeout, ra
     else if (b.do === "reveal") gap = io.reveal?.(b.target) || 0;
     else if (b.do === "move") gap = io.move?.(b.target) || 0;
     else if (b.do === "press") { io.press?.(b.target); gap = PRESS_MS; }
-    else if (b.do === "key") { io.key?.(b.target, b.value); gap = TYPE_MS + rand() * JITTER_MS; }
+    else if (b.do === "key") { io.key?.(b.target, b.value); gap = b.ms ?? (TYPE_MS + rand() * JITTER_MS); }
     else if (b.do === "enter") { io.enter?.(b.target); gap = PRESS_MS; }
     else if (b.do === "say") gap = io.say?.(b.text) ?? sayMs(b.text);
     else if (b.do === "spot") gap = io.spot?.(b.target, b.text) ?? sayMs(b.text);
+    else if (b.do === "dictate") gap = io.dictate?.(b.target, b.text) ?? sayMs(b.text);
     else if (b.do === "until") {
       // io says how long to leave it before asking again, or nothing when the
       // wait is over. Asking again means replaying this same beat.
