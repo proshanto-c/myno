@@ -3,7 +3,8 @@ FROM python:3.11-slim
 WORKDIR /app
 RUN pip install --no-cache-dir \
     fastapi==0.115.* "uvicorn[standard]"==0.32.* \
-    sqlalchemy==2.0.* psycopg2-binary==2.9.* httpx==0.27.* pydantic==2.*
+    sqlalchemy==2.0.* psycopg2-binary==2.9.* pydantic==2.* \
+    "httpx>=0.28,<0.29" "google-genai>=2.19,<3" websockets==13.*
 
 COPY *.py ./
 

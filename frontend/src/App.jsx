@@ -108,6 +108,22 @@ const FONTS = `
   background:rgba(42,35,49,.62); color:#fff; border-radius:9999px; padding:6px 13px;
   font-family:${bodyf}; font-size:12px; font-weight:600; letter-spacing:.02em;
   backdrop-filter:blur(6px); animation:fadeIn .5s ease both; }
+/* PRO. A quiet piece of gold on the things that are paid for — a mark of
+   quality rather than a lock, since nothing here is taken away or greyed out.
+   The shine crosses every few seconds and holds still under reduced motion. */
+.pro-badge{ display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:9999px;
+  font-family:${bodyf}; font-size:9.5px; font-weight:800; letter-spacing:.09em; color:#4a3712;
+  background:linear-gradient(115deg,#f8e7bd,#e6bd77 42%,#fdf3dd 56%,#dfae6f);
+  box-shadow:0 1px 4px rgba(150,110,35,.32); position:relative; overflow:hidden;
+  white-space:nowrap; flex-shrink:0; vertical-align:middle; }
+.pro-badge.mini{ padding:3px; gap:0; }
+.pro-badge::after{ content:""; position:absolute; inset:0; transform:translateX(-130%);
+  background:linear-gradient(105deg,transparent 42%,rgba(255,255,255,.9) 50%,transparent 58%);
+  animation:proShine 4.5s ease-in-out infinite; }
+@keyframes proShine{ 0%,60%{ transform:translateX(-130%) } 85%,100%{ transform:translateX(130%) } }
+/* the card it sits on gets a hairline of the same gold, so the pair reads as
+   one thing rather than a sticker on somebody else's box */
+.pro-edge{ box-shadow:0 0 0 1.5px rgba(224,176,119,.6), 0 4px 16px rgba(92,75,125,0.07) !important; }
 .demo-sound{ position:fixed; z-index:126; top:52px; right:14px; cursor:pointer; border:none;
   background:${C.plum}; color:#fff; border-radius:9999px; padding:8px 14px; display:inline-flex;
   align-items:center; gap:6px; font-family:${bodyf}; font-size:12.5px; font-weight:700;
@@ -122,6 +138,7 @@ const FONTS = `
   .halo,.breathe,.fade-up,.spin,.spark,.bloom,.demo-ring{ animation:none !important; opacity:0 !important }
   .demo-pointer{ transition:opacity .5s ease !important }
   .demo-spot{ transition:none !important }
+  .pro-badge::after{ animation:none !important; opacity:0 !important }
   .demo-caption{ animation:none !important }
   .phase-wash{ animation:fadeIn 1ms both !important }
   .pop-in,.slide-in,.grow,.draw{ animation:none !important }
@@ -172,7 +189,7 @@ function tapSound(kind = "on", enabled = true) {
 // ---- feature blacklist -----------------------------------------------------
 const FEATURES = {
   mood: { label: "Mood & mental health", fields: ["mood"] },
-  diet: { label: "Diet & sugar", fields: ["sugar", "cravings"] },
+  diet: { label: "Diet & cravings", fields: ["cravings", "cravingType"] },
   hair_skin: { label: "Hair & skin", fields: ["hairGrowth", "hairLoss"] },
   weight: { label: "Weight & BMI", fields: [] },
   fertility: { label: "Fertility & conception", fields: [] },
@@ -193,11 +210,86 @@ function pickSoftVoice() {
     || null;
 }
 
+/**
+ * SOUND ON A PHONE HAS TO BE ASKED FOR ONCE.
+ *
+ * A browser will only start audio from an element a gesture has already played.
+ * Every reply used to arrive as a brand new Audio built after the fetch came
+ * back — seconds after the tap that asked for it — so the phone refused it, and
+ * you had to tap again to hear anything.
+ *
+ * So each voice keeps ONE element for its whole life, and the first touch
+ * anywhere on the page plays a moment of silence through every element that
+ * exists. After that the browser considers them spoken for, and a clip that
+ * arrives later plays on its own.
+ */
+// A real fiftieth of a second of silence — 8 kHz, mono, 8-bit. It matters that
+// there are samples in it: a header with an empty data chunk is what I tried
+// first, and a browser that cannot decode it rejects play() and stays locked.
+const SILENT_WAV = "data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA";
+
+// Every element that has asked to be allowed to make a sound, and the ones that
+// have been. A WeakSet, so an element belonging to a screen that has gone does
+// not keep it alive.
+const wantsSound = new Set();
+const allowed = new WeakSet();
+
+/**
+ * Spends a gesture on every element that has not had one yet.
+ *
+ * Not once — every time. An element built after the first tap (the Record
+ * screen's, say, opened from the nav) would otherwise never get its turn, which
+ * is exactly the case that was still asking for a second tap.
+ */
+function bless() {
+  for (const el of wantsSound) {
+    if (allowed.has(el) || !el.paused) continue;    // mid-sentence: leave it be
+    try {
+      el.src = SILENT_WAV;
+      const p = el.play();
+      if (p?.then) p.then(() => allowed.add(el)).catch(() => {});
+      else allowed.add(el);
+    } catch (e) { /* it will get another chance on the next tap */ }
+  }
+}
+
+/** Registers an element to be blessed by the next touch of the page. */
+function unlockAudio(el) {
+  if (!el) return;
+  el.preload = "auto";
+  el.playsInline = true;                            // or a phone plays it fullscreen
+  wantsSound.add(el);
+}
+
+if (typeof window !== "undefined") {
+  for (const ev of ["pointerdown", "touchend", "click", "keydown"])
+    window.addEventListener(ev, bless, true);       // kept for the life of the page
+}
+
 // ---- speaker: NeMo TTS via backend, else browser speechSynthesis -----------
 function useSpeaker(settings) {
   const [speaking, setSpeaking] = useState(false);
-  const queueRef = useRef([]); const audioRef = useRef(null); const doneRef = useRef(null);
+  // Why the sound did not come out, when it does not. A phone refusing to play
+  // is invisible otherwise: the reply appears on screen in silence and the
+  // person is left tapping things to find out what they missed.
+  const [muted, setMuted] = useState("");
+  const pending = useRef(null);          // the clip a tap would let us play
+  const queueRef = useRef([]); const doneRef = useRef(null);
   const playingRef = useRef(false);
+  // One element for the life of the screen, so the first tap on the microphone
+  // is the gesture every later reply plays on.
+  const audioRef = useRef(null);
+  if (audioRef.current === null && typeof Audio !== "undefined") {
+    audioRef.current = new Audio();
+    unlockAudio(audioRef.current);
+  }
+  /** The tap the browser was holding out for. */
+  const allow = useCallback(() => {
+    bless();
+    const a = pending.current;
+    if (!a) { setMuted(""); return; }
+    a.play().then(() => { setMuted(""); pending.current = null; }).catch(() => {});
+  }, []);
   const stop = useCallback(() => { queueRef.current = []; doneRef.current = null; playingRef.current = false; try { audioRef.current?.pause(); } catch (e) {} try { window.speechSynthesis?.cancel(); } catch (e) {} setSpeaking(false); }, []);
   const playNext = useCallback(async () => {
     const q = queueRef.current; if (!q.length) { playingRef.current = false; setSpeaking(false); const d = doneRef.current; doneRef.current = null; if (d) d(); return; }
@@ -206,8 +298,23 @@ function useSpeaker(settings) {
       // "app": this is Tawaazun answering, not the guide narrating. Her voice
       // replying to her own question turned the conversation into a monologue.
       const res = await fetch(`${base.replace(/\/$/, "")}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice: "app" }) });
-      const blob = await res.blob(); const a = new Audio(URL.createObjectURL(blob)); audioRef.current = a;
-      a.onended = () => playNext(); a.onerror = () => playNext(); await a.play(); return;
+      const blob = await res.blob();
+      const a = audioRef.current || new Audio();
+      audioRef.current = a; unlockAudio(a);
+      a.onended = () => playNext(); a.onerror = () => playNext();
+      a.src = URL.createObjectURL(blob);
+      try {
+        await a.play();
+        setMuted(""); pending.current = null;
+      } catch (err) {
+        // NotAllowedError — the browser wants a gesture. NotSupportedError —
+        // it cannot decode what we sent. They need different answers, so say
+        // which one it was rather than going quiet.
+        pending.current = a;
+        setMuted(err?.name || "blocked");
+        if (err?.name !== "NotAllowedError") throw err;   // a decode problem: fall through to the browser voice
+      }
+      return;
     } catch (e) {} }
     if ("speechSynthesis" in window) { const u = new SpeechSynthesisUtterance(text); const v = pickSoftVoice(); if (v) u.voice = v; u.rate = 0.94; u.pitch = 0.88; u.volume = 0.92; u.onend = () => playNext(); u.onerror = () => playNext(); window.speechSynthesis.speak(u); }
     else playNext();
@@ -222,7 +329,7 @@ function useSpeaker(settings) {
     if (!playingRef.current) playNext();
   }, [settings.voice, playNext]);
   useEffect(() => () => stop(), [stop]);
-  return { speak, stop, speaking };
+  return { speak, stop, speaking, muted, allow };
 }
 
 // ---- voice → daily-log fields. Server-side via the backend (no key in the
@@ -361,8 +468,8 @@ function useRecordSchema(settings) {
   return schema;
 }
 
-const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, sugar: 5, flow: null, birthControl: null, birthControlType: null,
-  sleep: 5, brainFog: 0, sexDrive: 5, painPoints: [], morningWeight: null, foodDrive: 5, cravings: null, cravingType: null,
+const SCHEMA_DEFAULTS = { pain: 0, mood: 5, energy: 5, flow: null, birthControl: null, birthControlType: null,
+  sleep: 5, brainFog: 0, sexDrive: 5, painPoints: [], morningWeight: null, cravings: null, cravingType: null,
   exercise: null, dietCarbs: null, dietFats: null, dietProtein: null, dietFibre: null, acne: false, hairGrowth: false, hairLoss: false, dryPatches: false, hyperpigmentation: false };
 
 // ---- the body map ----------------------------------------------------------
@@ -468,9 +575,9 @@ function trendsAsk({ ins, logs, entry, settings }) {
       painWithBloating: r1(ins?.bloatPain), painWithoutBloating: r1(ins?.noBloatPain),
       loggedDays: ins?.loggedDays,
       recentPain: logs.slice(-14).map((l) => l.pain), recentMood: logs.slice(-14).map((l) => l.mood),
-      recentEnergy: logs.slice(-14).map((l) => l.energy), recentSugar: logs.slice(-14).map((l) => l.sugar),
-      today: { pain: e.pain, mood: e.mood, energy: e.energy, sugar: e.sugar,
-               bloating: e.bloating, categories: e.categories },
+      recentEnergy: logs.slice(-14).map((l) => l.energy), recentSleep: logs.slice(-14).map((l) => l.sleep),
+      today: { pain: e.pain, mood: e.mood, energy: e.energy, sleep: e.sleep,
+               cravings: e.cravings, bloating: e.bloating, categories: e.categories },
     },
   };
 }
@@ -508,7 +615,23 @@ async function extractAdvise({ settings, note, categories = [], summary = {}, bl
 }
 
 // ---- voice capture: NeMo streaming WS, else Web Speech ---------------------
-function useVoice({ settings, onPartial, onFinal, continuous, silenceMs }) {
+/**
+ * The recogniser on the other end of /asr, when there is one.
+ *
+ * nginx proxies /asr to the streaming ASR service on the GPU, so the endpoint
+ * is the page's own origin — nothing to configure. It matters most on a phone:
+ * a handset may fall back to its own offline recogniser, which is markedly
+ * worse than the desktop's, and this is the same model for every device.
+ * Settings can still name a different one, and if nothing answers, the
+ * controller drops back to whatever the browser has.
+ */
+const sameOriginAsr = () => {
+  if (typeof window === "undefined" || !window.location?.host) return null;
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${window.location.host}/live`;
+};
+
+function useVoice({ settings, onPartial, onFinal, onReply, onSpeaking, continuous, conversation, silenceMs }) {
   const [listening, setListening] = useState(false); const [note, setNote] = useState(""); const ref = useRef(null); const onRef = useRef(false);
   const setL = (v) => { onRef.current = v; setListening(v); };
   const start = useCallback(() => {
@@ -516,12 +639,12 @@ function useVoice({ settings, onPartial, onFinal, continuous, silenceMs }) {
     setNote("");
     // whatever came before is finished with, even if the UI thinks it stopped
     try { ref.current?.stop(); } catch (e) {}
-    const c = new VoiceController({ endpoint: settings.nemoEndpoint || null, onPartial, onFinal,
-      onState: setL, onError: setNote, continuous, silenceMs });
+    const c = new VoiceController({ endpoint: settings.nemoEndpoint || sameOriginAsr(), onPartial, onFinal,
+      onReply, onSpeaking, onState: setL, onError: setNote, continuous, conversation, silenceMs });
     ref.current = c;
     if (!c.available()) { setNote("Voice isn't available here — please type."); return; }
     c.start();
-  }, [settings.nemoEndpoint, onPartial, onFinal, continuous, silenceMs]);
+  }, [settings.nemoEndpoint, onPartial, onFinal, continuous, conversation, silenceMs]);
   const stop = useCallback(() => { const c = ref.current; ref.current = null; try { c?.stop(); } catch (e) {} }, []);
   const toggle = useCallback(() => { if (onRef.current) stop(); else start(); }, [start, stop]);
   // leaving the screen ends the session too — a socket must not outlive the
@@ -576,6 +699,12 @@ function Chip({ children, active, onClick, icon: Ico, demo }) {
 }
 // The mark: the single-line uterus logo, traced from brand-logo-source.svg into
 // one even-odd path so it stays crisp at any size and takes the colour it's given.
+/** The mark on a paid feature. `mini` is the sparkle alone, for a nav item. */
+const Pro = ({ mini, style, className = "" }) => (
+  <span className={`pro-badge${mini ? " mini" : ""}${className ? ` ${className}` : ""}`}
+    title="Premium feature" style={style}>
+    <Sparkles size={mini ? 11 : 9.5} strokeWidth={2.6} />{!mini && "PRO"}</span>
+);
 const Field = ({ label, children }) => (
   <label style={{ display: "block" }}><div style={{ fontFamily: bodyf, fontSize: 12, fontWeight: 600, letterSpacing: "0.04em", color: C.inkVar, marginBottom: 6, textTransform: "uppercase" }}>{label}</div>{children}</label>
 );
@@ -945,7 +1074,7 @@ export default function App() {
     if (!ready || !pid || warmedTrends.current || !ins.loggedDays || TRENDS.read(pid)) return;
     warmedTrends.current = true;
     const today = new Date().toISOString().slice(0, 10);
-    const entry = logs.find((l) => l.date === today) || { ...SCHEMA_DEFAULTS, pain: 0, sugar: 5, mood: 5,
+    const entry = logs.find((l) => l.date === today) || { ...SCHEMA_DEFAULTS, pain: 0, mood: 5,
       energy: 5, bloating: false, note: "", categories: [] };
     fetchTrends(trendsAsk({ ins, logs, entry, settings })).catch(() => {});
   }, [ready, settings.patientId, ins.loggedDays, logs.length]);
@@ -999,7 +1128,7 @@ export default function App() {
 
   // Changing screens starts you at the top of the new one. Without this the
   // window keeps the scroll it had, and a tab opens halfway down itself.
-  useEffect(() => { window.scrollTo?.({ top: 0, behavior: "auto" }); }, [tab, profile.onboarded]);
+  useEffect(() => { try { window.scrollTo?.({ top: 0, behavior: "auto" }); } catch (e) {} }, [tab, profile.onboarded]);
 
   const screen = () => (<>
     {tab === "home" && <HomeScreen {...ctx} />}
@@ -1057,7 +1186,9 @@ function TopNav({ tab, setTab, profile }) {
               shell, so the reel asks for the route rather than for the button. */}
           {items.map(([id, label]) => { const on = tab === id; return (
             <button key={id} data-demo={id === "advocacy" ? "go:advocacy" : `nav:${id}`} onClick={() => setTab(id)} style={{ fontFamily: bodyf, fontSize: 15, fontWeight: on ? 600 : 500, padding: "9px 16px", borderRadius: 9999, cursor: "pointer", border: "none",
-              background: on ? C.lilac : "transparent", color: on ? C.plumDark : C.inkVar }}>{label}</button>); })}
+              display: "inline-flex", alignItems: "center", gap: 6,
+              background: on ? C.lilac : "transparent", color: on ? C.plumDark : C.inkVar }}>
+              {label}{id === "advocacy" && <Pro mini />}</button>); })}
         </nav>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
           <button data-demo="nav:settings" onClick={() => setTab("settings")} style={{ background: "none", border: "none", cursor: "pointer", color: tab === "settings" ? C.plum : C.inkVar, display: "grid", placeItems: "center" }}><Cog size={22} /></button>
@@ -1088,7 +1219,9 @@ function BottomNav({ tab, setTab }) {
     <div style={{ width: "100%", maxWidth: 460, background: "rgba(251,239,239,0.92)", backdropFilter: "blur(10px)", borderTop: `1px solid ${C.high}`, display: "flex", padding: "8px 6px 10px", pointerEvents: "auto" }}>
       {items.map(([id, label, Ico]) => { const on = tab === id; return (
         <button key={id} data-demo={id === "advocacy" ? "go:advocacy" : `nav:${id}`} onClick={() => setTab(id)} style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-          <span style={{ padding: "5px 16px", borderRadius: 9999, background: on ? C.lilac : "transparent", display: "grid", placeItems: "center", transition: "all .15s" }}><Ico size={20} color={on ? C.plumDark : C.outline} /></span>
+          <span style={{ position: "relative", padding: "5px 16px", borderRadius: 9999, background: on ? C.lilac : "transparent", display: "grid", placeItems: "center", transition: "all .15s" }}>
+            <Ico size={20} color={on ? C.plumDark : C.outline} />
+            {id === "advocacy" && <Pro mini style={{ position: "absolute", top: -3, right: 6 }} />}</span>
           <span style={{ fontFamily: bodyf, fontSize: 11, fontWeight: on ? 600 : 500, color: on ? C.plum : C.outline }}>{label}</span>
         </button>); })}
     </div>
@@ -1183,11 +1316,19 @@ function useNarrator(settings) {
   // sentence off mid-word, which is the one thing that makes a voice sound like
   // a machine. Waiting a beat too long is always the better failure.
   const chain = useRef(Promise.resolve());
+  // One element for the whole reel — see unlockAudio. A clip per element means
+  // a gesture per clip, which no page ever has.
+  const el = useRef(null);
+  if (el.current === null && typeof Audio !== "undefined") {
+    el.current = new Audio();
+    unlockAudio(el.current);
+  }
   const play = useCallback((clip) => {
     const start = () => new Promise((done) => {
-      const a = new Audio(clip.url);
+      const a = el.current || new Audio();
       playing.current = a;
       a.onended = done; a.onerror = done;
+      a.src = clip.url;
       // Autoplay is a permission, not a given: a page nobody has touched may be
       // refused. Say so rather than playing a silent tour.
       a.play().then(() => setBlocked(false)).catch(() => { setBlocked(true); done(); });
@@ -1261,7 +1402,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
     if (!phase) return;
     const reduced = typeof window.matchMedia === "function"
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    window.scrollTo?.({ top: 0, behavior: "auto" });   // start at the top of whatever is on screen
+    try { window.scrollTo?.({ top: 0, behavior: "auto" }); } catch (e) {}   // start at the top
     // it walks on from below the fold, the way a hand arrives
     let at = { x: window.innerWidth / 2 - 40, y: window.innerHeight + 60 };
     let clicks = 0;
@@ -1680,7 +1821,7 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
     const touched = new Set(dates);
     const kept = logs.filter((l) => !touched.has(l.date));
     const entries = dates.map((date) => ({
-      ...(logs.find((l) => l.date === date) || { date, pain: 0, sugar: 2, mood: 5, energy: 5,
+      ...(logs.find((l) => l.date === date) || { date, pain: 0, mood: 5, energy: 5,
         hairGrowth: false, hairLoss: false, cravings: false, note: "", categories: [] }),
       date, period: value,
     }));
@@ -1794,7 +1935,8 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
       <span style={{ width: 42, height: 42, borderRadius: 12, background: recTone.bg, display: "grid", placeItems: "center", flexShrink: 0 }}>
         <recTone.Icon size={20} color={recTone.fg} /></span>
       <div style={{ flex: 1 }}>
-        <div style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{rec ? rec.headline : "Prepare for your appointment"}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontFamily: head, fontWeight: 600, fontSize: 16 }}>{rec ? rec.headline : "Prepare for your appointment"}</span><Pro /></div>
         <div style={{ fontSize: 13, color: C.inkVar }}>{rec?.met ? `${rec.met} of 2 trackable criteria met — see what's behind it` : "See what's behind it, and prepare for a visit"}</div>
       </div>
       <ChevronRight size={20} color={C.outline} />
@@ -2019,7 +2161,7 @@ function PersonalityPicker({ value, onChange }) {
 function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins, schema }) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const existing = logs.find((l) => l.date === todayStr);
-  const [e, setE] = useState(existing ? { ...SCHEMA_DEFAULTS, ...existing } : { date: todayStr, period: null, pain: 0, sugar: 5, mood: 5, energy: 5, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [], ...SCHEMA_DEFAULTS });
+  const [e, setE] = useState(existing ? { ...SCHEMA_DEFAULTS, ...existing } : { date: todayStr, period: null, pain: 0, mood: 5, energy: 5, hairGrowth: false, hairLoss: false, bloating: false, cravings: false, note: "", categories: [], ...SCHEMA_DEFAULTS });
   const eRef = useRef(e); useEffect(() => { eRef.current = e; }, [e]);
   const convoRef = useRef(false);  // hands-free intent: auto-resume the mic between turns
   const [saved, setSaved] = useState(false);
@@ -2101,8 +2243,15 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
 
   // Speech → Claude fills the form's own fields and answers out loud. Whatever
   // it heard is marked as heard and flashes on the card while it is fresh.
-  const ingest = async (said, given = null) => {
-    if (!said) return; setPartial(""); setErr(""); setBusy(true);
+  const ingest = async (said, given = null, { spoken = false } = {}) => {
+    if (!said) return;
+    setPartial(""); setErr("");
+    // "Noting it down" belonged to the old shape of this, where the microphone
+    // was closed while a model was asked about the sentence and a third service
+    // was asked to say the answer. A live session is not doing any of that: it
+    // is still listening and already answering, so the form fills in behind the
+    // conversation rather than interrupting it.
+    if (!spoken) setBusy(true);
     const base = { ...eRef.current, note: (eRef.current.note ? eRef.current.note + " " : "") + said };
     let merged = base; let say = ""; let focus = null;
     try {
@@ -2133,21 +2282,57 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       const heard = fields.map((fd) => fd.key).filter((k) => f[k] != null && f[k] !== false);
       if (heard.length) setSpoken((p) => { const n = { ...p }; heard.forEach((k) => (n[k] = true)); return n; });
       lightUp(heard.filter((k) => JSON.stringify(next[k]) !== JSON.stringify(base[k])));
-      const std = ["pain", "mood", "energy", "sugar", "sleep"].filter((k) => next[k] != null && next[k] !== base[k]);
+      const std = ["pain", "mood", "energy", "sleep", "brainFog"].filter((k) => next[k] != null && next[k] !== base[k]);
       if (std.length) focus = std.includes("pain") ? "pain" : std[0];
       merged = next; say = f.say || "";
     } catch (e) { setErr("Couldn't reach the model to read that — is the backend up?"); }
-    setE(merged); eRef.current = merged; persist(merged); setSaved(true); setBusy(false);
+    setE(merged); eRef.current = merged; persist(merged); setSaved(true); if (!spoken) setBusy(false);
     // Surface the trend the user just talked about, with a blink to draw the eye.
     if (focus) { setMetric(focus); setMetricBlink(true); clearTimeout(timers.current._blink); timers.current._blink = setTimeout(() => setMetricBlink(false), 1700); }
-    // Mic stays OFF through transcription, inference, and Tawaazun's spoken reply —
-    // it only comes back on for the next turn (hands-free).
+    // NOTHING HERE TOUCHES A LIVE SESSION.
+    //
+    // The old flow closed the microphone for the duration of a turn and opened
+    // it again afterwards, because it had to: hearing, thinking and speaking
+    // were three services taking turns. Restarting the recogniser now would
+    // tear down the session that is *mid-sentence* — which is exactly what cut
+    // the answer off halfway through.
+    //
+    // A live session never stopped listening and needs no resuming; it has also
+    // already spoken, so there is no second reply to say over the top of it.
+    if (spoken) {
+      if (insRef.current) runAdvise();
+      return;
+    }
     const resume = () => { if (convoRef.current) voice.start(); };
     if (say) { setReply(say); speaker.speak(say, resume); } else resume();
     if (insRef.current) runAdvise();  // refresh live insights in the background
   };
-  const voice = useVoice({ settings, onPartial: setPartial, onFinal: (t) => ingest(t), continuous: false, silenceMs: 1100 });
-  const micTap = () => { if (voice.listening) { convoRef.current = false; voice.stop(); } else { convoRef.current = true; voice.start(); } };
+  // How long a pause has to be before it decides you have finished. Every
+  // millisecond here is silence the person sits through, and 1.1s was over a
+  // second of nothing before anything even started happening.
+  // How long a pause has to be before it decides you have finished. The server
+  // recogniser has no endpointing of its own, so this timer is the only thing
+  // deciding — and a pause for breath mid-sentence is longer than you think.
+  // The session hears, answers, and says the answer out loud — all three on one
+  // connection. What is left for the app is the form: the transcript still goes
+  // through the extractor to fill the fields, with its own spoken reply
+  // suppressed, because the conversation has already had one.
+  const [liveSpeaking, setLiveSpeaking] = useState(false);
+  const voice = useVoice({
+    settings,
+    onPartial: setPartial,
+    onFinal: (t, how) => ingest(t, null, { spoken: !!how?.spoken }),
+    onReply: (t) => setReply(t),
+    onSpeaking: setLiveSpeaking,
+    continuous: false,      // ... if it falls back to the browser's recogniser
+    conversation: true,     // the live session stays open and listening between turns
+    silenceMs: 1500,
+  });
+  const micTap = () => {
+    bless();                              // the tap that buys us sound for the rest of the visit
+    if (voice.listening) { convoRef.current = false; voice.stop(); }
+    else { convoRef.current = true; voice.start(); }
+  };
   const endConvo = () => { convoRef.current = false; voice.stop(); setEnded(true); setModal(true); };
 
   // SPEAKING, WITHOUT A MICROPHONE.
@@ -2190,6 +2375,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       <div style={{ display: "grid", placeItems: "center", marginBottom: 12, position: "relative" }}>
         <button data-demo="rec:mic" onClick={micTap} disabled={busy} style={{ width: 96, height: 96, borderRadius: "50%", border: "none", cursor: busy ? "default" : "pointer", display: "grid", placeItems: "center", background: listening ? C.roseOn : "#fff", color: listening ? "#fff" : C.plum, boxShadow: listening ? "0 0 0 6px rgba(255,255,255,0.3)" : SH, animation: listening ? "pulse 1.5s infinite" : "none", opacity: busy ? 0.7 : 1 }}>
           {listening ? <MicOff size={38} /> : <Mic size={38} />}</button>
+        <Pro style={{ position: "absolute", top: -2, right: "calc(50% - 62px)" }} />
         {/* the demo's way in: a line is written here, then said as if heard */}
         {/* Both sit on the microphone itself, invisible: the guide's pointer is
             hovering the mic while it "speaks", which is where a hand would be. */}
@@ -2204,8 +2390,16 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       <div style={{ minHeight: 24, marginTop: 10, fontSize: 15 }}>{partial ? <i style={{ opacity: 0.92 }}>{partial}…</i> : null}</div>
       {/* While this is in the DOM, Tawaazun is speaking. The guided demo waits
           on it: two voices at once is the one overlap nothing excuses. */}
-      {speaker.speaking && <span data-demo="rec:speaking" aria-hidden="true"
+      {(speaker.speaking || liveSpeaking) && <span data-demo="rec:speaking" aria-hidden="true"
         style={{ position: "absolute", width: 1, height: 1, opacity: 0 }} />}
+      {speaker.muted && (
+        <button onClick={speaker.allow} style={{ marginTop: 12, width: "100%", fontFamily: bodyf, fontWeight: 700,
+          fontSize: 13.5, padding: "11px", borderRadius: 12, border: "1.5px solid rgba(255,255,255,0.5)",
+          background: "rgba(255,255,255,0.16)", color: "#fff", cursor: "pointer", display: "inline-flex",
+          alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <Volume2 size={15} /> Tap once to let it speak
+          <span style={{ opacity: 0.6, fontWeight: 500, fontSize: 11.5 }}>({speaker.muted})</span>
+        </button>)}
       {reply && (<div style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", background: "rgba(255,255,255,0.16)", borderRadius: 16, padding: "12px 14px", marginTop: 12 }}>
         <Mark ring={C.plum} size={32} />
         <div style={{ flex: 1, fontSize: 15, lineHeight: 1.45 }}>{reply}</div>
@@ -2366,7 +2560,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
   const [view, setView] = useState("insights"); // sub-view within Insights: "insights" | "track"
   const [cycleView, setCycleView] = useState("ribbon");
   const [chartsOpen, setChartsOpen] = useState(false);
-  const [xKey, setXKey] = useState("sugar"); const [yKey, setYKey] = useState("pain"); const [lagDay, setLagDay] = useState(true);
+  const [xKey, setXKey] = useState("sleep"); const [yKey, setYKey] = useState("pain"); const [lagDay, setLagDay] = useState(true);
   const mEntry = METRICS.find(([k]) => k === metric) || METRICS[0] || ["pain", "Pain", SCALE_MAX];
   const mSel = mEntry[0], mLbl = mEntry[1], mMax = mEntry[2];
   const series = logs.slice(-30).map((l) => Number(l[mSel] ?? 0));
@@ -2624,7 +2818,8 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
       <span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 21, color: "#fff", display: "inline-block", lineHeight: 1 }}>دليل</span>
       <span style={{ width: 1, height: 17, background: "#ffffff40", flexShrink: 0 }} />
       <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 11.5, letterSpacing: "0.15em", textTransform: "uppercase", color: "#ded5ee" }}>Medical Literature</span>
-      {sugg === null && <Loader2 size={14} className="spin" color="#ded5ee" style={{ marginLeft: "auto" }} />}
+      <Pro style={{ marginLeft: "auto" }} />
+      {sugg === null && <Loader2 size={14} className="spin" color="#ded5ee" />}
     </div>
     <div style={{ padding: 20 }}>
     {/* No heading and no standfirst. The band above says whose list this is,
@@ -2682,7 +2877,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
       <span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 15,
         display: "inline-block", lineHeight: 1 }}>دليل</span>
-      Literature
+      Literature <Pro mini />
     </span>)]];
   const subNav = (<div style={{ display: "inline-flex", gap: 4, padding: 4, background: C.container, borderRadius: 9999, marginBottom: 18 }}>
     {SUBVIEWS.map(([id, lbl]) => { const on = view === id; return (
@@ -2721,7 +2916,7 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
       <span style={{ width: 30, height: 30, borderRadius: 9, background: chartsOpen ? C.surface : C.low,
         display: "grid", placeItems: "center", flexShrink: 0 }}><BarChart3 size={16} color={C.plum} /></span>
       <span>
-        <span style={{ display: "block", fontFamily: head, fontWeight: 600, fontSize: 16, color: C.ink }}>Charts</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: head, fontWeight: 600, fontSize: 16, color: C.ink }}>Charts <Pro /></span>
         <span style={{ fontFamily: bodyf, fontSize: 12, color: C.inkVar }}>
           {chartsOpen ? "Tap to hide" : "Explore any two things you track"}</span>
       </span>
@@ -3012,7 +3207,7 @@ function AdvocacyScreen({ profile, ins, assessment, axes, derived, lab, setLab, 
 
   return (<div>
     <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "6px 0 16px" }}>
-      <button data-demo="back:home" className="no-print" onClick={() => setTab("home")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><ArrowLeft size={22} /></button><H size={24}>Advocacy</H></div>
+      <button data-demo="back:home" className="no-print" onClick={() => setTab("home")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkVar }}><ArrowLeft size={22} /></button><H size={24}>Advocacy</H><Pro className="no-print" /></div>
     {meView}
   </div>);
 }
@@ -3220,7 +3415,7 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, s
         <input data-demo="set:sounds" type="checkbox" checked={settings.sounds !== false} onChange={(e) => set("sounds", e.target.checked)}
           style={{ width: 18, height: 18, accentColor: C.plum }} />
         <span style={{ fontFamily: bodyf, fontSize: 15 }}>Tap sounds</span></label>
-      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input data-demo="set:voice" type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.plum, width: 18, height: 18 }} /><span style={{ fontSize: 15 }}>Speak replies aloud</span></label>
+      <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}><input data-demo="set:voice" type="checkbox" checked={settings.voice} onChange={(e) => set("voice", e.target.checked)} style={{ accentColor: C.plum, width: 18, height: 18 }} /><span style={{ fontSize: 15, display: "inline-flex", alignItems: "center", gap: 8 }}>Speak replies aloud <Pro /></span></label>
     </Card>
     {/* THE WAY OUT. It is on for a first visit and switches itself off at the
         end of its own run, so nothing here ever hijacks a second one. */}

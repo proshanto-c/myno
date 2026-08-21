@@ -7,7 +7,7 @@
  * point in the startup sequence — including while the permission prompt is
  * still open, which is where the real leak was.
  */
-import { VoiceController } from "./voice.js";
+import { VoiceController, mergeSpeech } from "./voice.js";
 
 const T = [];
 const test = (name, fn) => T.push([name, fn]);
@@ -39,7 +39,19 @@ const fakeTrack = () => ({ stopped: false, stop() { this.stopped = true; } });
 const fakeStream = () => { const t = [fakeTrack(), fakeTrack()]; return { tracks: t, getTracks: () => t }; };
 
 class FakeCtx {
-  constructor() { this.sampleRate = 48000; this.closed = false; this.nodes = []; }
+  constructor() {
+    this.sampleRate = 48000; this.closed = false; this.nodes = [];
+    this.currentTime = 0; this.destination = {}; this.played = [];
+  }
+  resume() {}
+  createBuffer(_ch, frames, rate) {
+    return { duration: frames / rate, getChannelData: () => new Float32Array(frames) };
+  }
+  createBufferSource() {
+    const src = { buffer: null, onended: null, connect: () => {},
+                  start: (at) => { this.played.push(at); }, stop: () => {}, disconnect: () => {} };
+    return src;
+  }
   createMediaStreamSource() { return { connect: () => {} }; }
   createScriptProcessor() {
     const node = { onaudioprocess: null, disconnected: false,
@@ -50,7 +62,7 @@ class FakeCtx {
   close() { this.closed = true; return Promise.resolve(); }
 }
 
-function harness({ micDelay = 0, micFails = false } = {}) {
+function harness({ micDelay = 0, micFails = false, silenceMs, conversation = false } = {}) {
   FakeSocket.made = [];
   const state = [], errors = [], timers = [];
   let ctx = null, stream = null, release = null;
@@ -68,7 +80,7 @@ function harness({ micDelay = 0, micFails = false } = {}) {
     clearTimeout: (t) => { if (t) t.cleared = true; },
   };
   const c = new VoiceController({
-    endpoint: "wss://asr.test/stream", deps,
+    endpoint: "wss://asr.test/stream", deps, silenceMs, conversation,
     onState: (v) => state.push(v), onError: (e) => errors.push(e),
   });
   return {
@@ -79,6 +91,9 @@ function harness({ micDelay = 0, micFails = false } = {}) {
     stream: () => stream,
     grantMic: () => { stream = fakeStream(); release.res(stream); return stream; },
     runTimers: () => timers.filter((t) => !t.cleared).forEach((t) => t.fn()),
+    // One clock at a time: the pause that ends an utterance and the watchdog
+    // that gives up on a silent audio pipeline both live in here.
+    fire: (ms) => timers.filter((t) => !t.cleared && t.ms === ms).forEach((t) => { t.cleared = true; t.fn(); }),
   };
 }
 
@@ -188,9 +203,168 @@ test("stopping after the server hung up does nothing further", async () => {
   h.c.start();
   await settle();
   h.socket().open();
+  // A session that was working: something was transcribed before the server
+  // went away. (With nothing heard, the controller falls back to the browser
+  // instead — the test below.)
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "final", text: "cramps today" }) });
   h.socket().serverClose();
   h.c.stop();
   eq(h.state, [true, false]);
+});
+
+// ---- the answer coming back, and letting go of it --------------------------
+const pcmFrame = (n = 240) => {
+  const bytes = new Uint8Array(n * 2);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+};
+
+test("the reply is played, and stopping stops it mid-sentence", async () => {
+  const started = [], stopped = [];
+  class FakeBufferSource {
+    connect() {} disconnect() {}
+    start() { started.push(this); }
+    stop() { stopped.push(this); }
+  }
+  class PlayerCtx {
+    constructor() { this.currentTime = 0; this.destination = {}; this.closed = false; }
+    createBuffer(ch, frames, rate) { return { duration: frames / rate, getChannelData: () => new Float32Array(frames) }; }
+    createBufferSource() { return new FakeBufferSource(); }
+    resume() {} close() { this.closed = true; return Promise.resolve(); }
+  }
+  const speaking = [];
+  const h = harness({ silenceMs: 1200 });
+  // Only the player's context — the microphone pump needs the harness's own,
+  // which knows how to make a stream source. (Overriding both is how this test
+  // first "failed": the pump threw, the session tore itself down, and stop()
+  // had nothing left to stop.)
+  h.c.player.AC = PlayerCtx;
+  h.c.onSpeaking = (v) => speaking.push(v);
+  h.c.start();
+  await settle();
+  h.socket().open();
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "audio", rate: 24000, pcm: pcmFrame() }) });
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "audio", rate: 24000, pcm: pcmFrame() }) });
+  eq(started.length, 2, "the answer never played: ");
+  h.c.stop();
+  eq(stopped.length, 2, "it carried on talking after the conversation ended: ");
+  eq(speaking[speaking.length - 1], false, "it still thinks it is speaking: ");
+});
+
+test("an error from the session is said out loud, not swallowed", async () => {
+  const h = harness({ silenceMs: 1200 });
+  h.c.start();
+  await settle();
+  h.socket().open();
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "error", message: "session closed by the model" }) });
+  eq(h.errors, ["session closed by the model"]);
+});
+
+// ---- knowing when somebody has finished ------------------------------------
+// The streaming server transcribes until it is told the utterance is over; it
+// has no endpointing of its own. Left to itself it listens forever and nothing
+// is ever submitted, which is exactly what it did.
+test("a pause does not end the stream — the model decides that", () => {
+  // The old client ran its own endpointer and sent "end" after a quiet second.
+  // That did not end the turn so much as end the stream: the session had
+  // nothing left to hear, and the microphone went dead for the rest of the
+  // conversation. Silence is what the model listens for, so silence keeps
+  // being sent, and nothing here interrupts it.
+  const h = harness({ silenceMs: 1200 });
+  h.c.start();
+  return settle().then(() => {
+    h.socket().open();
+    h.socket().onmessage?.({ data: JSON.stringify({ type: "partial", text: "bad cramps" }) });
+    h.socket().onmessage?.({ data: JSON.stringify({ type: "partial", text: "bad cramps today" }) });
+    h.fire(1200);                                  // a pause, as far as the client can tell
+    eq(h.socket().sent.filter((x) => typeof x === "string").length, 0,
+       "the client ended the stream behind the model's back: ");
+  });
+});
+
+// A live session answers WHILE the transcript is being handed up. "final" is
+// the end of the question, never the end of the answer — and the answer is
+// sitting in a buffer that closing the session would throw away.
+const speak = (h, seconds = 1) => {
+  const samples = Math.round(24000 * seconds);
+  const pcm = Buffer.alloc(samples * 2).toString("base64");
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "audio", rate: 24000, pcm }) });
+};
+
+test("a turn ends when the answer has been heard, not when the transcript lands", async () => {
+  const h = harness();
+  const finals = [];
+  h.c.onFinal = (t) => finals.push(t);
+  h.c.start();
+  await settle();
+  h.socket().open();
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "partial", text: "bad cramps today" }) });
+  speak(h, 1);                       // it has started answering
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "final", text: "bad cramps today" }) });
+  eq(finals, ["bad cramps today"]);
+
+  h.fire(200);                       // ... still a second of answer to play
+  eq(h.socket().closed, false, "hung up mid-sentence: ");
+  eq(h.c.player.remaining() > 0.5, true, "nothing left to play: ");
+
+  h.ctx().currentTime = 99;          // the answer finishes
+  h.fire(200); h.fire(200);
+  eq(h.c.stopped, true, "never let go of the microphone: ");
+  h.fire(250);                        // the socket closes after its goodbye
+  eq(h.socket().closed, true, "socket left open: ");
+  eq(h.state[h.state.length - 1], false, "still listening after the answer: ");
+});
+
+test("a conversation keeps listening after it has answered", async () => {
+  // The session hears and answers down the same connection, so a finished
+  // answer is not a finished conversation: closing the microphone here is how
+  // somebody ends up pressing the button again to say their second sentence.
+  const h = harness({ conversation: true });
+  h.c.start();
+  await settle();
+  h.socket().open();
+  speak(h, 1);
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "final", text: "bad cramps today" }) });
+  h.ctx().currentTime = 99;
+  for (let i = 0; i < 5; i++) h.fire(200);
+  eq(h.c.stopped, false, "stopped listening after answering: ");
+  eq(h.socket().closed, false, "hung up after one turn: ");
+});
+
+test("a turn that is never answered still lets go of the microphone", async () => {
+  const h = harness();
+  h.c.start();
+  await settle();
+  h.socket().open();
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "final", text: "hello" }) });
+  for (let i = 0; i < 45 && !h.c.stopped; i++) h.fire(200);
+  eq(h.c.stopped, true, "waited forever for an answer that never came: ");
+});
+
+test("an empty final is not a turn", async () => {
+  const h = harness();
+  const finals = [];
+  h.c.onFinal = (t) => finals.push(t);
+  h.c.start();
+  await settle();
+  h.socket().open();
+  h.socket().onmessage?.({ data: JSON.stringify({ type: "final", text: "   " }) });
+  eq(finals, [], "silence was submitted as if it were speech: ");
+});
+
+test("an audio pipeline that never starts hands over to the browser", async () => {
+  // A phone can hand back a suspended AudioContext: microphone on, socket open,
+  // and not one sample ever sent. Waiting forever is the wrong answer.
+  const made = [];
+  class FakeRec { constructor() { made.push(this); } start() {} stop() {} abort() {} }
+  const h = harness({ silenceMs: 1200 });
+  h.c.deps.SpeechRecognition = FakeRec;
+  h.c.start();
+  await settle();
+  h.socket().open();
+  h.fire(2500);                                             // the watchdog
+  eq(made.length, 1, "it sat there with a dead microphone: ");
 });
 
 // ---- restarting -----------------------------------------------------------
@@ -235,9 +409,12 @@ function webHarness({ continuous = false } = {}) {
   const made = [], partials = [], finals = [], timers = [];
   const R = (text, isFinal) => ({ isFinal, 0: { transcript: text } });
   class FakeRec {
-    constructor() { made.push(this); }
-    start() { this.onstart?.(); }
+    constructor() { made.push(this); this.aborted = false; }
+    start() { this.started = true; this.onstart?.(); }
     stop() { this.onend?.(); }
+    abort() { this.aborted = true; }
+    /** still holding the microphone: hooked up, and never aborted */
+    get live() { return !this.aborted && !!this.onresult; }
     /** what Chrome hands over: a growing list, from `resultIndex` onwards */
     hears(list, resultIndex = 0) { this.onresult?.({ resultIndex, results: list.map(([t, f]) => R(t, f)) }); }
     ends() { this.onend?.(); }
@@ -251,8 +428,12 @@ function webHarness({ continuous = false } = {}) {
       clearTimeout: (t) => { if (t) t.cleared = true; },
     },
   });
-  return { c, made, partials, finals, rec: () => made[made.length - 1],
-           silence: () => timers.filter((t) => !t.cleared).forEach((t) => t.fn()) };
+  // Two different clocks matter here: the beat before a restart (250ms) and
+  // the pause that ends a turn (silenceMs). Firing them together would commit a
+  // sentence that was only waiting for the recogniser to come back.
+  const fire = (ms) => timers.filter((t) => !t.cleared && t.ms === ms).forEach((t) => { t.cleared = true; t.fn(); });
+  return { c, made, partials, finals, fire, rec: () => made[made.length - 1],
+           restart: () => fire(120), silence: () => fire(2500) };
 }
 
 test("the same final delivered twice is heard once", async () => {
@@ -293,6 +474,94 @@ test("interim words are shown but never banked", async () => {
   h.silence();
   eq(h.partials[h.partials.length - 1], "bad cramps today");
   eq(h.finals, ["bad cramps today"]);
+});
+
+test("a restart never leaves two recognisers listening", async () => {
+  const h = webHarness({ continuous: true });
+  await h.c.start();
+  const first = h.rec();
+  h.rec().hears([["cramps today", true]]);
+  first.ends();                                  // Android: the session is over
+  h.restart();
+  eq(h.made.length, 2, "it did not restart: ");
+  eq(first.live, false, "the old recogniser is still hooked up: ");
+  eq(h.rec().live, true, "the new one is not listening: ");
+});
+
+test("a stale recogniser talking to itself is ignored", async () => {
+  const h = webHarness({ continuous: true });
+  await h.c.start();
+  const first = h.rec();
+  first.hears([["cramps today", true]]);
+  first.ends();
+  h.restart();                                   // the new one is built here
+  // Android sometimes keeps the old one going for a moment. Whatever it says
+  // now belongs to a session that is over.
+  first.onresult?.({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: "cramps today" } }] });
+  h.rec().hears([["and I barely slept", true]]);
+  h.silence();
+  eq(h.finals, ["cramps today and I barely slept"]);
+});
+
+test("a speech server that is not there hands over to the browser", async () => {
+  const made = [], finals = [];
+  class FakeRec {
+    constructor() { made.push(this); }
+    start() { this.onstart?.(); }
+    stop() { this.onend?.(); }
+    abort() {}
+  }
+  const timers = [];
+  const c = new VoiceController({
+    endpoint: "wss://asr.test/stream",
+    onFinal: (t) => finals.push(t),
+    deps: {
+      WebSocket: FakeSocket,
+      getUserMedia: () => Promise.resolve(fakeStream()),
+      AudioContext: function () { return new FakeCtx(); },
+      SpeechRecognition: FakeRec,
+      setTimeout: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; },
+      clearTimeout: (t) => { if (t) t.cleared = true; },
+    },
+  });
+  await c.start();
+  await settle();
+  FakeSocket.made[FakeSocket.made.length - 1].serverClose();     // nothing listening
+  eq(made.length, 1, "it did not fall back to the browser: ");
+  // ... and the fallback works: a sentence still comes out
+  made[0].onresult?.({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: "cramps today" } }] });
+  timers.filter((t) => !t.cleared && t.ms === 2500).forEach((t) => t.fn());
+  eq(finals, ["cramps today"]);
+});
+
+// ---- and none of that at the cost of a browser that behaves ---------------
+// Desktop Chrome hands over a growing list: the finals it has settled, then the
+// interim it is still working on. Nothing overlaps, and nothing is repeated.
+test("a well-behaved browser is left exactly as it was", async () => {
+  const h = webHarness();
+  await h.c.start();
+  h.rec().hears([["bad cramps today", true]]);
+  h.rec().hears([["bad cramps today", true], ["and", false]], 1);
+  h.rec().hears([["bad cramps today", true], ["and I barely", false]], 1);
+  h.rec().hears([["bad cramps today", true], ["and I barely slept", true]], 1);
+  h.silence();
+  eq(h.finals, ["bad cramps today and I barely slept"]);
+});
+
+test("a word said twice on purpose is kept twice", () => {
+  eq(mergeSpeech("no", "no"), "no no");
+  eq(mergeSpeech("it hurts", "hurts a lot"), "it hurts a lot");
+});
+
+test("joining two pieces of speech never says anything twice", () => {
+  eq(mergeSpeech("I'm feeling", "I'm feeling"), "I'm feeling");
+  eq(mergeSpeech("I'm", "I'm feeling rough"), "I'm feeling rough");
+  eq(mergeSpeech("I'm feeling", "feeling rough"), "I'm feeling rough");
+  eq(mergeSpeech("I'm feeling rough", "and I slept badly"), "I'm feeling rough and I slept badly");
+  eq(mergeSpeech("", "cramps"), "cramps");
+  eq(mergeSpeech("cramps", ""), "cramps");
+  // a shared fragment that is not a whole word is not an overlap
+  eq(mergeSpeech("I ran in", "individual days"), "I ran in individual days");
 });
 
 // ---- run it ---------------------------------------------------------------

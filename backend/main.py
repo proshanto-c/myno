@@ -12,14 +12,14 @@ Responsibilities:
     voice when one is configured and caching every line it has said before.
 
 Run via docker-compose (see docker-compose.yml). Env:
-  DATABASE_URL, ANTHROPIC_API_KEY, TTS_URL, VOICE_URL, VOICE_ID
+  DATABASE_URL, GOOGLE_API_KEY, VOICE_URL, VOICE_ID
 """
-import os, json, random, math, statistics, asyncio, hashlib, pathlib, datetime as dt
+import os, re, json, random, logging, math, statistics, asyncio, hashlib, pathlib, datetime as dt
 from collections import OrderedDict
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -27,14 +27,22 @@ from sqlalchemy import (create_engine, Column, Integer, String, Boolean, Float,
                         Date, DateTime, ForeignKey, JSON, text)
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
+# A live session that goes wrong says so at INFO, and uvicorn does not configure
+# anybody else's logger — so without this the only trace of a conversation is
+# "connection open" / "connection closed", which is exactly as much as we knew.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
 import criteria
 import evidence
+import google_ai
+import live
 import insights
 import record
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg2://myno:myno@db:5432/myno")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-TTS_URL = os.environ.get("TTS_URL", "http://tts:8001")
+# Speech is the one thing Google does not do for us: the guide is a particular
+# person, and a prebuilt voice cannot be her. VoiceStudio holds that clone.
+# Everything else — hearing, understanding, answering — is the Live session.
 # A cloned voice, spoken by VoiceStudio through its OpenAI-compatible endpoint.
 # Set both and every spoken line in the app — the sign-up, the guided demo and
 # the replies on the Record screen — comes back in that voice. Unset, or if the
@@ -58,7 +66,6 @@ VOICE_APP_SPEED = float(os.environ.get("VOICE_APP_SPEED", "1.0"))
 # voice, the engine and the exact text — change any of them and it is a
 # different recording, not a stale one.
 VOICE_CACHE = pathlib.Path(os.environ.get("VOICE_CACHE_DIR", "/tmp/myno-voice"))
-ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 Session = sessionmaker(bind=engine, autoflush=False)
@@ -182,8 +189,9 @@ FEATURES = {  # feature key -> human label + which log fields it governs
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "model": ANTHROPIC_MODEL, "features": list(FEATURES.keys()),
-            "claude_cache": _cache_stats()}
+    return {"status": "ok", "models": {"fast": google_ai.FAST_MODEL, "deep": google_ai.DEEP_MODEL,
+                                       "live": google_ai.LIVE_MODEL}, "features": list(FEATURES.keys()),
+            "google": google_ai.configured(), "ai_cache": google_ai.cache_stats()}
 
 # ----- patients
 class PatientIn(BaseModel):
@@ -387,7 +395,7 @@ async def patient_insights(pid: int):
         'Return ONLY JSON: {"summary":str (<=40 words overview), '
         '"insights":[{"category":str,"title":str (<=8 words),"detail":str (<=35 words),"strength":0-100}]}.'
     )
-    raw = await claude(sys, [{"role": "user", "content": json.dumps(stats)}], max_tokens=700)
+    raw = await google_ai.ask(sys, json.dumps(stats), max_tokens=2500, model=google_ai.DEEP_MODEL, think="low")
     try:
         a, b = raw.index("{"), raw.rindex("}"); analysis = json.loads(raw[a:b + 1])
     except Exception:
@@ -621,7 +629,7 @@ async def advocacy(pid: int):
     if cached.get("key") == key and cached.get("report"):
         return {"report": cached["report"], "matched": [e["id"] for e in matched],
                 "metrics": metrics, "cached": True}
-    raw = await claude(ADVOCACY_SYSTEM, [{"role": "user", "content": json.dumps(payload)}], max_tokens=2000)
+    raw = await google_ai.ask(ADVOCACY_SYSTEM, json.dumps(payload), max_tokens=6000, model=google_ai.DEEP_MODEL, think="low")
     try:
         a, b = raw.index("{"), raw.rindex("}"); report = json.loads(raw[a:b + 1])
     except Exception:
@@ -742,71 +750,6 @@ def get_descriptors(pid: int):
     rows = s.query(Descriptor).filter_by(patient_id=pid).order_by(Descriptor.created_at.desc()).all()
     out = [{"concept": r.concept, "phrase": r.phrase} for r in rows]; s.close(); return out
 
-# ------------------------------------------------------- the Claude call
-# A reply is a pure function of (model, system, messages, max_tokens), and the
-# payload already carries everything patient-specific, so identical asks — the
-# same person reopening Insights, a poll that fires twice, a re-rendered tab —
-# are answered from memory instead of paying for the call again. Concurrent
-# identical asks share a single in-flight request rather than racing.
-CACHE_TTL = dt.timedelta(minutes=30)
-CACHE_MAX = 512                 # ~ a few MB of replies; oldest evicted first
-_cache: "OrderedDict[str, tuple]" = OrderedDict()
-_inflight: dict = {}
-
-def _cache_stats():
-    return {"entries": len(_cache), "inflight": len(_inflight)}
-
-async def claude(system: str, messages: list, max_tokens=900) -> str:
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(500, "ANTHROPIC_API_KEY not configured")
-    headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
-               "content-type": "application/json"}
-    # top-level cache_control auto-caches the last cacheable block, so the whole
-    # tools -> system -> messages prefix is reused on repeat calls (5 min TTL)
-    payload = {"model": ANTHROPIC_MODEL, "max_tokens": max_tokens, "system": system, "messages": messages,
-               "cache_control": {"type": "ephemeral"}}
-    key = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
-
-    now = dt.datetime.utcnow()
-    hit = _cache.get(key)
-    if hit and hit[0] > now:
-        _cache.move_to_end(key)         # keep hot answers away from eviction
-        return hit[1]
-    _cache.pop(key, None)               # expired
-
-    async def _ask() -> str:
-        try:
-            r = await http().post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
-        except httpx.HTTPError as e:
-            raise HTTPException(502, f"Couldn't reach the Claude API: {e}")
-        if r.status_code >= 400:
-            # Surface Claude's own reason (bad key, low credit balance, rate limit)
-            # instead of a bare status code — it lands in the log and in the UI.
-            try: why = r.json().get("error", {}).get("message", "")
-            except Exception: why = ""
-            raise HTTPException(502, f"Claude API {r.status_code}: {why or r.text[:200]}")
-        data = r.json()
-        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
-        # only successful replies are cached; errors stay retryable
-        _cache[key] = (dt.datetime.utcnow() + CACHE_TTL, text)
-        _cache.move_to_end(key)
-        while len(_cache) > CACHE_MAX:
-            _cache.popitem(last=False)
-        return text
-
-    # One request per identical ask, however many callers are waiting. Shielded
-    # so a caller who navigates away doesn't cancel the answer the others are
-    # still waiting for; the task is tracked, so shutdown can end it.
-    task = _inflight.get(key)
-    if task is None or task.done():
-        task = track(_ask())
-        _inflight[key] = task
-    try:
-        return await asyncio.shield(task)
-    finally:
-        if _inflight.get(key) is task and task.done():
-            _inflight.pop(key, None)
-
 # ----- voice → structured daily-log fields + a spoken reply (server-side model;
 # no key in the browser). Tawaazun talks back: acknowledges, and asks ONE clarifying
 # question when something important is ambiguous, so the patient can just answer.
@@ -878,9 +821,11 @@ def _extract_sys(blocked: list[str], personality: str = "direct") -> str:
         "- Invent nothing. The fields below are the whole vocabulary; if what they said does not fit one, it goes in no field.\n"
         "- Also fill any standard tracking fields ONLY when clearly implied by what they said; otherwise use null/false. Never force a value.\n"
         "- 'painAreas': ONLY where they said it hurts, using the exact names listed; [] if they did not say. Never guess a location from a pain rating alone.\n"
+        # `say` FIRST: it is the only part anybody is waiting to hear, and the
+        # order it is written in is the order it arrives in. Everything after it
+        # can still be streaming while the voice is already making the sentence.
         "Return ONLY JSON, no prose, no code fences: "
-        "{" + record.extract_shape() +
-        ',"say":str}. ' 
+        '{"say":str,' + record.extract_shape() + "}. " 
         "Use null/false for fields not mentioned."
     )
 
@@ -893,7 +838,12 @@ async def extract(body: ExtractIn):
         + f"Current personalized categories: {cats}\n\n"
         + f'They just said: "{body.text}"'
     )
-    raw = await claude(_extract_sys(body.blocked or [], body.personality), [{"role": "user", "content": user}], max_tokens=500)
+    # Streamed, on the fast model, with the voice started the moment the reply
+    # sentence is complete. Nothing about the answer changes; it simply stops
+    # being the last thing that happens.
+    seen = {}
+    raw = await google_ai.ask(_extract_sys(body.blocked or [], body.personality), user, max_tokens=900,
+                              on_text=(lambda t: _prewarm_reply(seen, t)) if (VOICE_URL and VOICE_APP_ID) else None)
     try:
         a, b = raw.index("{"), raw.rindex("}")
         return _normalize_extract_payload(json.loads(raw[a:b + 1]))
@@ -922,7 +872,7 @@ async def advise(body: AdviseIn):
         '"say":str (<=35 words of practical advice)}. Be concise.'
     )
     user = json.dumps({"today_conversation": body.note, "categories": body.categories, "history_summary": body.summary})
-    raw = await claude(sys, [{"role": "user", "content": user}], max_tokens=320)
+    raw = await google_ai.ask(sys, user, max_tokens=700)
     try:
         a, b = raw.index("{"), raw.rindex("}")
         return json.loads(raw[a:b + 1])
@@ -933,6 +883,75 @@ def _avg_cycle(s, pid):
     """Mean cycle length. Goes through insights.py so a five-day bleed counts as
     one cycle start, not five one-day cycles."""
     return insights.average_cycle_days(_patient_logs(s, pid))
+
+# One synthesis per line, however many ask for it. Without this the head start
+# is wasted: /extract starts making the reply, the browser asks for the same
+# line a second later, and the two race — two GPU jobs, and the listener waits
+# for the slower of them instead of the one already half done.
+_voice_inflight: dict = {}
+
+async def _voice_bytes(text: str, app_voice: bool) -> bytes:
+    """The audio for one line: cached, already being made, or made now."""
+    vid = (VOICE_APP_ID if app_voice else VOICE_ID) or VOICE_ID
+    speed = VOICE_APP_SPEED if app_voice else VOICE_SPEED
+    if not (VOICE_URL and vid):
+        raise HTTPException(503, "no cloned voice configured")
+    cached = _voice_cache_path(text, vid, speed)
+    try:
+        if cached.is_file() and cached.stat().st_size:
+            return cached.read_bytes()
+    except OSError:
+        pass
+    key = str(cached)
+    task = _voice_inflight.get(key)
+    if task is None or task.done():
+        task = track(_synthesise(text, vid, speed, cached))
+        _voice_inflight[key] = task
+    try:
+        return await asyncio.shield(task)
+    finally:
+        if _voice_inflight.get(key) is task and task.done():
+            _voice_inflight.pop(key, None)
+
+async def _synthesise(text: str, vid: str, speed: float, cached: pathlib.Path) -> bytes:
+    r = await http().post(f"{VOICE_URL}/v1/audio/speech",
+                          json={"model": VOICE_MODEL, "input": text, "voice": vid,
+                                "response_format": "wav", "speed": speed},
+                          timeout=httpx.Timeout(180.0, connect=10.0))
+    if r.status_code >= 400:
+        raise HTTPException(502, f"voice {r.status_code}")
+    try:
+        VOICE_CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = cached.with_suffix(".part")
+        tmp.write_bytes(r.content)
+        tmp.replace(cached)
+    except OSError as e:
+        log.warning("could not cache the line (%s)", e)
+    return r.content
+
+# The reply, spoken as soon as the model has finished writing that one field.
+# Reading it out of a half-written object is the whole point: by the time the
+# rest of the JSON lands the audio already exists, and the browser asking for it
+# is a cache read rather than another two seconds.
+_SAY = re.compile(r'"say"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+def _prewarm_reply(seen: dict, text: str):
+    if seen.get("said"):
+        return
+    m = _SAY.search(text)
+    if not m:
+        return
+    try: line = json.loads(f'"{m.group(1)}"').strip()
+    except Exception: return
+    if len(line) < 8:
+        return                       # not a sentence yet
+    seen["said"] = True
+    track(_voice_bytes(line, True))
+
+@app.websocket("/live")
+async def live_ws(ws: WebSocket):
+    """Hearing and answering, in one session — see live.py."""
+    await live.bridge(ws, ws.query_params.get("tone", ""))
 
 # ----- TTS proxy (single origin for the browser)
 def _voice_cache_path(text: str, vid: str, speed: float) -> pathlib.Path:
@@ -946,36 +965,15 @@ async def tts(body: dict):
         raise HTTPException(400, "Nothing to say")
     # "app" is the app answering; anything else is the guide's own voice.
     app_voice = str(body.get("voice") or "").lower() == "app"
-    vid = (VOICE_APP_ID if app_voice else VOICE_ID) or VOICE_ID
-    speed = VOICE_APP_SPEED if app_voice else VOICE_SPEED
-    if VOICE_URL and vid:
-        cached = _voice_cache_path(text, vid, speed)
+    # One path for making a line — the same one /extract warms mid-stream, so a
+    # reply asked for here has usually already been made by the time it is.
+    if VOICE_URL and ((VOICE_APP_ID if app_voice else VOICE_ID) or VOICE_ID):
         try:
-            if cached.is_file() and cached.stat().st_size:
-                return Response(content=cached.read_bytes(), media_type="audio/wav")
-        except OSError:
-            pass                      # an unreadable cache is not a reason to go quiet
-        try:
-            r = await http().post(f"{VOICE_URL}/v1/audio/speech",
-                                  json={"model": VOICE_MODEL, "input": text, "voice": vid,
-                                        "response_format": "wav", "speed": speed},
-                                  timeout=httpx.Timeout(180.0, connect=10.0))
-            if r.status_code < 400:
-                try:
-                    VOICE_CACHE.mkdir(parents=True, exist_ok=True)
-                    tmp = cached.with_suffix(".part")
-                    tmp.write_bytes(r.content)      # written whole, then moved, so a
-                    tmp.replace(cached)             # reader never sees half a wav
-                except OSError as e:
-                    log.warning("could not cache the line (%s)", e)
-                return Response(content=r.content, media_type="audio/wav")
-            log.warning("voice %s said %s — falling back to NeMo", VOICE_URL, r.status_code)
+            return Response(content=await _voice_bytes(text, app_voice), media_type="audio/wav")
+        except HTTPException as e:
+            log.warning("the cloned voice could not say it (%s)", e.detail)
         except httpx.HTTPError as e:
-            log.warning("voice %s unreachable (%s) — falling back to NeMo", VOICE_URL, e)
-    try:
-        r = await http().post(f"{TTS_URL}/tts", json={"text": text})
-    except httpx.HTTPError as e:
-        raise HTTPException(502, f"Couldn't reach the speech server: {e}")
-    if r.status_code >= 400:
-        raise HTTPException(502, f"Speech server {r.status_code}")
-    return Response(content=r.content, media_type="audio/wav")
+            log.warning("voice %s unreachable (%s)", VOICE_URL, e)
+    # No second engine to fall back to any more — the browser has its own voice
+    # and uses it when this fails, which is the right place for that decision.
+    raise HTTPException(503, "No voice configured for this line")
