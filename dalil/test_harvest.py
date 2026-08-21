@@ -23,7 +23,8 @@ test = lambda fn: (T.append((fn.__name__, fn)), fn)[1]
 
 # ---- a PubMed that lives in this file ---------------------------------------
 def article(pmid, title="Sleep quality in polycystic ovary syndrome", pmcid="", doi="",
-            year=2020, pub_types=("Journal Article",), mesh=("Polycystic Ovary Syndrome", "Humans"),
+            year=2025,                                  # inside harvest.MIN_YEAR
+            pub_types=("Journal Article",), mesh=("Polycystic Ovary Syndrome", "Humans"),
             abstract="Women with PCOS reported worse sleep.", retracted=False, refs=()):
     ids = [f'<ArticleId IdType="pubmed">{pmid}</ArticleId>']
     if pmcid:
@@ -593,19 +594,179 @@ def test_every_seed_says_which_fields_it_exists_for():
         assert seed["informs"], f"{seed['name']} informs nothing"
         assert "Polycystic Ovary Syndrome" in seed["term"], seed["name"]
         assert "polyendocrine" in seed["term"], f"{seed['name']} misses the new name"
-        assert "[dp]" in seed["term"], f"{seed['name']} has no year floor"
+        assert f"({harvest.MIN_YEAR}:3000[dp])" in seed["term"], \
+            f"{seed['name']} does not carry the corpus window"
+
+
+@test
+def test_moving_the_window_moves_every_stored_query_and_forgets_its_coverage():
+    s = Scoped()
+    ensured = harvest.ensure_seeds(s)
+    row = s.query(Query).filter(Query.name == "sleep").one()
+    row.term = harvest.retune(row.term, 2005)
+    row.min_year, row.high_water = 2005, "2026/01/01"
+    s.commit()
+
+    out = harvest.ensure_seeds(s)
+    assert out["retuned"] >= 1, out
+    assert f"({harvest.MIN_YEAR}:3000[dp])" in row.term
+    assert row.min_year == harvest.MIN_YEAR
+    assert row.high_water == "", "kept coverage of a window it no longer searches"
+    s.rollback()
+
+
+@test
+def test_a_term_with_no_year_floor_is_still_left_alone():
+    s = Scoped()
+    harvest.ensure_seeds(s)
+    row = s.query(Query).filter(Query.name == "sleep").one()
+    row.term, row.min_year = "edited by hand", 2005
+    s.commit()
+    harvest.ensure_seeds(s)
+    assert row.term == "edited by hand", "rewrote a term a person had written"
+    s.rollback()
+
+
+@test
+def test_a_bibliography_cannot_put_back_what_a_prune_removed():
+    """Chaining is not bounded by a search term, so the window has to be applied
+    on the way in with exactly the carve-outs the prune makes."""
+    s = Scoped()
+    cited = ["90012100", "90012101", "90012102"]
+    anchor = article("90012099", year=2025, refs=cited)
+    fake = FakeNcbi([("90012099", anchor),
+                     ("90012100", article("90012100", year=2015)),
+                     ("90012101", article("90012101", year=2025)),
+                     ("90012102", article("90012102", year=2013,
+                                          pub_types=("Journal Article", "Practice Guideline")))])
+    harvest.harvest_ids(s, fake, ["90012099"])
+    row = s.query(Source).filter(Source.pmid == "90012099").one()
+    out = harvest.promote_citations(s, fake, row)
+
+    assert out["outsideWindow"] == 1, out
+    assert s.query(Source).filter(Source.pmid == "90012100").count() == 0, "a 2015 study came back"
+    assert s.query(Source).filter(Source.pmid == "90012101").count() == 1
+    assert s.query(Source).filter(Source.pmid == "90012102").count() == 1, \
+        "an old guideline is a reference document, and the prune keeps those"
+    s.rollback()
+
+
+@test
+def test_the_window_is_the_same_test_on_the_way_in_as_on_the_way_out():
+    inside = lambda **kw: harvest.in_window(ncbi.parse_records(wrap([article("1", **kw)]))[0])
+    assert inside(year=2025) is True
+    assert inside(year=harvest.MIN_YEAR) is True
+    assert inside(year=harvest.MIN_YEAR - 1) is False
+    assert inside(year=2013, pub_types=("Journal Article", "Practice Guideline")) is True
+    undated = ncbi.Record(kind="article", year=None)
+    assert harvest.in_window(undated) is True, "an absent year is a gap, not an age"
+
+
+@test
+def test_a_search_window_is_enforced_here_too_not_only_in_the_query():
+    s = Scoped()
+    fake = FakeNcbi([("90012110", article("90012110", year=2019)),
+                     ("90012111", article("90012111", year=2026))])
+    run = harvest.harvest(s, fake, fresh_query(s), batch=10)
+    assert run.fetched == 2
+    assert run.added == 1, "stored a record the corpus window excludes"
+    assert s.query(Source).filter(Source.pmid == "90012110").count() == 0
+    s.rollback()
+
+
+@test
+def test_pruning_reports_before_it_removes():
+    s = Scoped()
+    old, _ = harvest.upsert(s, ncbi.parse_records(wrap([article("90012000", year=2019)]))[0])
+    new, _ = harvest.upsert(s, ncbi.parse_records(wrap([article("90012001", year=2025)]))[0])
+    s.commit()
+    before = s.query(Source).count()
+
+    plan = harvest.prune_older_than(s, min_year=2024)
+    assert plan["confirmed"] is False
+    assert plan["sources"] >= 1
+    assert s.query(Source).count() == before, "a dry run deleted something"
+
+    harvest.prune_older_than(s, min_year=2024, confirm=True)
+    assert s.query(Source).filter(Source.pmid == "90012000").count() == 0
+    assert s.query(Source).filter(Source.pmid == "90012001").count() == 1
+    s.rollback()
+
+
+@test
+def test_pruning_takes_the_claims_and_publications_with_it():
+    s = Scoped()
+    row, _ = harvest.upsert(s, ncbi.parse_records(wrap([article("90012010", year=2018)]))[0])
+    claim = Claim(source_id=row.id, state="published", claim_text="old")
+    s.add(claim)
+    s.flush()
+    s.add(Published(claim_id=claim.id, display_text="from an old paper"))
+    s.commit()
+    claim_id = claim.id          # read it before the row it lives on goes
+
+    harvest.prune_older_than(s, min_year=2024, confirm=True)
+    assert s.query(Claim).filter(Claim.id == claim_id).count() == 0
+    assert s.query(Published).filter(Published.claim_id == claim_id).count() == 0, \
+        "left a published row pointing at a source that no longer exists"
+    s.rollback()
+
+
+@test
+def test_an_old_guideline_survives_a_prune_that_removes_old_studies():
+    """A guideline is not a study, and criteria.py quotes the 2023 one for every
+    threshold the app applies — a window that removed it would leave the evidence
+    module unable to show the document the patient app cites."""
+    s = Scoped()
+    guideline, _ = harvest.upsert(s, ncbi.parse_records(wrap([article(
+        "90012030", year=2023, pub_types=("Journal Article", "Practice Guideline"),
+        title="Recommendations from the 2023 international evidence-based guideline")]))[0])
+    study, _ = harvest.upsert(s, ncbi.parse_records(wrap([article("90012031", year=2023)]))[0])
+    s.commit()
+    assert guideline.kind == "guideline"
+
+    plan = harvest.prune_older_than(s, min_year=2024, confirm=True)
+    assert plan["keptAsReference"] >= 1
+    assert s.query(Source).filter(Source.pmid == "90012030").count() == 1
+    assert s.query(Source).filter(Source.pmid == "90012031").count() == 0
+    s.rollback()
+
+
+@test
+def test_asking_for_no_exceptions_removes_the_guidelines_too():
+    s = Scoped()
+    harvest.upsert(s, ncbi.parse_records(wrap([article(
+        "90012040", year=2013, pub_types=("Journal Article", "Practice Guideline"))]))[0])
+    s.commit()
+    harvest.prune_older_than(s, min_year=2024, confirm=True, keep_kinds=())
+    assert s.query(Source).filter(Source.pmid == "90012040").count() == 0
+    s.rollback()
+
+
+@test
+def test_an_undated_record_survives_the_prune():
+    """An absent year is a gap in PubMed's metadata, not evidence of age — the
+    same mistake that once threw out the 2018 guideline for having no abstract."""
+    s = Scoped()
+    rec = ncbi.parse_records(wrap([article("90012020")]))[0]
+    rec.year = None
+    row, _ = harvest.upsert(s, rec)
+    s.commit()
+    plan = harvest.prune_older_than(s, min_year=2024, confirm=True)
+    assert plan["undatedKept"] >= 1
+    assert s.query(Source).filter(Source.pmid == "90012020").count() == 1
+    s.rollback()
 
 
 @test
 def test_seeds_are_added_once_and_are_not_rewritten_afterwards():
     s = Scoped()
     before = s.query(Query).count()
-    added = harvest.ensure_seeds(s)
-    assert added + before == s.query(Query).count()
+    out = harvest.ensure_seeds(s)
+    assert out["added"] + before == s.query(Query).count()
     row = s.query(Query).filter(Query.name == "sleep").one()
     row.term = "edited by hand"
     s.commit()
-    assert harvest.ensure_seeds(s) == 0
+    assert harvest.ensure_seeds(s)["added"] == 0
     assert row.term == "edited by hand", "a stored query must stay reproducible"
     s.rollback()
 

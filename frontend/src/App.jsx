@@ -9,7 +9,7 @@ import {
 import { MARK, Uterus, BrandMark as Mark, Brand as Word } from "./brand.jsx";
 // The sign-up signs itself up for a demo — beats, timings and the rule that a
 // person's form is left alone, all tested in demoreel.test.mjs.
-import { HAANIYAH, signUp, showcase, runReel, isEmpty, firstPhase, afterPhase,
+import { WANIYAH, signUp, showcase, runReel, isEmpty, firstPhase, afterPhase,
          linesOf, travelMs, sayMs, SCROLL_MS, LINE_GAP_MS } from "./demoreel.js";
 import { periodRuns, cyclesFrom, currentCycle, pastLengths, typicalBleed,
   phaseSpans, phaseAt, ringLength, dayOf, isoOf, addDays, daysBetween, todayISO,
@@ -1051,6 +1051,15 @@ function BottomNav({ tab, setTab }) {
 // Whichever is playing stops the moment a real hand touches the machine, and
 // each mode switches itself off when it reaches its end, so a second visit is
 // the person's own. Both switches live in Settings.
+/** The panel this element scrolls inside, if it is in one. */
+function scrollerAround(el) {
+  const view = el.ownerDocument?.defaultView;
+  for (let p = el.parentElement; p && p !== el.ownerDocument.body; p = p.parentElement) {
+    const how = view?.getComputedStyle?.(p)?.overflowY;
+    if ((how === "auto" || how === "scroll") && p.scrollHeight > p.clientHeight + 4) return p;
+  }
+  return null;
+}
 const centreOf = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
 // React compares against the value it last wrote to the node, so assigning
 // `el.value` reads as no change at all. Write it the way the browser does —
@@ -1069,7 +1078,7 @@ const pressKey = (el, key) => {
   el.dispatchEvent(new view.KeyboardEvent("keydown", { key, bubbles: true }));
 };
 
-const REELS = { signup: () => signUp(HAANIYAH), show: showcase };
+const REELS = { signup: () => signUp(WANIYAH), show: showcase };
 
 /**
  * THE VOICE THE GUIDE SPEAKS IN.
@@ -1202,8 +1211,36 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
     // it — a pointer clicking away at a document nobody is looking at is worse
     // than no pointer at all.
     const doc = document;
-    let stop = () => {}, gone = null;
+    let stop = () => {}, gone = null, watching = null;
     const waitingFor = { current: null }, waitingSince = { current: 0 };
+
+    // A HIGHLIGHT HAS TO FOLLOW WHAT IT IS HIGHLIGHTING.
+    //
+    // The rect was read once, when the line started. But screens move under it:
+    // the live-trends panel on Record arrives with the model's answer and
+    // reflows the column, and the ring left the microphone behind. So while
+    // something is lit, it is re-measured — and the pointer goes with it, since
+    // a pointer resting beside the thing it is pointing at is worse than none.
+    let following = false;                 // ... until the script moves the pointer itself
+    const track = (el) => {
+      clearInterval(watching); watching = null;
+      if (!el) { setSpot(null); return; }
+      following = true;
+      const measure = () => {
+        const r = el.getBoundingClientRect();
+        if (!r.width && !r.height) return;                 // gone from the layout
+        setSpot((p) => (p && p.x === r.left && p.y === r.top && p.w === r.width && p.h === r.height)
+          ? p : { x: r.left, y: r.top, w: r.width, h: r.height });
+        // The ring always follows its element. The pointer only does while it
+        // is still resting on it — once the reel moves on to the next target,
+        // dragging it back is the tracker fighting the script.
+        if (!following) return;
+        const to = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        if (Math.hypot(to.x - at.x, to.y - at.y) > 6) { at = to; setPointer({ ...to, ms: 220 }); }
+      };
+      measure();
+      watching = setInterval(measure, 200);
+    };
     const find = (t) => {
       if (!doc.defaultView || doc.defaultView.closed) { stop(); return null; }
       return doc.querySelector(`[data-demo="${t}"]`);
@@ -1214,11 +1251,20 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
       reveal: (t) => {
         const el = find(t); if (!el) return 0;
         const r = el.getBoundingClientRect();
-        if (r.top >= 96 && r.bottom <= window.innerHeight - 96) return 0;
+        // An element inside a scrolling panel — the "fill in your day" sheet,
+        // say — can sit comfortably inside the window and still be clipped out
+        // of sight by the panel it lives in. Both have to be satisfied, or the
+        // later sections of that form never scroll into view at all.
+        const panel = scrollerAround(el);
+        const box = panel && panel.getBoundingClientRect();
+        const seen = r.top >= 96 && r.bottom <= window.innerHeight - 96
+          && (!box || (r.top >= box.top + 12 && r.bottom <= box.bottom - 12));
+        if (seen) return 0;
         el.scrollIntoView?.({ block: "center", behavior: reduced ? "auto" : "smooth" });
         return reduced ? 0 : SCROLL_MS;
       },
       move: (t) => {
+        following = false;                 // the script is driving now
         const el = find(t); if (!el) return 0;
         const to = centreOf(el);
         const ms = reduced ? 0 : travelMs(to.x - at.x, to.y - at.y);
@@ -1228,7 +1274,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
       press: (t) => {
         const el = find(t); if (!el) return;
         setRing({ ...at, n: ++clicks });
-        setSpot(null);                       // a click means we have moved on from what was lit
+        track(null);                         // a click means we have moved on from what was lit
         if (el.tagName === "INPUT") el.focus?.({ preventScroll: true });
         el.click();
       },
@@ -1239,8 +1285,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
       // other. sayMs is the fallback for a line with no clip in hand.
       say: (text) => { setCaption(text); return (live.current.speak?.(text) || sayMs(text)) + LINE_GAP_MS; },
       spot: (t, text) => {
-        const el = find(t);
-        if (el) { const r = el.getBoundingClientRect(); setSpot({ x: r.left, y: r.top, w: r.width, h: r.height }); }
+        track(find(t));
         setCaption(text);
         return (live.current.speak?.(text) || sayMs(text)) + LINE_GAP_MS;
       },
@@ -1257,7 +1302,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
         if (what === "talking" ? speaking : !speaking) return done();
         return 250;
       },
-      dim: () => { setSpot(null); setCaption(""); },
+      dim: () => { track(null); setCaption(""); },
       end: () => finish(false),
     };
 
@@ -1267,7 +1312,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
       const { setSettings: save, settings: now, silence: hush } = live.current;
       hush?.();
       setPointer((p) => p && { ...p, gone: true });
-      setSpot(null); setCaption("");
+      track(null); setCaption("");        // stops the watcher too, or it lights up again in 200ms
       const { next, off } = afterPhase(phase, { byHand, settings: now });
       if (off) save?.((s) => ({ ...s, [off]: false }));
       setPhase(next);
@@ -1300,7 +1345,7 @@ function useDirector({ ready, profile, settings, setSettings, speak, silence, pr
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("popstate", onBack);
     return () => {
-      cancel(); live.current.silence?.(); clearTimeout(gone);
+      cancel(); live.current.silence?.(); clearTimeout(gone); clearInterval(watching);
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("popstate", onBack);
     };
@@ -1422,7 +1467,11 @@ const PHASES = [
 // The calendar sits in the phase you're in: a still tint that eases from one
 // phase to the next, with a slow wash drifting over it. Kept pale on purpose —
 // the day circles and the period bar have to stay readable on top.
-const PHASE_TINT = { menstrual: "#ffe3e5", follicular: "#f1ebf8", ovulatory: "#fdf1e2", luteal: "#ece7f6" };
+// Only bleeding tints the calendar. The other three phases each had a wash of
+// their own, so the card changed colour four times a cycle to say something the
+// ring above it already says — and the one week that matters stopped standing
+// out from the other three.
+const PHASE_TINT = { menstrual: "#ffe3e5" };
 
 const SPARK = {
   menstrual:  { n: 16, color: C.roseOn,  glow: C.roseDeep, dur: [1500, 2100], drift: [0, 46],  spread: 34, size: [4, 9],  spin: 140 },
@@ -1601,10 +1650,10 @@ function HomeScreen({ profile, setProfile, logs, setLogs, ins, assessment, setTa
       </div>
       <Card style={{ marginTop: 12, padding: 16, boxShadow: "none", position: "relative", overflow: "hidden",
         background: PHASE_TINT[phaseKey] || C.low, transition: "background-color 1.6s ease" }}>
-        {phaseKey && (() => { const ph = PHASES.find((x) => x.key === phaseKey); return ph ? (
+        {phaseKey === "menstrual" && (() => { const ph = PHASES[0]; return (
           <div key={phaseKey} className="phase-wash" style={{ background:
             `radial-gradient(120% 90% at 15% 0%, ${ph.from}33, transparent 62%),
-             radial-gradient(120% 90% at 85% 100%, ${ph.to}26, transparent 62%)` }} />) : null; })()}
+             radial-gradient(120% 90% at 85% 100%, ${ph.to}26, transparent 62%)` }} />); })()}
         <div style={{ position: "relative" }}>
           <CycleCalendar logs={logs} onSet={setPeriodDays} sound={settings?.sounds !== false} /></div></Card>
     </div>);
@@ -3081,7 +3130,7 @@ function SettingsScreen({ settings, setSettings, setLogs, profile, setProfile, s
     <Card demo="set:demo" style={{ marginBottom: 14 }}>
       <Label color={C.inkVar}>Guided demo</Label>
       <p style={{ fontSize: 12.5, color: C.inkVar, margin: "8px 0 12px", lineHeight: 1.5 }}>
-        Haaniyah signs you up, then shows you round <Word font={head} /> — talking, pointing, and using the app
+        Waniyah signs you up, then shows you round <Word font={head} /> — talking, pointing, and using the app
         as she goes. It plays once and switches itself off. Escape, or the back button, stops it any time.</p>
       <label data-demo="set:guide" style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
         <input type="checkbox" checked={settings.guide !== false} onChange={(e) => set("guide", e.target.checked)}

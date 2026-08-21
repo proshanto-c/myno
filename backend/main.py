@@ -14,7 +14,7 @@ Responsibilities:
 Run via docker-compose (see docker-compose.yml). Env:
   DATABASE_URL, ANTHROPIC_API_KEY, TTS_URL, VOICE_URL, VOICE_ID
 """
-import os, json, random, math, statistics, asyncio, hashlib, pathlib, urllib.parse, datetime as dt
+import os, json, random, math, statistics, asyncio, hashlib, pathlib, datetime as dt
 from collections import OrderedDict
 from typing import Optional
 
@@ -80,7 +80,10 @@ class Patient(Base):
     conditions = Column(JSON, default=list)         # already-diagnosed conditions (settings)
     mfg = Column(JSON, default=dict)                # modified Ferriman-Gallwey, per body area
     drugs = Column(JSON, default=list)              # current drug therapy (home)
-    suggestions = Column(JSON, default=list)        # research-backed tracker suggestions (daily)
+    # Vestigial: these held the model-written tracker suggestions, which now
+    # come from Dalīl's published claims and are not per-patient. Kept because
+    # dropping a column loses the record of what the old system told people.
+    suggestions = Column(JSON, default=list)
     suggestions_at = Column(DateTime, nullable=True)
     # The Insights narration, kept beside the numbers it was written about:
     # {"key": <fingerprint of those numbers>, "analysis": {...}}. Same numbers,
@@ -248,13 +251,24 @@ def _seed_categories(premen, brain_fog, pain):
     return cats
 
 def _seed_logs(pid: int, days: int = 120):
+    """Plausible history to arrive with — ending yesterday.
+
+    Today is the person's own to fill in. Seeding it left "Your day so far"
+    already answered before they had said a word, and the Record screen opened
+    onto somebody else's afternoon.
+    """
     s = Session()
     today = dt.date.today()
-    weight = round(random.uniform(72, 78), 1)
+    # Morning weights drift around whatever this person actually weighs. Seeded
+    # from a fixed band, they contradicted the weight typed into the sign-up a
+    # minute later — and the Body section is one the demo scrolls through.
+    p0 = s.get(Patient, pid)
+    base = float(getattr(p0, "weight_kg", None) or 62)
+    weight = round(random.uniform(base - 1.5, base + 1.5), 1)
     since = 6
     cycle = random.randint(31, 44)        # PMOS: long / irregular cycles
     prev_sugar = 1
-    for i in range(days, -1, -1):
+    for i in range(days, 0, -1):          # ... down to yesterday, never today
         d = today - dt.timedelta(days=i)
         bleeding = since < 5            # period spans ~5 days (multi-day, for a realistic calendar)
         flow = (["heavy", "heavy", "medium", "medium", "light"][since] if bleeding else None)

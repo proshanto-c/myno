@@ -3,7 +3,7 @@
  *
  * Three reels, in the order a first visit meets them:
  *
- *   signUp()    Haaniyah signing herself up — a pointer walks on, picks the
+ *   signUp()    Waniyah signing herself up — a pointer walks on, picks the
  *               goal, types her into the boxes and lets her in.
  *   showcase()  her account, shown off: she drives it and explains it in the
  *               same pass, in English, with whatever she is talking about lit
@@ -26,13 +26,13 @@
  */
 
 /**
- * Haaniyah. It is her account: she signs herself up at the start and everything
+ * Waniyah. It is her account: she signs herself up at the start and everything
  * after that is her own screen, which is why she can say "my cycle" and mean
  * it. Her numbers sit inside the bands criteria.py actually judges, so the reel
  * ends on an app with something to say rather than a shrug.
  */
-export const HAANIYAH = {
-  name: "Haaniyah", age: 28, menarcheAge: 13, heightCm: 166, weightKg: 74,
+export const WANIYAH = {
+  name: "Waniyah", age: 18, menarcheAge: 13, heightCm: 160, weightKg: 60,
   goals: ["whatswrong"],           // she is here to find out what is wrong
   chips: ["familyHistory", "acne"],
   diagnosis: "unsure",             // ... so "Not sure" is the honest answer
@@ -88,7 +88,7 @@ export const sayMs = (text) => {
  * sentences is the speaker's own, rather than a gap while the next request
  * comes back — which is what made the voice sound spliced.
  */
-export function spokenLines(person = HAANIYAH) {
+export function spokenLines(person = WANIYAH) {
   const seen = new Set();
   for (const list of [signUp(person), showcase()])
     for (const b of list)
@@ -166,30 +166,28 @@ function reel() {
 /**
  * THE SIGN-UP, SIGNING ITSELF UP.
  *
- * Haaniyah signs herself up while she talks you through it. The words are hers,
+ * Waniyah signs herself up while she talks you through it. The words are hers,
  * verbatim — this file only decides where in the screen each line lands, and
  * what the pointer is doing while she says it.
  */
-export function signUp(person = HAANIYAH) {
+export function signUp(person = WANIYAH) {
   const s = reel();
   s.wait(OPEN_MS);
-  s.say("Hey everyone! I'm Haaniyah, and I'm so excited to introduce you to Tawaazun. Let's walk through the sign-up together — it only takes a minute.");
+  s.say("Hi, I'm Waniyah, and welcome to Tawaazun. Let me sign myself up; it takes a minute.");
   for (const g of person.goals) s.tap(`goal:${g}`);
-  s.say("First, it asks what brings you here. For me, it's about finally figuring out what's going on with my body.");
+  s.say("It asks what brings you here. For me, it's about finally figuring out what's going on with my body.");
   s.tap("next").wait(STEP_MS);
 
-  s.say("It covers the basics — and every single question ties back to the actual clinical rules a doctor uses.");
+  s.say("Then the basic information.");
   for (const f of FIELDS) s.write(`field:${f}`, person[f]);
   for (const c of person.chips) s.tap(`chip:${c}`);
-  s.say("We cover family history and things like acne.");
   s.tap("next").wait(STEP_MS);
 
   s.tap(`dx:${person.diagnosis}`);
   s.to("cond:hirsutism");
-  s.say("When I note that my doctor previously mentioned hirsutism, the app instantly pulls up a clinical scoring sheet.");
+  s.say("My doctor mentioned hirsutism, so that goes in — and it opens the scoring sheet.");
   for (const c of person.conditions || []) s.tap(`cond:${c}`);
   s.tap("fg:chin:3").tap("fg:upperLip:2");
-  s.say("Just by filling that out, it settles one of the main diagnostic criteria without needing a single blood test.");
   s.tap("next");
   return s.beats;
 }
@@ -233,25 +231,32 @@ export function showcase() {
   s.spot("rec:insights", "As I'm talking, you can see the trend graphs moving and placing today's entry right into my overall pattern.");
   s.dim();
 
-  // ... and the form behind the conversation, shown rather than narrated
+  // ... and the form behind the conversation: one stop per section, each lit
+  // as it is named, which is what walks the sheet down. Short lines on purpose
+  // — this is a list of what is in there, not a tour of it.
   s.open("rec:end");
-  s.to("log:group:cycle").wait(1500);
+  s.spot("log:group:cycle", "And here's the whole form. Your cycle.");
+  s.spot("log:group:wellbeing", "How you're feeling.");
+  s.spot("log:group:body", "Your body.");
+  s.spot("log:group:lifestyle", "Your habits.");
+  s.spot("log:group:skin", "Your skin and hair — all of it already filled in with whatever it heard.");
+  s.dim();
   s.tap("log:keep");
 
   // INSIGHTS — her history, handed back
   s.open("nav:insights");
   s.spot("ins:summary", "The Insights tab hands your history right back to you.");
-  s.spot("ins:cat:cycle", "It translates your cycle into hard numbers and charts, so you can test your own hunches instead of relying on a vague feeling.");
+  s.spot("ins:cat:cycle", "Every daily check-in feeds this. It keeps a diary of my history, and writes an analysis of my own numbers back to me.");
   s.to("charts").wait(1100);
   s.dim();
 
-  // ADVOCACY — the part that speaks for her
-  s.open("nav:home");
+  // ADVOCACY — the part that speaks for her.
+  // Straight there from Insights: on the wide layout Advocacy is a tab of its
+  // own, so the detour through Home was a wasted screen.
   s.open("go:advocacy");
   s.spot("adv:triad", "This is the part that truly advocates for you. There are three criteria used for this diagnosis, and Tawaazun helps me track two of them myself.");
   s.spot("adv:indicator", "It shows exactly where my data stands against those clinical benchmarks.");
-  s.spot("adv:points", "While it clearly states it isn't giving a medical diagnosis, it does give me the exact words to use.");
-  s.say("It tells me what symptoms to raise, how to phrase them, and what tests to ask for.");
+  s.spot("adv:points", "It tells me what symptoms to raise, how to phrase them, and what tests to ask for.");
   s.spot("adv:print", "I just print the summary out and take it directly to my appointment.");
   s.dim();
   s.say("With Tawaazun, I'm not starting from scratch, and I'm no longer spending years being told my symptoms are just “normal.”");

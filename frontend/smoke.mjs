@@ -10,7 +10,7 @@
  *                  summary and an assessment. Home, the cycle ring, the bar and
  *                  the calendar all have to render without a console error.
  *   3. reel      — nobody at the keyboard. The sign-up drives itself with its
- *                  own pointer, and a minute later Haaniyah has to be through
+ *                  own pointer, and a minute later Waniyah has to be through
  *                  it and into the app, with the tour already talking: real
  *                  clicks and real input events, on the real controls, in a
  *                  real DOM. Slow on purpose — it runs at the speed a recording
@@ -159,7 +159,7 @@ if (code === 0) {
       if (!raw) return "nothing was saved: the reel never typed a thing";
       const p = JSON.parse(raw).profile || {};
       if (!p.onboarded) return `the reel stalled at: ${JSON.stringify(p)}`;
-      if (p.name !== "Haaniyah") return `signed up as ${JSON.stringify(p.name)}, not Haaniyah`;
+      if (p.name !== "Waniyah") return `signed up as ${JSON.stringify(p.name)}, not Waniyah`;
       for (const [k, want] of [["age", "28"], ["menarcheAge", "13"], ["heightCm", "166"], ["weightKg", "74"]])
         if (String(p[k]) !== want) return `${k} came out ${JSON.stringify(p[k])}, not ${want}`;
       if (!p.goals?.includes("whatswrong")) return `no goal was picked: ${JSON.stringify(p.goals)}`;
@@ -181,7 +181,7 @@ if (code === 0) {
   // have typed, tapped or changed a single thing on the way.
   code = await pass("guide", {
     stored: {
-      profile: { onboarded: true, name: "Haaniyah", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
+      profile: { onboarded: true, name: "Waniyah", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
       settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct", guide: true },
       logs: [],
     },
@@ -192,7 +192,7 @@ if (code === 0) {
       if (!html.includes("demo-spot")) return "the tour never lit anything up";
       if (!html.includes("demo-shield")) return "the tour left the screen open to a stray tap";
       const p = JSON.parse(dom.window.localStorage.getItem("myno:serene:v1")).profile || {};
-      if (p.name !== "Haaniyah") return `the tour rewrote the profile: ${JSON.stringify(p.name)}`;
+      if (p.name !== "Waniyah") return `the tour rewrote the profile: ${JSON.stringify(p.name)}`;
       return null;
     },
   });
@@ -203,7 +203,7 @@ if (code === 0) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   code = await pass("record", {
     stored: {
-      profile: { onboarded: true, name: "Haaniyah", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
+      profile: { onboarded: true, name: "Waniyah", age: 28, goals: ["whatswrong"], conditions: [], mfg: {}, drugs: [] },
       settings: { backendUrl: "", patientId: 58, voice: false, blacklist: [], personality: "direct", guide: false },
       logs: [],
     },

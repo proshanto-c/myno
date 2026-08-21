@@ -379,9 +379,12 @@ def test_a_field_the_app_does_not_record_is_listed_for_a_human_to_add():
     s = Scoped()
     a_claim(s, outcome="hotFlushes", proposed=("hotFlushes",),
             tracker={"label": "Hot flushes"})
-    listed = review.proposed_fields(s)
-    assert listed and listed[0]["key"] == "hotFlushes"
-    assert listed[0]["labels"] == ["Hot flushes"]
+    # by presence, not by position: a real corpus already has proposals of its
+    # own, and this list is ordered by how often the literature asks for each
+    listed = {f["key"]: f for f in review.proposed_fields(s, limit=200)}
+    assert "hotFlushes" in listed, sorted(listed)
+    assert listed["hotFlushes"]["labels"] == ["Hot flushes"]
+    assert listed["hotFlushes"]["claims"] >= 1
     s.rollback()
 
 

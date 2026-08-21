@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Clone one reference recording into the voice the whole app speaks in.
 #
-#   ./scripts/clone-voice.sh Haaniyah_Audio.opus Haaniyah
+#   ./scripts/clone-voice.sh Waniyah_Audio.opus Waniyah
 #
 # It converts the recording to what a cloning engine wants (mono, 24 kHz, a
 # clean 25-second stretch), registers it with VoiceStudio as a voice profile,
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 SRC=${1:?usage: clone-voice.sh <audio-file> [name]}
-NAME=${2:-Haaniyah}
+NAME=${2:-Waniyah}
 HOST=${VOICE_HOST:-http://127.0.0.1:3900}
 OUT=voice/$(echo "$NAME" | tr '[:upper:] ' '[:lower:]_')_ref.wav
 ENV_FILE=${ENV_FILE:-.env}

@@ -7,7 +7,7 @@
  * minutes of pointer animation and narration are checked in no time at all,
  * without a real timer, a real element, a real click or a real utterance.
  */
-import { HAANIYAH, FIELDS, signUp, showcase, runReel, keystrokes, isEmpty,
+import { WANIYAH, FIELDS, signUp, showcase, runReel, keystrokes, isEmpty,
          firstPhase, afterPhase, travelMs, sayMs, TYPE_MS, FIELD_GAP_MS, PRESS_MS, BEAT_MS,
          TRAVEL_MIN, TRAVEL_MAX, SAY_MIN_MS, SAY_MAX_MS } from "./demoreel.js";
 
@@ -61,19 +61,19 @@ function fakeBrowser({ missing = [], moveMs = 300, revealMs = 0, sayEvery = null
   return b;
 }
 
-const REELS = [["sign-up", signUp(HAANIYAH)], ["showcase", showcase()]];
+const REELS = [["sign-up", signUp(WANIYAH)], ["showcase", showcase()]];
 const kinds = (list, kind) => list.filter((x) => x.do === kind);
 const targets = (list, kind) => kinds(list, kind).map((b) => b.target);
 const count = (list, kind, target) => targets(list, kind).filter((t) => t === target).length;
 
 // ---- who signs up ----------------------------------------------------------
 test("she signs up as herself, and her numbers are ones the criteria can judge", () => {
-  eq(HAANIYAH.name, "Haaniyah");
-  eq(HAANIYAH.age >= 16 && HAANIYAH.age <= 45, true, `age ${HAANIYAH.age}: `);
+  eq(WANIYAH.name, "Waniyah");
+  eq(WANIYAH.age >= 16 && WANIYAH.age <= 45, true, `age ${WANIYAH.age}: `);
   // menarche has to be before her age, or yearsPostMenarche goes negative
-  eq(HAANIYAH.menarcheAge < HAANIYAH.age, true, "menarche after her age: ");
-  eq(HAANIYAH.age - HAANIYAH.menarcheAge >= 3, true, "inside the 1-3y band, which is not assessable: ");
-  eq(HAANIYAH.goals.length > 0, true, "no goal, so the first step cannot advance: ");
+  eq(WANIYAH.menarcheAge < WANIYAH.age, true, "menarche after her age: ");
+  eq(WANIYAH.age - WANIYAH.menarcheAge >= 3, true, "inside the 1-3y band, which is not assessable: ");
+  eq(WANIYAH.goals.length > 0, true, "no goal, so the first step cannot advance: ");
 });
 
 test("a person is typed one character at a time, field by field", () => {
@@ -104,7 +104,10 @@ for (const [name, list] of REELS) {
 
   test(`${name}: every line it says is a line worth hearing`, () => {
     for (const b of [...kinds(list, "say"), ...kinds(list, "spot")]) {
-      eq(typeof b.text === "string" && b.text.trim().length > 12, true, `thin line: ${JSON.stringify(b.text)}: `);
+      // Two words is a line ("Your body." naming a section of a form is one);
+      // one word, or none, is a mistake in the script.
+      eq(typeof b.text === "string" && b.text.trim().split(/\s+/).length >= 2, true,
+         `thin line: ${JSON.stringify(b.text)}: `);
       // a closing quote may follow the full stop — “normal.” ends a sentence too
       eq(/[.!?]["'”’]?$/.test(b.text.trim()), true, `unfinished sentence: ${JSON.stringify(b.text)}: `);
     }
@@ -113,28 +116,28 @@ for (const [name, list] of REELS) {
 
 // ---- the sign-up -----------------------------------------------------------
 test("it works the three steps in order and lets itself in at the end", () => {
-  eq(targets(signUp(HAANIYAH), "press"),
+  eq(targets(signUp(WANIYAH), "press"),
      ["goal:whatswrong", "next",
       ...FIELDS.map((f) => `field:${f}`), "chip:familyHistory", "chip:acne", "next",
       "dx:unsure", "cond:hirsutism", "fg:chin:3", "fg:upperLip:2", "next"]);
 });
 
 test("the sign-up never asks for a device", () => {
-  const said = [...kinds(signUp(HAANIYAH), "say")].map((b) => b.text).join(" ");
-  eq(targets(signUp(HAANIYAH), "press").some((t) => t.startsWith("app:")), false, "the wearables screen is back: ");
+  const said = [...kinds(signUp(WANIYAH), "say")].map((b) => b.text).join(" ");
+  eq(targets(signUp(WANIYAH), "press").some((t) => t.startsWith("app:")), false, "the wearables screen is back: ");
   eq(/fitbit|oura|apple health/i.test(said), false, `a device is still pitched: ${said}`);
 });
 
 test("it ends with the whole of her in the form", () => {
   const clock = fakeClock();
   const b = fakeBrowser();
-  runReel(signUp(HAANIYAH), b.io, { rand: () => 0.5, timer: clock.timer, clear: clock.clear });
+  runReel(signUp(WANIYAH), b.io, { rand: () => 0.5, timer: clock.timer, clear: clock.clear });
   clock.run();
-  eq(b.form.name, HAANIYAH.name);
-  eq(b.form.age, String(HAANIYAH.age));
-  eq(b.form.menarcheAge, String(HAANIYAH.menarcheAge));
-  eq(b.form.heightCm, String(HAANIYAH.heightCm));
-  eq(b.form.weightKg, String(HAANIYAH.weightKg));
+  eq(b.form.name, WANIYAH.name);
+  eq(b.form.age, String(WANIYAH.age));
+  eq(b.form.menarcheAge, String(WANIYAH.menarcheAge));
+  eq(b.form.heightCm, String(WANIYAH.heightCm));
+  eq(b.form.weightKg, String(WANIYAH.weightKg));
   eq(b.ended, true, "the pointer was never dismissed: ");
 });
 
@@ -142,17 +145,17 @@ test("it types once per character, not once per field", () => {
   const clock = fakeClock();
   let calls = 0;
   const b = fakeBrowser();
-  runReel(signUp(HAANIYAH), { ...b.io, key: () => { calls += 1; } },
+  runReel(signUp(WANIYAH), { ...b.io, key: () => { calls += 1; } },
     { rand: () => 0, timer: clock.timer, clear: clock.clear });
   clock.run();
-  eq(calls, keystrokes(HAANIYAH).length);
+  eq(calls, keystrokes(WANIYAH).length);
 });
 
 test("there is a pause between fields and a quicker beat within one", () => {
   const clock = fakeClock();
   const at = [];
   const b = fakeBrowser();
-  runReel(signUp({ ...HAANIYAH, name: "Al", age: 27, menarcheAge: "", heightCm: "", weightKg: "",
+  runReel(signUp({ ...WANIYAH, name: "Al", age: 27, menarcheAge: "", heightCm: "", weightKg: "",
                    goals: [], chips: [], integrations: [] }),
     { ...b.io, key: (t) => at.push([t, clock.now()]) },
     { rand: () => 0, timer: clock.timer, clear: clock.clear });
@@ -193,7 +196,7 @@ test("everything the showcase changes, it changes back", () => {
 });
 
 test("the sign-up records the hirsutism a clinician already found, and scores it", () => {
-  const clicks = targets(signUp(HAANIYAH), "press");
+  const clicks = targets(signUp(WANIYAH), "press");
   eq(clicks.includes("cond:hirsutism"), true, "the condition is never entered: ");
   eq(new Set(clicks.filter((t) => t.startsWith("fg:"))).size >= 2, true, "too little of the sheet is scored: ");
   // ... and the tour later shows what that settled, on the screen that says so
@@ -229,10 +232,10 @@ test("the showcase ends the conversation and shows the form behind it", () => {
 });
 
 test("she introduces herself once, at the start, and never again", () => {
-  const hellos = [...kinds(signUp(HAANIYAH), "say"), ...kinds(showcase(), "say"), ...kinds(showcase(), "spot")]
-    .filter((b) => /I'm Haaniyah/.test(b.text));
+  const hellos = [...kinds(signUp(WANIYAH), "say"), ...kinds(showcase(), "say"), ...kinds(showcase(), "spot")]
+    .filter((b) => /I'm Waniyah/.test(b.text));
   eq(hellos.length, 1, "she introduced herself more than once: ");
-  eq(kinds(signUp(HAANIYAH), "say")[0].text.includes("I'm Haaniyah"), true,
+  eq(kinds(signUp(WANIYAH), "say")[0].text.includes("I'm Waniyah"), true,
      "the introduction is not the first thing said: ");
   // ... and the tour opens by saying what it is about to do
   eq(/Tawaazun/.test(showcase().find((b) => b.text)?.text || ""), true,
@@ -291,11 +294,11 @@ test("the showcase lets the app finish answering before she speaks again", () =>
 test("a target that isn't there costs a beat, not the reel", () => {
   const clock = fakeClock();
   const b = fakeBrowser({ missing: ["goal:whatswrong"] });
-  runReel(signUp(HAANIYAH), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
+  runReel(signUp(WANIYAH), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
   clock.run();
   eq(b.clicked.includes("goal:whatswrong"), false);
   eq(b.clicked.filter((c) => c === "next").length, 3, "the reel gave up: ");
-  eq(b.form.name, HAANIYAH.name);
+  eq(b.form.name, WANIYAH.name);
 });
 
 test("every reel finishes, and none of them outstays its welcome", () => {
@@ -366,14 +369,14 @@ test("the guide is spent once it has played, and once it has been skipped", () =
 test("cancelling stops it mid-word and nothing more happens", () => {
   const clock = fakeClock();
   const b = fakeBrowser();
-  const cancel = runReel(signUp(HAANIYAH), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
+  const cancel = runReel(signUp(WANIYAH), b.io, { rand: () => 0, timer: clock.timer, clear: clock.clear });
   clock.step(6);                  // a few beats in, then a person takes over
   const clicksSoFar = b.clicked.length;
   cancel();
   clock.run();
   eq(b.clicked.length, clicksSoFar, "kept clicking after being cancelled: ");
   eq(b.ended, false, "ran to the end anyway: ");
-  eq(String(b.form.name || "").length < HAANIYAH.name.length, true, "typed the whole name anyway: ");
+  eq(String(b.form.name || "").length < WANIYAH.name.length, true, "typed the whole name anyway: ");
 });
 
 test("cancelling twice is harmless", () => {

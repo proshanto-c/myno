@@ -47,9 +47,10 @@ def _startup():
         created = auth.bootstrap(s)
         if created:
             print(f"[dalil] bootstrapped the first reviewer: {created}", flush=True)
-        added = harvest.ensure_seeds(s)
-        if added:
-            print(f"[dalil] added {added} seed queries", flush=True)
+        seeds = harvest.ensure_seeds(s)
+        if seeds["added"] or seeds["retuned"]:
+            print(f"[dalil] seeds: {seeds['added']} added, {seeds['retuned']} "
+                  f"retuned to {harvest.MIN_YEAR}+", flush=True)
     finally:
         s.close()
 
@@ -330,6 +331,17 @@ def job_enrich(limit: int = 50):
             s.close()
 
     return jobs.start("enrich", work, detail=f"up to {limit}")
+
+
+@research.post("/jobs/prune")
+def job_prune(minYear: int = 0, confirm: bool = False):
+    """Drop everything published before the corpus window. Dry run by default —
+    it answers with what it would remove before it removes anything."""
+    s = Session()
+    try:
+        return harvest.prune_older_than(s, min_year=minYear or None, confirm=confirm)
+    finally:
+        s.close()
 
 
 @research.post("/jobs/sweep")

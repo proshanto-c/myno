@@ -27,7 +27,8 @@ import re
 from sqlalchemy import func
 
 import ncbi
-from models import Citation, Claim, Published, Query, Run, Source
+from models import (Citation, Claim, ClaimField, Published, Query, Report,
+                    Review, Run, Source)
 
 now = dt.datetime.utcnow
 
@@ -41,10 +42,34 @@ PMOS = ('("Polycystic Ovary Syndrome"[MeSH Terms] '
 NOT_ANIMAL_ONLY = 'NOT (animals[MeSH Terms] NOT humans[MeSH Terms])'
 
 
-def _seed(name, clause, informs, min_year=2005):
+# How far back the corpus goes. The condition was renamed in 2026 and the
+# guideline it is assessed against is the 2023 one, so anything older is being
+# read through two revisions of the definition. Moving this moves every seed,
+# and `ensure_seeds` retunes the stored queries to match.
+MIN_YEAR = 2024
+
+
+def _seed(name, clause, informs, min_year=None):
+    min_year = min_year or MIN_YEAR
     return {"name": name,
             "term": f"{PMOS} AND ({clause}) AND ({min_year}:3000[dp]) {NOT_ANIMAL_ONLY}",
             "informs": informs, "min_year": min_year}
+
+
+YEAR_FLOOR = re.compile(r"\((\d{4}):3000\[dp\]\)")
+
+
+def retune(term: str, min_year: int = None):
+    """The term with its year floor moved, or None if it has no year floor.
+
+    Narrow on purpose. A stored query is otherwise never rewritten — a corpus
+    has to stay reproducible — but the window the corpus covers is a decision
+    about the whole library, not about one seed, and leaving twelve queries
+    disagreeing with it would be worse than editing them.
+    """
+    min_year = min_year or MIN_YEAR
+    moved = YEAR_FLOOR.sub(f"({min_year}:3000[dp])", term or "")
+    return moved if moved != term else None
 
 
 # Each seed exists to inform particular record.py fields, and says which.
@@ -175,6 +200,20 @@ def _store_citations(s, row: Source, rec: ncbi.Record) -> None:
                        cited_doi=ref["doi"] or None, raw=ref["raw"]))
 
 
+def in_window(rec: ncbi.Record, min_year: int = None) -> bool:
+    """Is this record inside the corpus window?
+
+    Applied on the way in as well as by `prune_older_than`, and with the same
+    two carve-outs, because they have to agree: a search is bounded by its term,
+    but citation chaining is not, and a bibliography full of 2015 papers would
+    otherwise put back everything a prune had just taken out.
+    """
+    min_year = min_year or MIN_YEAR
+    if rec.kind in KEEP_KINDS or rec.year is None:
+        return True
+    return rec.year >= min_year
+
+
 def auto_screen(rec: ncbi.Record):
     """The exclusions a machine can make without judgement, and no others.
 
@@ -211,18 +250,28 @@ def screen_for_text(source: Source) -> None:
 
 
 # ---- pulling a search down --------------------------------------------------
-def ensure_seeds(s) -> int:
-    """Adds any seed the database has not seen. Editing a seed's term here does
-    not rewrite the stored one — a corpus has to stay reproducible."""
-    added = 0
+def ensure_seeds(s) -> dict:
+    """Adds any seed the database has not seen, and moves the year floor on the
+    ones it already has. Nothing else about a stored term is rewritten."""
+    added = retuned = 0
     for seed in SEEDS:
-        if s.query(Query).filter(Query.name == seed["name"]).first():
+        row = s.query(Query).filter(Query.name == seed["name"]).first()
+        if row is None:
+            s.add(Query(name=seed["name"], term=seed["term"], informs=seed["informs"],
+                        min_year=seed["min_year"]))
+            added += 1
             continue
-        s.add(Query(name=seed["name"], term=seed["term"], informs=seed["informs"],
-                    min_year=seed["min_year"]))
-        added += 1
+        if row.min_year == MIN_YEAR:
+            continue
+        moved = retune(row.term)
+        if moved is None:
+            continue
+        # The window changed, so what the query has already covered is coverage
+        # of a different question. Start again rather than claim it.
+        row.term, row.min_year, row.high_water = moved, MIN_YEAR, ""
+        retuned += 1
     s.commit()
-    return added
+    return {"added": added, "retuned": retuned}
 
 
 def _today() -> str:
@@ -287,6 +336,8 @@ def advance(s, client: ncbi.Client, run: Run, batches: int = 1, batch: int = ncb
         records = ncbi.parse_records(xml)
         added = 0
         for rec in records:
+            if not in_window(rec):
+                continue
             _, created = upsert(s, rec)
             added += int(created)
         # Advance by what was asked for, not by what came back: a window
@@ -339,12 +390,15 @@ def harvest_ids(s, client: ncbi.Client, ids, batch: int = ncbi.BATCH) -> dict:
     """Fetch particular records by id — the anchor chapter, or a promoted
     reference list."""
     ids = [i for i in ids if i]
-    stats = {"fetched": 0, "added": 0}
+    stats = {"fetched": 0, "added": 0, "outsideWindow": 0}
     for start_at in range(0, len(ids), batch):
         chunk = ids[start_at:start_at + batch]
         for rec in ncbi.parse_records(client.efetch_ids(chunk)):
-            _, created = upsert(s, rec)
             stats["fetched"] += 1
+            if not in_window(rec):
+                stats["outsideWindow"] += 1
+                continue
+            _, created = upsert(s, rec)
             stats["added"] += int(created)
         s.commit()
     return stats
@@ -362,7 +416,7 @@ def promote_citations(s, client: ncbi.Client, source: Source, limit: int = 100) 
             .limit(limit).all())
     stats = harvest_ids(s, client, [r.cited_pmid for r in rows])
     for row in rows:
-        row.promoted = True
+        row.promoted = True   # tried, whether or not it landed inside the window
     s.commit()
     stats["promoted"] = len(rows)
     return stats
@@ -478,6 +532,60 @@ def sweep(s, client: ncbi.Client, limit: int = 500, batch: int = ncbi.BATCH) -> 
         s.commit()
 
     return {"checked": len(ids), "retracted": found, "revoked": revoked}
+
+
+# A guideline is not a study, and this product is built on one: `criteria.py`
+# quotes the 2023 international guideline for every threshold it applies. A
+# window that removed it would leave the evidence module unable to show the
+# document the patient app cites. Chapters are kept for the same reason — the
+# corpus is anchored on one.
+KEEP_KINDS = ("guideline", "chapter")
+
+
+def prune_older_than(s, min_year: int = None, confirm: bool = False,
+                     keep_kinds=KEEP_KINDS) -> dict:
+    """Drop studies published before the corpus window, and everything hanging
+    off them.
+
+    Deleting rather than excluding, because "excluded" is a judgement about a
+    paper and this is a decision about the library: a 2019 study is not a bad
+    study, it is outside what this corpus covers. Defaults to a dry run — the
+    count comes back before anything goes.
+
+    Undated records are left alone. An absent year is a gap in PubMed's
+    metadata, and deleting on missing metadata is the mistake that threw out the
+    2018 guideline once already.
+    """
+    min_year = min_year or MIN_YEAR
+    rows = (s.query(Source)
+            .filter(Source.year.isnot(None), Source.year < min_year,
+                    Source.kind.notin_(keep_kinds) if keep_kinds else True).all())
+    ids = [r.id for r in rows]
+    undated = s.query(Source).filter(Source.year.is_(None)).count()
+    claim_ids = [c.id for c in s.query(Claim.id).filter(Claim.source_id.in_(ids or [0])).all()]
+
+    spared = (s.query(Source)
+              .filter(Source.year.isnot(None), Source.year < min_year,
+                      Source.kind.in_(keep_kinds)).count() if keep_kinds else 0)
+    plan = {"sources": len(ids), "claims": len(claim_ids), "undatedKept": undated,
+            "keptAsReference": spared, "keepKinds": list(keep_kinds or ()),
+            "published": s.query(Published).filter(
+                Published.claim_id.in_(claim_ids or [0])).count(),
+            "minYear": min_year, "confirmed": bool(confirm)}
+    if not confirm or not ids:
+        return plan
+
+    # Children first: these are plain foreign keys with no cascade behind them.
+    s.query(Published).filter(Published.claim_id.in_(claim_ids or [0])).delete(synchronize_session=False)
+    s.query(Review).filter(Review.claim_id.in_(claim_ids or [0])).delete(synchronize_session=False)
+    s.query(Review).filter(Review.source_id.in_(ids)).delete(synchronize_session=False)
+    s.query(ClaimField).filter(ClaimField.claim_id.in_(claim_ids or [0])).delete(synchronize_session=False)
+    s.query(Claim).filter(Claim.source_id.in_(ids)).delete(synchronize_session=False)
+    s.query(Report).filter(Report.source_id.in_(ids)).delete(synchronize_session=False)
+    s.query(Citation).filter(Citation.source_id.in_(ids)).delete(synchronize_session=False)
+    s.query(Source).filter(Source.id.in_(ids)).delete(synchronize_session=False)
+    s.commit()
+    return plan
 
 
 def revoke_published(s, source: Source, reason: str) -> int:
