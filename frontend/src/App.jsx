@@ -2613,15 +2613,13 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
           otherwise drag the rule and the label around it. */}
       <span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 21, color: "#fff", display: "inline-block", lineHeight: 1 }}>دليل</span>
       <span style={{ width: 1, height: 17, background: "#ffffff40", flexShrink: 0 }} />
-      <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 11.5, letterSpacing: "0.15em", textTransform: "uppercase", color: "#ded5ee" }}>Literature</span>
-      <span style={{ fontFamily: bodyf, fontSize: 12.5, color: "#bdb0d6" }}>· worth tracking</span>
+      <span style={{ fontFamily: bodyf, fontWeight: 700, fontSize: 11.5, letterSpacing: "0.15em", textTransform: "uppercase", color: "#ded5ee" }}>Medical Literature</span>
       {sugg === null && <Loader2 size={14} className="spin" color="#ded5ee" style={{ marginLeft: "auto" }} />}
     </div>
     <div style={{ padding: 20 }}>
-    {/* No second heading. The band above is the heading — "What else to track"
-        described the list but said nothing about where it came from, and where
-        it came from is the only reason to believe any of it. */}
-    <p style={{ fontSize: 13, color: C.inkVar, lineHeight: 1.5, margin: "0 0 12px" }}>From PMOS papers a researcher has read and signed off — never anything you already record here.</p>
+    {/* No heading and no standfirst. The band above says whose list this is,
+        and every entry carries the paper it came from, so a sentence in between
+        was explaining what the reader can already see. */}
     {sugg === null ? (
       <p style={{ fontSize: 13, color: C.outline }}>Looking…</p>
     ) : sugg.length === 0 ? (
@@ -2666,7 +2664,16 @@ function InsightsScreen({ ins, logs, settings, wide, assessment, schema }) {
       <div style={{ background: C.surface, borderRadius: 14, padding: 16 }}><Microscope size={18} color={C.plum} /><div style={{ fontFamily: head, fontWeight: 700, fontSize: 24, marginTop: 8 }}>{ins.daysSinceSeverePain} days</div><div style={{ fontSize: 12, color: C.inkVar }}>since last high-pain episode</div></div>
       <div style={{ background: C.surface, borderRadius: 14, padding: 16 }}><Heart size={18} color={C.roseOn} /><div style={{ fontFamily: head, fontWeight: 700, fontSize: 24, marginTop: 8 }}>{ins.loggedDays} days</div><div style={{ fontSize: 12, color: C.inkVar }}>consistent logging</div></div>
     </div></Card>);
-  const SUBVIEWS = [["insights", "Insights"], ["track", "What to track"]];
+  // The two tabs answer two different questions, and the second one is not this
+  // app's answer at all — it is Dalīl's. Naming it after the evidence rather
+  // than after the action says whose voice it is before it is opened, which is
+  // the same reason the card inside carries the wordmark.
+  const SUBVIEWS = [["insights", "Insights"], ["track", (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span dir="rtl" style={{ fontFamily: head, fontWeight: 700, fontSize: 15,
+        display: "inline-block", lineHeight: 1 }}>دليل</span>
+      Literature
+    </span>)]];
   const subNav = (<div style={{ display: "inline-flex", gap: 4, padding: 4, background: C.container, borderRadius: 9999, marginBottom: 18 }}>
     {SUBVIEWS.map(([id, lbl]) => { const on = view === id; return (
       <button key={id} data-demo={`sub:${id}`} onClick={() => setView(id)} style={{ fontFamily: bodyf, fontWeight: 600, fontSize: 14, padding: "8px 18px", borderRadius: 9999, cursor: "pointer", border: "none", background: on ? C.surface : "transparent", color: on ? C.plum : C.inkVar, boxShadow: on ? SH_SM : "none" }}>{lbl}</button>); })}
