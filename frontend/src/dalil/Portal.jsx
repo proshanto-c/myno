@@ -247,7 +247,8 @@ function Corpus({ data, loading, onRefresh, filter, setFilter, onOpen }) {
         })}
         <input value={filter.q} placeholder="Search titles"
           onChange={(e) => setFilter({ ...filter, q: e.target.value })}
-          style={{ ...input, width: 220, padding: "7px 11px", fontSize: 13 }} />
+          style={{ ...input, flex: "1 1 190px", minWidth: 0, maxWidth: 300,
+            padding: "7px 11px", fontSize: 13 }} />
         <span style={{ marginLeft: "auto" }}>
           <Button kind="ghost" onClick={onRefresh} busy={loading}>
             <RefreshCw size={13} style={{ verticalAlign: "-2px", marginRight: 6 }} />Refresh
@@ -265,7 +266,7 @@ function Corpus({ data, loading, onRefresh, filter, setFilter, onOpen }) {
           </p>
         </div>
       ) : (
-        <div style={{ ...card, overflow: "hidden" }}>
+        <div className="dl-scroll" style={{ ...card }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr style={{ background: T.raised }}>
               <th style={{ ...th, paddingTop: 10 }}>Title</th>
@@ -315,7 +316,8 @@ function SourcePanel({ source, onClose, onReport }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "#1e183055",
       display: "flex", justifyContent: "flex-end", zIndex: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(620px, 100%)", background: T.bg,
+      <div onClick={(e) => e.stopPropagation()} className="dl-panel"
+        style={{ width: "min(620px, 100%)", background: T.bg,
         height: "100%", overflowY: "auto", borderLeft: `1px solid ${T.lineStrong}`, padding: "22px 24px 60px" }}>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
           <h3 style={{ fontFamily: serif, fontSize: 20, fontWeight: 400, color: T.ink,
@@ -629,7 +631,7 @@ const basisTone = (basis) => ({
 
 function ModuleRows({ modules }) {
   return (
-    <div style={{ ...card, overflow: "hidden", marginBottom: 14 }}>
+    <div className="dl-scroll dl-modules" style={{ ...card, marginBottom: 14 }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ background: T.raised }}>
           <th style={{ ...th, paddingTop: 10 }}>Module</th>
@@ -833,7 +835,8 @@ function ReportList({ rows, total, verdicts, onOpen, filter, setFilter, loading 
             all four are what a researcher actually types. */}
         <input value={filter.q} placeholder="Search title, journal, PMID…"
           onChange={(e) => set({ q: e.target.value })}
-          style={{ ...input, width: 250, padding: "7px 11px", fontSize: 13 }} />
+          style={{ ...input, flex: "1 1 210px", minWidth: 0, maxWidth: 320,
+            padding: "7px 11px", fontSize: 13 }} />
 
         <select value={filter.sort} onChange={(e) => set({ sort: e.target.value })}
           style={{ ...input, width: "auto", padding: "7px 11px", fontSize: 13, cursor: "pointer" }}>
@@ -863,7 +866,7 @@ function ReportList({ rows, total, verdicts, onOpen, filter, setFilter, loading 
           </p>
         </div>
       ) : (
-        <div style={{ ...card, overflow: "hidden" }}>
+        <div className="dl-scroll" style={{ ...card }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr style={{ background: T.raised }}>
               <th style={{ ...th, paddingTop: 10 }}>Paper</th>
@@ -1043,7 +1046,7 @@ function Harvest({ queries, runs, job, onRun, busy, onRefresh }) {
       )}
 
       <H2 count={`${queries.length} seeds`}>Seeds</H2>
-      <div style={{ ...card, overflow: "hidden", marginBottom: 24 }}>
+      <div className="dl-scroll" style={{ ...card, marginBottom: 24 }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead><tr style={{ background: T.raised }}>
             <th style={{ ...th, paddingTop: 10 }}>Seed</th>
@@ -1079,7 +1082,7 @@ function Harvest({ queries, runs, job, onRun, busy, onRefresh }) {
       </div>
 
       <H2 count={`${runs.length}`}>Runs</H2>
-      <div style={{ ...card, overflow: "hidden" }}>
+      <div className="dl-scroll" style={{ ...card }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead><tr style={{ background: T.raised }}>
             <th style={{ ...th, paddingTop: 10 }}>Started</th>
@@ -1279,10 +1282,10 @@ export default function Portal() {
   return (
     <div style={{ minHeight: "100vh", background: T.bg }}>
       <header style={{ background: T.surface, borderBottom: `1px solid ${T.line}`,
-        padding: "0 24px", position: "sticky", top: 0, zIndex: 5 }}>
-        <div style={{ maxWidth: 1180, margin: "0 auto", display: "flex", alignItems: "center", gap: 22, height: 58 }}>
+        padding: "0 24px", position: "sticky", top: 0, zIndex: 5 }} className="dl-headbar">
+        <div className="dl-head" style={{ maxWidth: 1180, margin: "0 auto", display: "flex", alignItems: "center", gap: 22, height: 58 }}>
           <Lockup size={26} />
-          <nav style={{ display: "flex", gap: 2 }}>
+          <nav className="dl-nav" style={{ display: "flex", gap: 2 }}>
             {VIEWS.map(([id, label, Icon]) => {
               const on = view === id;
               return (
@@ -1314,7 +1317,7 @@ export default function Portal() {
         </div>
       </header>
 
-      <main style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 24px 60px" }}>
+      <main className="dl-main" style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 24px 60px" }}>
         {error && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", background: T.badSoft,
             border: `1px solid ${T.bad}22`, borderRadius: 6, padding: "10px 12px", marginBottom: 18 }}>

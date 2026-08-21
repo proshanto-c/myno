@@ -15,6 +15,41 @@
     <style>
       html, body, #root { height: 100%; }
       body { margin: 0; background: #f6f4f8; -webkit-font-smoothing: antialiased; }
+      /* Without this every `width: 100%` field overflows its card by its own
+         padding — which is most of what "it doesn't work on a phone" was. */
+      * { box-sizing: border-box; }
+
+      /* Dense tables are the point of this portal on a desktop and the problem
+         with it on a phone. They scroll inside their own card rather than
+         pushing the page sideways, and the card still clips its rounded corner. */
+      .dl-scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+      .dl-scroll table { min-width: 560px; }
+
+      /* The tab strip scrolls rather than wrapping: five tabs plus a wordmark do
+         not fit across 360px, and a nav that reflows onto two lines moves the
+         thing you were about to tap. */
+      .dl-nav { overflow-x: auto; scrollbar-width: none; }
+      .dl-nav::-webkit-scrollbar { display: none; }
+
+      @media (max-width: 760px) {
+        .dl-headbar { padding: 0 14px !important; }
+        .dl-head { height: auto !important; gap: 12px !important;
+                   padding: 10px 0 !important; flex-wrap: wrap; }
+        .dl-main { padding: 18px 14px 56px !important; }
+        /* A 620px drawer on a 360px screen is a drawer; full width is a page. */
+        .dl-panel { width: 100% !important; border-left: none !important; }
+
+        /* One table here is prose rather than figures — module, score, basis,
+           note, quote — so it stacks instead of scrolling sideways. Scrolling a
+           paragraph horizontally to read it is worse than any column it saves. */
+        .dl-modules table { min-width: 0; }
+        .dl-modules thead { display: none; }
+        .dl-modules table, .dl-modules tbody, .dl-modules tr, .dl-modules td { display: block; width: 100%; }
+        .dl-modules tr { padding: 10px 0 14px; border-top: 1px solid #e2dcea; }
+        .dl-modules tr:first-child { border-top: none; }
+        .dl-modules td { border: none !important; padding: 2px 15px !important;
+                         text-align: left !important; max-width: none !important; }
+      }
     </style>
   </head>
   <body>

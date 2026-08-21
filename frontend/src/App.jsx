@@ -1083,11 +1083,15 @@ function Header({ profile, onSettings }) {
   </div>);
 }
 function BottomNav({ tab, setTab }) {
-  const items = [["home", "Home", Home], ["record", "Record", SquarePen], ["insights", "Insights", BarChart3], ["settings", "Settings", Cog]];
+  // Advocacy, not Settings. Settings is a place you go once; Advocacy is the
+  // reason the tracking is worth doing, and on a phone it was three taps deep
+  // behind a card on Home. The cog in the header still opens Settings.
+  const items = [["home", "Home", Home], ["record", "Record", SquarePen],
+                 ["insights", "Insights", BarChart3], ["advocacy", "Advocacy", Stethoscope]];
   return (<div className="no-print" style={{ position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
     <div style={{ width: "100%", maxWidth: 460, background: "rgba(251,239,239,0.92)", backdropFilter: "blur(10px)", borderTop: `1px solid ${C.high}`, display: "flex", padding: "8px 6px 10px", pointerEvents: "auto" }}>
       {items.map(([id, label, Ico]) => { const on = tab === id; return (
-        <button key={id} data-demo={`nav:${id}`} onClick={() => setTab(id)} style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+        <button key={id} data-demo={id === "advocacy" ? "go:advocacy" : `nav:${id}`} onClick={() => setTab(id)} style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
           <span style={{ padding: "5px 16px", borderRadius: 9999, background: on ? C.lilac : "transparent", display: "grid", placeItems: "center", transition: "all .15s" }}><Ico size={20} color={on ? C.plumDark : C.outline} /></span>
           <span style={{ fontFamily: bodyf, fontSize: 11, fontWeight: on ? 600 : 500, color: on ? C.plum : C.outline }}>{label}</span>
         </button>); })}
