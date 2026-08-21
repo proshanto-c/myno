@@ -43,8 +43,6 @@ WORDS = {
     "energy":    ["depleted", "low", "moderate", "high", "very high"],
     "sleep":     ["awful", "poor", "patchy", "good", "great"],
     "brainFog":  ["clear", "slight", "moderate", "heavy", "severe"],
-    "sugar":     ["none", "a little", "some", "a lot", "constant"],
-    "foodDrive": ["no appetite", "low", "normal", "high", "ravenous"],
     "sexDrive":  ["none", "low", "moderate", "high", "very high"],
 }
 
@@ -78,8 +76,6 @@ SCHEMA = [
         _scale("pain", "Pain"),
         {"key": "painPoints", "label": "Where it hurts", "type": "bodymap"},
         {"key": "morningWeight", "label": "Morning weight (kg)", "type": "number", "placeholder": "kg"},
-        _scale("sugar", "Sugar"),
-        _scale("foodDrive", "Food drive"),
     ]},
     {"key": "lifestyle", "group": "Lifestyle", "fields": [
         # Charted on Insights, which someone opens on purpose, but not in the

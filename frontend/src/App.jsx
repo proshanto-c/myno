@@ -252,8 +252,6 @@ const scaleLabels = {
   sleep: ["awful", "poor", "patchy", "good", "great"],
   brainFog: ["clear", "slight", "moderate", "heavy", "severe"],
   sexDrive: ["none", "low", "moderate", "high", "very high"],
-  sugar: ["none", "a little", "some", "a lot", "constant"],
-  foodDrive: ["no appetite", "low", "normal", "high", "ravenous"],
 };
 const clampScale = (value, fallback = 0, max = SCALE_MAX) => {
   const n = Number(value);
@@ -303,8 +301,6 @@ const FALLBACK_SCHEMA = [
     { key: "pain", label: "Pain", type: "scale", max: SCALE_MAX, words: scaleLabels.pain },
     { key: "painPoints", label: "Where it hurts", type: "bodymap" },
     { key: "morningWeight", label: "Morning weight (kg)", type: "number", placeholder: "kg" },
-    { key: "sugar", label: "Sugar", type: "scale", max: SCALE_MAX, words: scaleLabels.sugar },
-    { key: "foodDrive", label: "Food drive", type: "scale", max: SCALE_MAX, words: scaleLabels.foodDrive },
   ] },
   { key: "lifestyle", group: "Lifestyle", fields: [
     { key: "sexDrive", label: "Sex drive", type: "scale", max: SCALE_MAX, words: scaleLabels.sexDrive, liveTrend: false },
