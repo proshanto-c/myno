@@ -1,9 +1,13 @@
 /**
- * Every line the guided demo says, one per output line.
+ * Every line the guided demo speaks, one per output line, tab-separated:
  *
- * The point is the split: the browser asks for one sentence at a time, so the
- * cache in the backend is keyed per sentence. This prints exactly those
- * strings, from the same function the app speaks with — see warm-voice.sh.
+ *   guide<TAB>…    her own narration, in the cloned voice
+ *   app<TAB>…      what Tawaazun answers with, in its own
+ *
+ * The point is the split: each line is one clip and one cache entry, keyed by
+ * the exact text and the voice that says it. warm-voice.sh reads this and asks
+ * for both, so nothing in the reel waits on synthesis.
  */
-import { spokenLines } from "../frontend/src/demoreel.js";
-for (const line of spokenLines()) process.stdout.write(line + "\n");
+import { spokenLines, appLines } from "../frontend/src/demoreel.js";
+for (const line of spokenLines()) process.stdout.write(`guide\t${line}\n`);
+for (const line of appLines()) process.stdout.write(`app\t${line}\n`);

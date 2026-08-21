@@ -7,7 +7,7 @@
  * minutes of pointer animation and narration are checked in no time at all,
  * without a real timer, a real element, a real click or a real utterance.
  */
-import { WANIYAH, FIELDS, signUp, showcase, runReel, keystrokes, isEmpty,
+import { WANIYAH, FIELDS, DICTATED, signUp, showcase, runReel, keystrokes, isEmpty,
          firstPhase, afterPhase, travelMs, sayMs, TYPE_MS, FIELD_GAP_MS, PRESS_MS, BEAT_MS,
          TRAVEL_MIN, TRAVEL_MAX, SAY_MIN_MS, SAY_MAX_MS } from "./demoreel.js";
 
@@ -92,7 +92,9 @@ for (const [name, list] of REELS) {
     for (const b of list) {
       if (b.do === "move") last = b.target;
       if (b.do === "press") eq(b.target, last, "clicked without moving there first: ");
-      if (b.do === "key") eq(b.target, last, "typed into a box the pointer is not on: ");
+      // A hidden box is filled without the pointer on purpose: a ring on screen
+      // for a control nobody can see reads as a glitch.
+      if (b.do === "key" && !b.hidden) eq(b.target, last, "typed into a box the pointer is not on: ");
       if (b.do === "spot") eq(b.target, last, "lit something the pointer is not resting on: ");
     }
   });
@@ -185,7 +187,7 @@ test("the showcase visits the four screens that make the case", () => {
 test("the showcase drives and explains in the same pass", () => {
   const list = showcase();
   eq(kinds(list, "spot").length >= 5, true, "it never lights anything up: ");
-  eq(kinds(list, "press").length + kinds(list, "dictate").length >= 10, true, "it never actually uses the app: ");
+  eq(kinds(list, "press").length + kinds(list, "dictate").length >= 9, true, "it never actually uses the app: ");
   // whatever it lights up it is also hovering — the shared invariant above
   // checks the pointer is on the target of every spot
   const lastSpot = list.map((b) => b.do).lastIndexOf("spot");
@@ -232,6 +234,20 @@ test("the showcase says its line to the microphone, not into the box", () => {
   eq(spoken.length, 1, "the line is never spoken: ");
   eq(spoken[0].text, typed[typed.length - 1].value, "she says something other than what is typed: ");
   eq(targets(list, "press").includes("rec:type"), false, "it typed into the box instead of talking: ");
+});
+
+test("the microphone is clicked once, and the answer needs no model", () => {
+  const list = showcase();
+  // The hidden line used to be clicked before it was typed into, which put a
+  // second ring on the microphone — one for a control nobody can see.
+  const atMic = [...targets(list, "press"), ...targets(list, "dictate")]
+    .filter((t) => t === "rec:line" || t === "rec:dictate");
+  eq(atMic, ["rec:dictate"], "something else is clicked at the microphone: ");
+  // ... and the reply is handed over with the line, so nothing waits on Claude
+  const canned = kinds(list, "key").find((b) => b.target === "rec:canned");
+  eq(!!canned, true, "the answer is left to a model call: ");
+  eq(JSON.parse(canned.value).say, DICTATED.heard.say);
+  eq(DICTATED.line, kinds(list, "dictate")[0].text, "she says one thing and hands over another: ");
 });
 
 test("the showcase ends the conversation and shows the form behind it", () => {

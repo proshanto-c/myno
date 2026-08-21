@@ -2105,12 +2105,16 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
 
   // Speech → Claude fills the form's own fields and answers out loud. Whatever
   // it heard is marked as heard and flashes on the card while it is fresh.
-  const ingest = async (said) => {
+  const ingest = async (said, given = null) => {
     if (!said) return; setPartial(""); setErr(""); setBusy(true);
     const base = { ...eRef.current, note: (eRef.current.note ? eRef.current.note + " " : "") + said };
     let merged = base; let say = ""; let focus = null;
     try {
-      const f = await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), personality: settings.personality });
+      // `given` is the guided demo handing over the answer it already has. The
+      // same sentence every run deserves the same reply every run, and the
+      // screen fills in from it exactly as it would from the model — without
+      // the four-second wait, or the call.
+      const f = given || await extractFields({ settings, text: said, context: eRef.current.note || "", blocked: blockedLabels(settings), personality: settings.personality });
       const scaleValue = (key) => f[key] == null ? base[key] : clampScale(f[key], base[key] ?? 0);
       // Merge whatever the schema asks for, rather than a hand-kept list that
       // silently drops any field added to the backend since it was written.
@@ -2158,6 +2162,7 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
   // same backend call, that a spoken sentence takes.
   const [dictating, setDictating] = useState(false);
   const demoLine = useRef("");
+  const demoHeard = useRef(null);        // the answer, handed over with the line
   const dictate = () => {
     const line = demoLine.current.trim();
     if (!line || busy) return;
@@ -2170,10 +2175,12 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
       // Roughly the pace the voice saying it runs at, so the words arrive with
       // her rather than racing ahead of the clip.
       timers.current._dictate = i < words.length
-        ? setTimeout(tick, 360)
-        : setTimeout(() => { setDictating(false); ingest(line); }, 500);
+        ? setTimeout(tick, 380)
+        : setTimeout(() => { setDictating(false); ingest(line, demoHeard.current); }, 500);
     };
-    timers.current._dictate = setTimeout(tick, 250);
+    // Her voice starts first and the words follow it in. Begun together, the
+    // transcript ran ahead — it types faster than anybody speaks.
+    timers.current._dictate = setTimeout(tick, 520);
   };
   useEffect(() => () => clearTimeout(timers.current._dictate), []);
 
@@ -2191,6 +2198,9 @@ function RecordScreen({ logs, setLogs, settings, setSettings, setTab, wide, ins,
         {/* Both sit on the microphone itself, invisible: the guide's pointer is
             hovering the mic while it "speaks", which is where a hand would be. */}
         <input data-demo="rec:line" aria-hidden="true" tabIndex={-1} onChange={(ev) => { demoLine.current = ev.target.value; }}
+          style={{ position: "absolute", left: "50%", top: "50%", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none" }} />
+        <input data-demo="rec:canned" aria-hidden="true" tabIndex={-1}
+          onChange={(ev) => { try { demoHeard.current = JSON.parse(ev.target.value); } catch (e) { demoHeard.current = null; } }}
           style={{ position: "absolute", left: "50%", top: "50%", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none" }} />
         <button data-demo="rec:dictate" aria-hidden="true" tabIndex={-1} onClick={dictate}
           style={{ position: "absolute", left: "50%", top: "50%", width: 1, height: 1, opacity: 0, pointerEvents: "none", border: "none", background: "none" }} /></div>

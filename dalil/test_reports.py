@@ -249,13 +249,43 @@ def test_the_deterministic_half_uses_the_corpus_it_is_in():
     assert corroboration["score"] == 0, "nothing cites it yet"
 
     from models import Citation
-    other = a_source(s)
+    # five different papers leaning on it, not one paper listing it five times
     for _ in range(5):
-        s.add(Citation(source_id=other.id, cited_pmid=row.pmid))
+        s.add(Citation(source_id=a_source(s).id, cited_pmid=row.pmid))
     s.commit()
     again, _, _ = reports.appraise_source(s, row, VOCAB, force=True, call=caller(answer()))
     corroboration = next(m for m in again.modules if m["key"] == "corroboration")
     assert corroboration["score"] == 6, corroboration
+    s.rollback()
+
+
+@test
+def test_corroboration_counts_sources_not_reference_rows():
+    """A bibliography that lists the same paper twice is one source citing it,
+    and the module's note says "cited by N sources"."""
+    s = Scoped_()
+    row = a_source(s)
+    from models import Citation
+    other = a_source(s)
+    for _ in range(4):                       # one source, four mentions
+        s.add(Citation(source_id=other.id, cited_pmid=row.pmid))
+    s.commit()
+    assert reports.cited_by(s, row) == 1, "counted reference rows rather than sources"
+
+    third = a_source(s)
+    s.add(Citation(source_id=third.id, cited_pmid=row.pmid))
+    s.commit()
+    assert reports.cited_by(s, row) == 2
+    s.rollback()
+
+
+@test
+def test_a_source_with_no_pmid_cannot_be_corroborated():
+    s = Scoped_()
+    row = a_source(s)
+    row.pmid = None
+    s.commit()
+    assert reports.cited_by(s, row) == 0
     s.rollback()
 
 

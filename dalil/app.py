@@ -380,11 +380,33 @@ DAILY_CAP = 120
 
 
 def _appraisable(s, limit: int):
-    """Sources worth spending a call on: something to read, not yet appraised."""
+    """Sources worth spending a call on: something to read, not yet appraised.
+
+    Full text first, then how much the corpus leans on it, then recency — and
+    both of the first two keys were learned the hard way.
+
+    Newest-first put forty-three of the first forty-six reports on zero for
+    corroboration, because the newest papers are exactly those nothing has had
+    time to cite. Citations-first fixed that and produced eight reports with no
+    claims at all, because what a literature leans on most is its reviews and
+    guidelines, and a guideline states recommendations rather than an effect
+    between two things a person could log.
+
+    So full text leads: it is what primary studies have and narrative reviews
+    often do not, and a claim needs a sentence to quote. Within that set, the
+    most leaned-on paper is the better place to spend a call.
+    """
+    leaned_on = (s.query(Citation.cited_pmid.label("pmid"),
+                         func.count(func.distinct(Citation.source_id)).label("n"))
+                 .filter(Citation.cited_pmid.isnot(None))
+                 .group_by(Citation.cited_pmid).subquery())
     rows = (s.query(Source)
+            .outerjoin(leaned_on, leaned_on.c.pmid == Source.pmid)
             .filter(Source.merged_into.is_(None), Source.retracted.is_(False),
                     Source.screen_state.in_(("new", "included")))
-            .order_by(Source.fulltext.isnot(None).desc(), Source.year.desc().nullslast())
+            .order_by(Source.fulltext.isnot(None).desc(),
+                      func.coalesce(leaned_on.c.n, 0).desc(),
+                      Source.year.desc().nullslast())
             .limit(limit * 4).all())
     out = []
     for row in rows:

@@ -39,6 +39,24 @@ export const WANIYAH = {
   conditions: ["hirsutism"],       // told to her by a clinician, and it settles a criterion
 };
 
+/**
+ * The one exchange on the Record screen.
+ *
+ * Both halves are fixed, because both are a performance: she says the same
+ * sentence every run, so the app may as well give the same answer every run.
+ * `heard` is shaped like the extractor's own output — the screen fills itself
+ * in from it exactly as it would from the model, without the wait or the bill,
+ * and the reply can be synthesised in advance like every other line.
+ */
+export const DICTATED = {
+  line: "Bad cramps today, and I barely slept",
+  heard: {
+    pain: 7, sleep: 2, brainFog: 3, mood: null, energy: null, period: null,
+    painPoints: [{ view: "front", x: 0.5, y: 0.55, label: "pelvis" }],
+    say: "Rough night. Are you on your period, or is this outside of it?",
+  },
+};
+
 /** The basics step, in the order the boxes are laid out. */
 export const FIELDS = ["name", "age", "menarcheAge", "heightCm", "weightKg"];
 
@@ -95,6 +113,9 @@ export function spokenLines(person = WANIYAH) {
       if ((b.do === "say" || b.do === "spot") && b.text) seen.add(b.text);
   return [...seen];
 }
+
+/** The lines the app itself answers with — a different voice from hers. */
+export const appLines = () => [DICTATED.heard.say];
 
 /** The lines one reel says, in the order it will say them. */
 export const linesOf = (list) =>
@@ -157,9 +178,21 @@ function reel(pace = {}) {
       beats.push({ do: "wait", ms: gap });
       return api;
     },
-    /** one value straight in — a slider's position, not a typed word */
-    set: (target, value) => (api.to(target), beats.push({ do: "key", target, value: String(value) },
-                                                       { do: "wait", ms: BEAT_MS }), api),
+    /** Fills a box nobody can see. No click, and no pointer: a ring on screen
+     *  for a control the viewer cannot see being pressed reads as a glitch. */
+    fill: (target, value) => {
+      const full = String(value);
+      for (let i = 1; i <= full.length; i++)
+        beats.push({ do: "key", target, value: full.slice(0, i), hidden: true, ...(key ? { ms: key } : {}) });
+      return api;
+    },
+    /** One value straight in — a slider's position, or a hidden box's contents. */
+    set: (target, value, { hidden = false } = {}) => {
+      if (!hidden) api.to(target);
+      beats.push({ do: "key", target, value: String(value), ...(hidden ? { hidden: true } : {}) });
+      if (!hidden) beats.push({ do: "wait", ms: beat });
+      return api;
+    },
     enter: (target) => (beats.push({ do: "enter", target }, { do: "wait", ms: beat }), api),
     /** Say a line and press in the same instant — for talking to a microphone,
      *  where the words have to arrive while the voice is saying them. */
@@ -237,8 +270,11 @@ export function showcase() {
   s.spot("rec:mic", "This next bit is my absolute favorite. You don't have to fill out endless, tedious forms — you just talk to it!");
   // Heard, not just typed: the clip plays as the words stream into the
   // transcript, so she is talking to the microphone rather than miming at it.
-  s.write("rec:line", "Bad cramps today, and I barely slept");
-  s.dictate("rec:dictate", "Bad cramps today, and I barely slept");
+  // The line and the answer are both handed over before the click, so the only
+  // ring on screen is the one that matters — and no model is waited on.
+  s.fill("rec:line", DICTATED.line);
+  s.set("rec:canned", JSON.stringify(DICTATED.heard), { hidden: true });
+  s.dictate("rec:dictate", DICTATED.line);
   // Then it thinks, and answers in its own voice. She waits for both — talking
   // over the app's reply is the one overlap a demo can't explain away.
   s.until("talking", 12000);

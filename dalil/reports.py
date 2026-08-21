@@ -18,6 +18,8 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 
+from sqlalchemy import func
+
 import appraise
 import claims as claims_mod
 import model as model_mod
@@ -42,12 +44,17 @@ def as_dict(source: Source) -> dict:
 
 
 def cited_by(s, source: Source) -> int:
-    """How many sources already held cite this one."""
+    """How many sources already held cite this one.
+
+    Distinct sources, not citation rows: a bibliography that lists the same
+    paper twice is one source citing it, and the module's own note says
+    "cited by N sources".
+    """
     if not source.pmid:
         return 0
-    return (s.query(Citation)
-            .filter(Citation.cited_pmid == source.pmid, Citation.source_id != source.id)
-            .count())
+    return (s.query(func.count(func.distinct(Citation.source_id)))
+            .filter(Citation.cited_pmid == source.pmid,
+                    Citation.source_id != source.id).scalar() or 0)
 
 
 def contradictions(s) -> dict:

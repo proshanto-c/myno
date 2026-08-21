@@ -227,6 +227,74 @@ test("the flush timer is never left behind", async () => {
   eq(h.timers.filter((t) => !t.cleared).length, 1);
 });
 
+// ---- the browser's own recogniser -----------------------------------------
+// Chrome on Android ends the session after every utterance and re-delivers
+// results it has already given as final — with the index counter back at zero.
+// Appending what arrives turns one sentence into "I'm feeling feeling feeling".
+function webHarness({ continuous = false } = {}) {
+  const made = [], partials = [], finals = [], timers = [];
+  const R = (text, isFinal) => ({ isFinal, 0: { transcript: text } });
+  class FakeRec {
+    constructor() { made.push(this); }
+    start() { this.onstart?.(); }
+    stop() { this.onend?.(); }
+    /** what Chrome hands over: a growing list, from `resultIndex` onwards */
+    hears(list, resultIndex = 0) { this.onresult?.({ resultIndex, results: list.map(([t, f]) => R(t, f)) }); }
+    ends() { this.onend?.(); }
+  }
+  const c = new VoiceController({
+    continuous,
+    onPartial: (t) => partials.push(t), onFinal: (t) => finals.push(t),
+    deps: {
+      SpeechRecognition: FakeRec,
+      setTimeout: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; },
+      clearTimeout: (t) => { if (t) t.cleared = true; },
+    },
+  });
+  return { c, made, partials, finals, rec: () => made[made.length - 1],
+           silence: () => timers.filter((t) => !t.cleared).forEach((t) => t.fn()) };
+}
+
+test("the same final delivered twice is heard once", async () => {
+  const h = webHarness();
+  await h.c.start();
+  h.rec().hears([["I'm feeling rough", true]]);
+  h.rec().hears([["I'm feeling rough", true]]);          // Android, saying it again
+  h.silence();
+  eq(h.finals, ["I'm feeling rough"]);
+});
+
+test("a session that restarts keeps what the last one heard", async () => {
+  const h = webHarness();
+  await h.c.start();
+  h.rec().hears([["cramps since this morning", true]]);
+  h.rec().ends();                                        // Android ends after every utterance
+  h.rec().hears([["and I barely slept", true]]);         // ... and counts from zero again
+  h.silence();
+  eq(h.finals, ["cramps since this morning and I barely slept"]);
+});
+
+test("an utterance repeated by the restart is not said twice", async () => {
+  const h = webHarness();
+  await h.c.start();
+  h.rec().hears([["I'm feeling rough", true]]);
+  h.rec().ends();
+  h.rec().hears([["I'm feeling rough", true]]);          // the same one, re-delivered
+  h.silence();
+  eq(h.finals, ["I'm feeling rough"]);
+});
+
+test("interim words are shown but never banked", async () => {
+  const h = webHarness();
+  await h.c.start();
+  h.rec().hears([["bad", false]]);
+  h.rec().hears([["bad cramps", false]]);
+  h.rec().hears([["bad cramps today", true]]);
+  h.silence();
+  eq(h.partials[h.partials.length - 1], "bad cramps today");
+  eq(h.finals, ["bad cramps today"]);
+});
+
 // ---- run it ---------------------------------------------------------------
 let passed = 0, failed = 0;
 for (const [name, fn] of T) {

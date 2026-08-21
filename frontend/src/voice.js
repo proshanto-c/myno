@@ -163,14 +163,40 @@ export class VoiceController {
   }
 
   // ---- the browser's own recogniser ---------------------------------------
+  /**
+   * Chrome on Android is the awkward one.
+   *
+   * It ignores `continuous`, so the session ends after every utterance and this
+   * restarts it — and across those restarts it re-delivers results that were
+   * already final, sometimes with the index counter back at zero. Appending
+   * whatever arrived is what turned one sentence into "I'm feeling feeling
+   * feeling".
+   *
+   * So a final is stored BY ITS INDEX and the text is rebuilt from those slots,
+   * never appended to: hearing the same result a second time writes the same
+   * slot again and changes nothing. What a finished session heard is banked
+   * before the next one starts counting from zero, and an utterance identical
+   * to the one just banked is dropped, because that is a redelivery rather than
+   * somebody saying it twice.
+   */
   _web() {
     const SR = this.deps.SpeechRecognition;
     this.active = true; this.finalText = ""; this._started = false;
+    let done = [];        // utterances from sessions that have already ended
+    let finals = [];      // this session's finals, by result index
+    const tidy = (t) => String(t || "").replace(/\s+/g, " ").trim();
+    const settled = () => {
+      const now = tidy(finals.join(" "));
+      // A session that opens by repeating the utterance the last one ended on
+      // is Android redelivering it, not somebody saying it twice.
+      const parts = now && now === done[done.length - 1] ? done : [...done, now];
+      return tidy(parts.join(" "));
+    };
     const commit = () => {
       this.deps.clearTimeout(this.silTimer);
-      const t = (this.finalText || "").trim();
+      const t = settled();
       if (!t) return;                       // nothing said yet → keep waiting
-      this.finalText = "";
+      done = []; finals = []; this.finalText = "";
       this.onFinal?.(t);
       if (!this.continuous) { this.active = false; try { this.rec?.stop(); } catch (e) {} }
     };
@@ -191,6 +217,12 @@ export class VoiceController {
         }
       };
       rec.onend = () => {
+        // Bank what this session heard before the next one starts its indices
+        // again at zero — and never bank the same utterance twice.
+        const said = tidy(finals.join(" "));
+        if (said && said !== done[done.length - 1]) done.push(said);
+        finals = [];
+        this.finalText = settled();
         if (this.active && !this.stopped) {
           try { build(); } catch (e) { this.deps.setTimeout(() => { if (this.active && !this.stopped) build(); }, 300); }
         } else { this._started = false; this.onState?.(false); }
@@ -199,10 +231,11 @@ export class VoiceController {
         let interim = "", gotFinal = false;
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
           const r = ev.results[i];
-          if (r.isFinal) { this.finalText += r[0].transcript + " "; gotFinal = true; }
-          else interim += r[0].transcript;
+          if (r.isFinal) { finals[i] = tidy(r[0].transcript); gotFinal = true; }
+          else interim += r[0].transcript + " ";
         }
-        this.onPartial?.((this.finalText + interim).trim());
+        this.finalText = settled();
+        this.onPartial?.(tidy(`${settled()} ${interim}`));
         if (gotFinal) arm();
         else this.deps.clearTimeout(this.silTimer);
       };

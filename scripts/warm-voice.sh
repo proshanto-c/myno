@@ -21,13 +21,15 @@ i=0
 printf '%s\n' "$LINES" | while IFS= read -r line; do
   [ -z "$line" ] && continue
   i=$((i + 1))
-  body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$line")
+  who=${line%%$'\t'*}
+  text=${line#*$'\t'}
+  body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[2], "voice": sys.argv[1]}))' "$who" "$text")
   # One line that fails is one line the app synthesises live; it is not a
   # reason to abandon the other eighty. `set -e` would do exactly that.
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 \
          -X POST "$API/tts" -H 'Content-Type: application/json' -d "$body" || echo 000)
-  printf '   [%3d/%s] %s %.60s\n' "$i" "$TOTAL" "$code" "$line"
+  printf '   [%3d/%s] %s %-5s %.60s\n' "$i" "$TOTAL" "$code" "$who" "$text"
   [ "$code" = "200" ] || echo "        ^ not cached — the app will fall back for this one"
 done
 
-echo "→ warm. The demo now speaks without waiting."
+echo "→ warm. Both voices, every line, no waiting."
